@@ -1,6 +1,7 @@
 package expertgroup
 
 import (
+	"context"
 	"fmt"
 	"sort"
 	"strings"
@@ -57,6 +58,7 @@ type CloudGroupInput struct {
 // across syncs and restarts.
 type CloudMemStore struct {
 	mu          sync.RWMutex
+	activeScope string
 	byUUID      map[string]*CloudGroup
 	bySource    map[string][]string // cloudSourceKey → ordered group UUIDs
 	sourceOrder []string
@@ -84,13 +86,16 @@ func (m *CloudMemStore) Reset() {
 // ReplaceAll replaces the whole cloud expert-group set of one cloud endpoint.
 // All inputs are validated before any cache mutation, so a failed sync leaves the
 // cache untouched.
-func (m *CloudMemStore) ReplaceAll(sourceKey string, items []CloudGroupInput) ([]CloudGroup, error) {
+func (m *CloudMemStore) ReplaceAll(sourceKey string, items []CloudGroupInput, scope ...string) ([]CloudGroup, error) {
 	sourceKey = strings.TrimSpace(sourceKey)
 	if sourceKey == "" {
 		return nil, fmt.Errorf("云端专家团来源标识不能为空")
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if len(scope) > 0 && scope[0] != m.activeScope {
+		return nil, context.Canceled
+	}
 	now := time.Now().UnixMilli()
 	built := make([]*CloudGroup, 0, len(items))
 	builtByUUID := make(map[string]*CloudGroup, len(items))
@@ -358,4 +363,14 @@ func containsString(list []string, value string) bool {
 		}
 	}
 	return false
+}
+
+// Activate drops only transient cloud resources. Local data and frozen task snapshots remain intact.
+func (m *CloudMemStore) Activate(scope string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.activeScope = scope
+	m.byUUID = make(map[string]*CloudGroup)
+	m.bySource = make(map[string][]string)
+	m.sourceOrder = nil
 }

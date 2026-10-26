@@ -10,30 +10,33 @@
     }"
     :style="{ '--app-sidebar-width': `${sidebarWidth}px` }"
   >
-    <div class="sidebar-top-bar">
-      <button
-        type="button"
-        class="sidebar-collapse-btn"
-        :aria-label="t('layout.sidebar.collapse')"
-        :title="t('layout.sidebar.collapse')"
-        @click="collapseSidebar"
-      >
-        <img
-          :src="toggleIcon"
-          alt=""
-          class="collapse-icon"
-        />
-      </button>
-    </div>
+    <div class="sidebar-header">
+      <div class="sidebar-top-bar">
+        <button
+          type="button"
+          class="sidebar-collapse-btn"
+          :aria-label="t('layout.sidebar.collapse')"
+          :title="t('layout.sidebar.collapse')"
+          @click="collapseSidebar"
+        >
+          <img
+            :src="sidebarToggleIcon"
+            alt=""
+            class="collapse-icon"
+          />
+        </button>
+        <button type="button" class="sidebar-collapse-btn" :aria-label="t('layout.sidebar.searchConversations')" :title="t('layout.sidebar.searchConversations')" @click="searchOpen = true"><SidebarMenuIcon name="search" :dark="isDark" /></button>
+      </div>
 
-    <!-- 品牌行 -->
-    <div class="sidebar-brand">
-      <img
-        class="brand-logo"
-        :src="isDark ? logoDark : logo"
-        alt="Logo"
-      />
-      <span class="brand-name">TeamBuddy</span>
+      <!-- 品牌行 -->
+      <div class="sidebar-brand">
+        <img
+          class="brand-logo"
+          :src="isDark ? logoDark : logo"
+          alt="Logo"
+        />
+        <span class="brand-name">TeamBuddy</span>
+      </div>
     </div>
 
     <!-- 顶部主导航菜单 -->
@@ -90,23 +93,29 @@
 
       <!-- 更多菜单（悬停或点击展示项目、配置中心、命令、接口管理） -->
       <a-dropdown
-        :trigger="['hover', 'click']"
+        v-model:open="moreMenuOpen"
+        :trigger="['hover']"
         placement="bottomRight"
         overlay-class-name="sidebar-more-dropdown"
       >
-        <div
+        <button
+          type="button"
           class="nav-item more-item"
           :class="{ active: isMoreMenuActive }"
+          :aria-expanded="moreMenuOpen"
+          aria-haspopup="menu"
+          @click="moreMenuOpen = true"
+          @keydown.esc="moreMenuOpen = false"
         >
-          <div class="more-item__left">
-            <EllipsisOutlined class="nav-icon ellipsis-icon" />
+          <span class="more-item__left">
+            <SidebarMenuIcon class="nav-icon" name="more" :dark="isDark" />
             <span class="nav-label">{{ t('layout.sidebar.more') || '更多' }}</span>
-          </div>
+          </span>
           <RightOutlined class="more-chevron" />
-        </div>
+        </button>
 
         <template #overlay>
-          <div class="more-menu-panel" role="menu">
+          <div class="more-menu-panel" role="menu" @click="moreMenuOpen = false" @keydown.esc="moreMenuOpen = false">
             <RouterLink
               to="/projects"
               class="more-menu-item"
@@ -144,30 +153,19 @@
       </a-dropdown>
     </nav>
 
-    <!-- 搜索对话框 -->
-    <div class="sidebar-search">
-      <div class="search-input-box">
-        <SearchOutlined class="search-icon" />
-        <input
-          v-model="searchKeyword"
-          type="text"
-          class="search-input"
-          :placeholder="t('layout.sidebar.searchConversations') || '搜索对话'"
-          @input="onSearchInput"
-        />
-        <button
-          v-if="searchKeyword"
-          type="button"
-          class="search-clear-btn"
-          @click="clearSearch"
-        >
-          <CloseCircleFilled />
-        </button>
-      </div>
+    <div class="workspace-divider" />
+    <div class="workspace-toolbar">
+      <button type="button" class="workspace-toggle" :aria-expanded="!workspacesCollapsed" @click="workspacesCollapsed = !workspacesCollapsed">
+        {{ t('layout.sidebar.workspaces', { count: conversationStore.activeGroups.length }) }}
+        <SidebarMenuIcon name="conversationChevron" :dark="isDark" :class="{ 'workspace-expanded': !workspacesCollapsed }" />
+      </button>
+      <button type="button" class="workspace-add" :aria-label="t('layout.sidebar.addWorkspace')" @click="addWorkspaceOpen = true"><SidebarMenuIcon name="workspaceAdd" :dark="isDark" /></button>
     </div>
+    <ConversationSearchModal v-model:open="searchOpen" />
+    <AddWorkspaceModal v-model:open="addWorkspaceOpen" />
 
     <!-- 对话列表区域（按工作目录分组，自适应高度，单独滚动） -->
-    <div class="sidebar-conversations-scroll scrollbar--subtle">
+    <div v-show="!workspacesCollapsed" class="sidebar-conversations-scroll scrollbar--subtle">
       <div
         v-if="conversationStore.loading && !conversationStore.loaded"
         class="conversations-loading"
@@ -195,98 +193,97 @@
         :key="group.key"
         class="directory-group"
       >
-        <div
-          class="group-header"
-          :title="group.fullPath"
-          @click="toggleGroup(group.key)"
-        >
-          <div class="group-header__main">
-            <RightOutlined
-              class="group-chevron"
-              :class="{ 'is-expanded': !conversationStore.isGroupCollapsed(group.key) }"
-            />
-            <FolderOutlined class="group-folder-icon" />
-            <span class="group-name">{{ group.displayName }}</span>
-            <PushpinOutlined v-if="group.pinnedAt" class="group-pin" :aria-label="t('layout.sidebar.pinWorkspace')" />
-          </div>
+        <WorkspaceHoverCard :group="group">
+          <div
+            class="group-header"
+            role="button" tabindex="0" :aria-expanded="!conversationStore.isGroupCollapsed(group.key)" @keydown.enter.self.prevent="toggleGroup(group.key)" @keydown.space.self.prevent="toggleGroup(group.key)"
+            @click="toggleGroup(group.key)"
+          >
+            <div class="group-header__main">
+              <SidebarMenuIcon class="group-folder-icon" :name="conversationStore.isGroupCollapsed(group.key) ? 'conversationFolderClosed' : 'conversationFolderOpen'" :dark="isDark" />
+              <span class="group-name">{{ group.displayName }}</span>
+              <PushpinOutlined v-if="group.pinnedAt" class="group-pin" :aria-label="t('layout.sidebar.pinWorkspace')" />
+            </div>
 
-          <WorkspaceActions :group="group" />
-          <a-tooltip :title="t('layout.sidebar.addConversationInDir') || '在此目录新增对话'">
-            <button
-              type="button"
-              class="group-add-btn"
-              @click.stop="goToNewConversationWithDir(group.workDir)"
-            >
-              <PlusOutlined />
-            </button>
-          </a-tooltip>
-        </div>
+            <a-tooltip :title="t('layout.sidebar.addConversationInDir') || '在此目录新增对话'">
+              <button
+                type="button"
+                class="group-add-btn"
+                :aria-label="t('layout.sidebar.addConversationInDir')"
+                @click.stop="goToNewConversationWithDir(group.workDir)"
+              >
+                <SidebarMenuIcon name="conversationAdd" :dark="isDark" />
+              </button>
+            </a-tooltip>
+            <WorkspaceActions :group="group" :dark="isDark" />
+          </div>
+        </WorkspaceHoverCard>
 
         <div
           v-show="!conversationStore.isGroupCollapsed(group.key)"
           class="group-conversations"
         >
-          <div
+          <ConversationHoverCard
             v-for="conv in group.items"
             :key="conv.task_uuid"
-            class="conversation-entry"
-            :class="{ active: isConversationActive(conv.task_uuid) }"
-            @click="selectConversation(conv)"
+            :conversation="conv"
           >
-            <span
-              class="conv-title"
-              :title="conv.title"
-            >{{ conv.title }}</span>
-
-            <div class="conv-actions">
-              <!-- 未读红点 -->
+            <div
+              class="conversation-entry"
+              :class="{ active: isConversationActive(conv.task_uuid) }"
+              role="button"
+              tabindex="0"
+              @keydown.enter.self.prevent="selectConversation(conv)"
+              @keydown.space.self.prevent="selectConversation(conv)"
+              @click="selectConversation(conv)"
+            >
               <span
-                v-if="conv.unread"
-                class="unread-dot"
-                :title="t('workflows.task.common.unread')"
-              />
+                class="conv-title"
+              >{{ conv.title }}</span>
 
-              <!-- 运行状态与更多操作共用一个位置：默认显示 loading，悬浮时切换为更多。 -->
-              <span class="conv-action-slot">
-                <LoadingOutlined
-                  v-if="conv.running"
-                  class="conversation-running"
-                  spin
-                  :title="t('layout.sidebar.conversationRunning')"
+              <div class="conv-actions">
+                <!-- 未读红点 -->
+                <span
+                  v-if="conv.unread"
+                  class="unread-dot"
+                  :title="t('workflows.task.common.unread')"
                 />
-                <a-dropdown
-                  :trigger="['click']"
-                  placement="bottomRight"
-                >
-                  <button
-                    type="button"
-                    class="conv-more-btn"
-                    :aria-label="t('layout.sidebar.more')"
-                    @click.stop
+
+                <!-- 运行状态与更多操作共用一个位置：默认显示 loading，悬浮时切换为更多。 -->
+                <span class="conv-action-slot">
+                  <LoadingOutlined
+                    v-if="conv.running"
+                    class="conversation-running"
+                    spin
+                    :title="t('layout.sidebar.conversationRunning')"
+                  />
+                  <a-dropdown
+                    :trigger="['click']"
+                    placement="bottomRight"
                   >
-                    <EllipsisOutlined />
-                  </button>
-                  <template #overlay>
-                    <a-menu>
-                      <a-menu-item @click="toggleReadState(conv)">
-                        {{ conv.unread ? (t('workflows.task.common.markRead') || '标为已读') : (t('workflows.task.common.markUnread') || '设为未读') }}
-                      </a-menu-item>
-                      <a-menu-item @click="toggleArchiveState(conv)">
-                        {{ t('workflows.task.common.archive') || '归档' }}
-                      </a-menu-item>
-                      <a-menu-item :disabled="taskActionPending" @click="openRename(conv)">
-                        {{ t('layout.sidebar.renameTask') }}
-                      </a-menu-item>
-                      <a-menu-divider />
-                      <a-menu-item danger :disabled="taskActionPending" @click="confirmDelete(conv)">
-                        {{ t('common.actions.delete') }}
-                      </a-menu-item>
-                    </a-menu>
-                  </template>
-                </a-dropdown>
-              </span>
+                    <button
+                      type="button"
+                      class="conv-more-btn"
+                      :aria-label="t('layout.sidebar.more')"
+                      @click.stop
+                    >
+                      <SidebarMenuIcon name="conversationMore" :dark="isDark" />
+                    </button>
+                    <template #overlay>
+                      <ConversationActionsMenu
+                        :unread="conv.unread"
+                        :pending="taskActionPending"
+                        @read="toggleReadState(conv)"
+                        @archive="toggleArchiveState(conv)"
+                        @rename="openRename(conv)"
+                        @delete="confirmDelete(conv)"
+                      />
+                    </template>
+                  </a-dropdown>
+                </span>
+              </div>
             </div>
-          </div>
+          </ConversationHoverCard>
         </div>
       </div>
 
@@ -300,11 +297,12 @@
           @click="conversationStore.toggleArchivedCollapse"
         >
           <div class="archived-header__left">
-            <RightOutlined
+            <SidebarMenuIcon
+              name="conversationChevron"
+              :dark="isDark"
               class="group-chevron"
               :class="{ 'is-expanded': !conversationStore.archivedCollapsed }"
             />
-            <InboxOutlined class="archived-icon" />
             <span class="archived-label">{{ t('layout.sidebar.archived') || '已归档' }}</span>
           </div>
           <span class="archived-count">{{ conversationStore.archivedConversations.length }}</span>
@@ -319,71 +317,70 @@
             :key="`archived-${group.key}`"
             class="directory-group archived-group"
           >
-            <div
-              class="group-header"
-              :title="group.fullPath"
-              @click="toggleGroup(`archived-${group.key}`)"
-            >
-              <div class="group-header__main">
-                <RightOutlined
-                  class="group-chevron"
-                  :class="{ 'is-expanded': !conversationStore.isGroupCollapsed(`archived-${group.key}`) }"
-                />
-                <FolderOutlined class="group-folder-icon" />
-                <span class="group-name">{{ group.displayName }}</span>
+            <WorkspaceHoverCard :group="group">
+              <div
+                class="group-header"
+                role="button" tabindex="0" :aria-expanded="!conversationStore.isGroupCollapsed(`archived-${group.key}`)" @keydown.enter.self.prevent="toggleGroup(`archived-${group.key}`)" @keydown.space.self.prevent="toggleGroup(`archived-${group.key}`)"
+                @click="toggleGroup(`archived-${group.key}`)"
+              >
+                <div class="group-header__main">
+                  <SidebarMenuIcon class="group-folder-icon" :name="conversationStore.isGroupCollapsed(`archived-${group.key}`) ? 'conversationFolderClosed' : 'conversationFolderOpen'" :dark="isDark" />
+                  <span class="group-name">{{ group.displayName }}</span>
+                </div>
+                <WorkspaceActions :group="group" :dark="isDark" />
               </div>
-              <WorkspaceActions :group="group" />
-            </div>
+            </WorkspaceHoverCard>
 
             <div
               v-show="!conversationStore.isGroupCollapsed(`archived-${group.key}`)"
               class="group-conversations"
             >
-              <div
+              <ConversationHoverCard
                 v-for="conv in group.items"
                 :key="conv.task_uuid"
-                class="conversation-entry archived-entry"
-                :class="{ active: isConversationActive(conv.task_uuid) }"
-                @click="selectConversation(conv)"
+                :conversation="conv"
               >
-                <span
-                  class="conv-title"
-                  :title="conv.title"
-                >{{ conv.title }}</span>
+                <div
+                  class="conversation-entry archived-entry"
+                  :class="{ active: isConversationActive(conv.task_uuid) }"
+                  role="button"
+                  tabindex="0"
+                  @keydown.enter.self.prevent="selectConversation(conv)"
+                  @keydown.space.self.prevent="selectConversation(conv)"
+                  @click="selectConversation(conv)"
+                >
+                  <span
+                    class="conv-title"
+                  >{{ conv.title }}</span>
 
-                <div class="conv-actions">
-                  <a-dropdown
-                    :trigger="['click']"
-                    placement="bottomRight"
-                  >
-                    <button
-                      type="button"
-                      class="conv-more-btn"
-                      :aria-label="t('layout.sidebar.more')"
-                      @click.stop
+                  <div class="conv-actions">
+                    <a-dropdown
+                      :trigger="['click']"
+                      placement="bottomRight"
                     >
-                      <EllipsisOutlined />
-                    </button>
-                    <template #overlay>
-                      <a-menu>
-                        <a-menu-item @click="toggleReadState(conv)">
-                          {{ conv.unread ? (t('workflows.task.common.markRead') || '标为已读') : (t('workflows.task.common.markUnread') || '设为未读') }}
-                        </a-menu-item>
-                        <a-menu-item @click="toggleArchiveState(conv)">
-                          {{ t('layout.sidebar.unarchive') || '取消归档' }}
-                        </a-menu-item>
-                        <a-menu-item :disabled="taskActionPending" @click="openRename(conv)">
-                          {{ t('layout.sidebar.renameTask') }}
-                        </a-menu-item>
-                        <a-menu-divider />
-                        <a-menu-item danger :disabled="taskActionPending" @click="confirmDelete(conv)">
-                          {{ t('common.actions.delete') }}
-                        </a-menu-item>
-                      </a-menu>
-                    </template>
-                  </a-dropdown>
+                      <button
+                        type="button"
+                        class="conv-more-btn"
+                        :aria-label="t('layout.sidebar.more')"
+                        @click.stop
+                      >
+                        <SidebarMenuIcon name="conversationMore" :dark="isDark" />
+                      </button>
+                      <template #overlay>
+                        <ConversationActionsMenu
+                          :unread="conv.unread"
+                          archived
+                          :pending="taskActionPending"
+                          @read="toggleReadState(conv)"
+                          @archive="toggleArchiveState(conv)"
+                          @rename="openRename(conv)"
+                          @delete="confirmDelete(conv)"
+                        />
+                      </template>
+                    </a-dropdown>
+                  </div>
                 </div>
-              </div>
+              </ConversationHoverCard>
             </div>
           </div>
         </div>
@@ -401,7 +398,7 @@
         </div>
         <div class="user-text">
           <span class="user-title">{{ userNickname }}</span>
-          <span class="user-sub">{{ authStore.cloudLoggedIn ? (authStore.cloudUser?.username || 'GoTeams') : (t('layout.sidebar.guestLogin') || '本地 · 点击登录') }}</span>
+          <span class="user-sub">{{ authStore.cloudLoggedIn ? (authStore.cloudUser?.serverUrl || authStore.cloudUser?.username || 'GoTeams') : (t('layout.sidebar.guestLogin') || '本地 · 点击登录') }}</span>
         </div>
       </div>
 
@@ -418,7 +415,7 @@
           :class="{ 'is-open': settingsMenuOpen }"
           :aria-label="t('layout.menu.settings')"
         >
-          <SettingOutlined />
+          <SidebarMenuIcon name="footerSettings" :dark="isDark" />
         </button>
 
         <template #overlay>
@@ -431,17 +428,14 @@
             <button
               type="button"
               class="menu-user-row"
-              :disabled="browserLoginPending"
-              :aria-busy="browserLoginPending"
               @click="handleUserClick"
             >
               <div class="user-avatar small">
-                <LoadingOutlined v-if="browserLoginPending" spin />
-                <UserOutlined v-else />
+                <UserOutlined />
               </div>
               <div class="user-text">
                 <span class="user-title">{{ userNickname }}</span>
-                <span class="user-sub">{{ authStore.cloudLoggedIn ? (authStore.cloudUser?.username || '') : (t('layout.sidebar.guestLogin') || '本地 · 点击登录') }}</span>
+                <span class="user-sub">{{ authStore.cloudLoggedIn ? (authStore.cloudUser?.serverUrl || authStore.cloudUser?.username || '') : (t('layout.sidebar.guestLogin') || '本地 · 点击登录') }}</span>
               </div>
             </button>
 
@@ -612,16 +606,9 @@ import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { message, Modal } from 'ant-design-vue'
 import {
-  EllipsisOutlined,
   PushpinOutlined,
   RightOutlined,
-  SearchOutlined,
-  CloseCircleFilled,
-  PlusOutlined,
-  FolderOutlined,
-  InboxOutlined,
   UserOutlined,
-  SettingOutlined,
   BulbOutlined,
   GlobalOutlined,
   LogoutOutlined,
@@ -640,15 +627,20 @@ import { useConversationStore, type TaskConversation } from '@/stores/conversati
 import { useAppI18n } from '@/i18n'
 import { useOnboardingGuide } from '@/composables/useOnboardingGuide'
 import { useLocale } from '@/composables/useLocale'
-import { useBrowserLogin } from '@/composables/useBrowserLogin'
+import { applySession } from '@/composables/useCloudSession'
+import { clearTaskFilesIndexCache } from '@/composables/useTaskFilesIndex'
 import { isMacDesktopRuntime, isWindowsDesktopRuntime } from '@/composables/useDesktop'
 import apiClient from '@/api/client'
 import logo from '@/assets/logo.svg'
 import logoDark from '@/assets/logo-dark.svg'
-import sidebarToggleDark from '@/assets/icons/sidebar-toggle-dark.svg'
-import sidebarToggleLight from '@/assets/icons/sidebar-toggle-light.svg'
+import sidebarToggleIcon from '@/assets/icons/common-sidebar-toggle.svg'
 import SidebarMenuIcon from './SidebarMenuIcon.vue'
 import WorkspaceActions from './WorkspaceActions.vue'
+import ConversationSearchModal from './ConversationSearchModal.vue'
+import AddWorkspaceModal from './AddWorkspaceModal.vue'
+import ConversationActionsMenu from './ConversationActionsMenu.vue'
+import ConversationHoverCard from './ConversationHoverCard.vue'
+import WorkspaceHoverCard from './WorkspaceHoverCard.vue'
 
 type ThemeMode = 'light' | 'dark' | 'auto'
 
@@ -676,13 +668,11 @@ watch(() => route.fullPath, (path) => {
 const { t } = useAppI18n()
 const { replay: replayOnboarding } = useOnboardingGuide()
 const { locale, setLocale } = useLocale()
-const {
-  pending: browserLoginPending,
-  errorMessage: browserLoginError,
-  startBrowserLogin,
-} = useBrowserLogin()
 
-const searchKeyword = ref('')
+const searchOpen = ref(false)
+const addWorkspaceOpen = ref(false)
+const workspacesCollapsed = ref(false)
+const moreMenuOpen = ref(false)
 const settingsMenuOpen = ref(false)
 const renameTaskUuid = ref('')
 const renameTitle = ref('')
@@ -695,6 +685,7 @@ let previousBodyCursor = ''
 let previousBodyUserSelect = ''
 
 const sidebarCollapsed = computed(() => appStore.sidebarCollapsed)
+watch([() => route.fullPath, sidebarCollapsed], () => { moreMenuOpen.value = false })
 const sidebarWidth = computed(() => appStore.sidebarWidth)
 const isMacDesktop = isMacDesktopRuntime()
 const isWindowsDesktop = isWindowsDesktopRuntime()
@@ -800,7 +791,6 @@ const isDark = computed(() => {
   return systemDark.value
 })
 
-const toggleIcon = computed(() => (isDark.value ? sidebarToggleDark : sidebarToggleLight))
 
 const currentThemeLabel = computed(() => {
   if (currentThemeConfig.value === 'light') return t('layout.sidebar.themeLight') || '浅色'
@@ -909,39 +899,23 @@ function reviewOnboarding() {
 }
 
 function handleUserClick() {
-  if (authStore.cloudLoggedIn) {
-    void router.push({ path: '/board', query: { tab: 'team' } })
-    return
-  }
-  if (browserLoginPending.value) return
   settingsMenuOpen.value = false
-  message.info(t('teamwork.login.pending'))
-  void startBrowserLogin().then((ok) => {
-    if (!ok && browserLoginError.value) message.error(browserLoginError.value)
-  })
+  // 账号入口只定位到团队工作，由用户在页面中选择登录方式。
+  void router.push({ path: '/board', query: { tab: 'team' } })
 }
 
 async function handleLogout() {
   try {
     await apiClient.post('/auth/logout')
-  } catch {
-    // ignore
-  } finally {
-    authStore.clearCloudAuth()
-    authStore.setLocalSession(false)
-    appStore.setCloudStatus('offline')
+    applySession({ local_authenticated: true, cloud_logged_in: false })
+    clearTaskFilesIndexCache()
+    void conversationStore.loadConversations(true).catch(() => {})
     settingsMenuOpen.value = false
+    await router.replace({ path: '/board', query: { tab: 'team' } })
     message.success(t('layout.sidebar.logoutSuccess') || '已退出登录')
+  } catch (error) {
+    message.error(error instanceof Error ? error.message : t('teamwork.login.failed'))
   }
-}
-
-function onSearchInput() {
-  conversationStore.setSearchQuery(searchKeyword.value)
-}
-
-function clearSearch() {
-  searchKeyword.value = ''
-  conversationStore.setSearchQuery('')
 }
 
 function toggleGroup(key: string) {
@@ -983,6 +957,19 @@ onMounted(() => {
 </script>
 
 <style scoped>
+.workspace-divider { height: 1px; margin: 12px; background: #f0f0f0; }
+.theme-dark .workspace-divider { background: rgba(255,255,255,.1); }
+.workspace-toolbar { display: flex; align-items: center; justify-content: space-between; margin: 0 12px 4px; border-radius: 6px; color: #8c8c8c; }
+.workspace-toggle, .workspace-add { display: flex; align-items: center; gap: 6px; min-height: 28px; padding: 4px; border: 0; border-radius: 6px; background: transparent; color: inherit; cursor: pointer; font-size: 12px; }
+.workspace-toggle { flex: 1; min-width: 0; }
+.workspace-add { flex-shrink: 0; width: 28px; justify-content: center; opacity: 0; pointer-events: none; }
+.workspace-toolbar:hover .workspace-add,
+.workspace-toolbar:has(:focus-visible) .workspace-add { opacity: 1; pointer-events: auto; }
+.workspace-toolbar:hover { background: var(--sidebar-hover); }
+.workspace-add:hover { background: var(--sidebar-active); }
+.workspace-toggle:focus-visible, .workspace-add:focus-visible { outline: 2px solid #3157e2; }
+.workspace-expanded { transform: rotate(90deg); }
+
 .app-sidebar {
   --sidebar-bg: #f9f9f9;
   --sidebar-border: #f0f0f0;
@@ -1043,8 +1030,13 @@ onMounted(() => {
   --sidebar-active: #334155;
 }
 
+.sidebar-header {
+  flex-shrink: 0;
+}
+
 .sidebar-top-bar {
   display: flex;
+  gap: 8px;
   align-items: center;
   justify-content: flex-end;
   height: 38px;
@@ -1054,18 +1046,41 @@ onMounted(() => {
 
 .mac-desktop .sidebar-top-bar {
   -webkit-app-region: drag;
-  justify-content: flex-start;
-  padding-left: 80px;
+}
+
+.windows-desktop .sidebar-header {
+  -webkit-app-region: drag;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: env(titlebar-area-height, 32px);
+  padding: 0 12px 0 14px;
+  border-bottom: 1px solid #e5e7eb;
 }
 
 .windows-desktop .sidebar-top-bar {
-  -webkit-app-region: drag;
-  height: env(titlebar-area-height, 32px);
-  border-bottom: 1px solid #e5e7eb;
+  order: 1;
+  height: 100%;
+  padding: 0;
+}
+
+.windows-desktop .sidebar-brand {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  padding: 0;
+}
+
+.windows-desktop .brand-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .sidebar-collapse-btn {
   -webkit-app-region: no-drag;
+  color: var(--sidebar-text);
+  font-size: 16px;
   width: 24px;
   height: 24px;
   border: none;
@@ -1083,8 +1098,13 @@ onMounted(() => {
 }
 
 .collapse-icon {
-  width: 16px;
-  height: 16px;
+  display: block;
+  width: 20px;
+  height: 20px;
+}
+
+.app-sidebar.theme-dark .collapse-icon {
+  filter: brightness(0) invert(1);
 }
 
 .sidebar-brand {
@@ -1157,16 +1177,16 @@ onMounted(() => {
 
 .more-item {
   justify-content: space-between;
+  border: 0;
+  background: transparent;
+  font-family: inherit;
+  text-align: left;
 }
 
 .more-item__left {
   display: flex;
   align-items: center;
   gap: 12px;
-}
-
-.ellipsis-icon {
-  font-size: 18px;
 }
 
 .more-chevron {
@@ -1205,65 +1225,21 @@ onMounted(() => {
 }
 
 .more-menu-item .item-icon {
-  width: 16px;
-  height: 16px;
+  width: 14px;
+  height: 14px;
+  flex: 0 0 14px;
 }
 
-.sidebar-search {
-  padding: 8px 10px 4px;
-}
-
-.search-input-box {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  height: 30px;
-  padding: 0 8px;
-  background: #ffffff;
-  border: 1px solid #e5e7eb;
-  border-radius: 8px;
-  transition: border-color 0.2s;
-}
-
-.app-sidebar.theme-dark .search-input-box {
-  background: #1e293b;
-  border-color: #334155;
-}
-
-.search-input-box:focus-within {
-  border-color: #3157e2;
-}
-
-.search-icon {
-  color: #9ca3af;
-  font-size: 13px;
-}
-
-.search-input {
-  flex: 1;
-  border: none;
-  outline: none;
-  background: transparent;
-  font-size: 12px;
-  color: var(--sidebar-text);
-}
-
-.search-input::placeholder {
-  color: #9ca3af;
-}
-
-.search-clear-btn {
-  border: none;
-  background: transparent;
-  color: #9ca3af;
-  cursor: pointer;
-  padding: 2px;
-  display: flex;
-  align-items: center;
+.more-menu-item .item-icon :deep(img) {
+  width: 14px;
+  height: 14px;
+  object-fit: contain;
+  transform: translate(-50%, -50%);
 }
 
 .sidebar-conversations-scroll {
   flex: 1;
+  min-height: 0;
   overflow-y: auto;
   padding: 4px 10px 10px;
   display: flex;
@@ -1304,7 +1280,7 @@ onMounted(() => {
   align-items: center;
   justify-content: space-between;
   height: 28px;
-  padding: 0 4px;
+  padding: 0 8px;
   cursor: pointer;
   border-radius: 6px;
   transition: background 0.15s;
@@ -1312,6 +1288,28 @@ onMounted(() => {
 
 .group-header:hover {
   background: var(--sidebar-hover);
+}
+
+.group-header :deep(.workspace-actions) {
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.18s;
+}
+
+.group-header:hover :deep(.workspace-actions),
+.group-header:focus-visible :deep(.workspace-actions),
+.group-header:has(:focus-visible) :deep(.workspace-actions),
+.group-header :deep(.workspace-actions.is-open) {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+@media (hover: none) {
+  .workspace-add,
+  .group-header :deep(.workspace-actions) {
+    opacity: 1;
+    pointer-events: auto;
+  }
 }
 
 .group-header__main {
@@ -1323,8 +1321,7 @@ onMounted(() => {
 }
 
 .group-chevron {
-  font-size: 10px;
-  color: var(--sidebar-subtext);
+  transform: rotate(0deg);
   transition: transform 0.2s;
 }
 
@@ -1338,7 +1335,7 @@ onMounted(() => {
 }
 
 .group-name {
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 500;
   color: var(--sidebar-text);
   overflow: hidden;
@@ -1353,11 +1350,12 @@ onMounted(() => {
 
 .group-add-btn {
   opacity: 0;
-  width: 20px;
-  height: 20px;
+  width: 24px;
+  height: 24px;
+  padding: 0;
   border: none;
   background: transparent;
-  border-radius: 4px;
+  border-radius: 6px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1366,7 +1364,9 @@ onMounted(() => {
   transition: opacity 0.15s, background 0.15s;
 }
 
-.group-header:hover .group-add-btn {
+.group-header:hover .group-add-btn,
+.group-header:focus-visible .group-add-btn,
+.group-header:has(:focus-visible) .group-add-btn {
   opacity: 1;
 }
 
@@ -1474,6 +1474,11 @@ onMounted(() => {
   color: var(--sidebar-text);
 }
 
+.archived-entry .conv-more-btn {
+  position: relative;
+  inset: auto;
+}
+
 .archived-section {
   margin-top: 6px;
   border-top: 1px solid var(--sidebar-border);
@@ -1501,11 +1506,6 @@ onMounted(() => {
   gap: 6px;
 }
 
-.archived-icon {
-  font-size: 13px;
-  color: var(--sidebar-subtext);
-}
-
 .archived-label {
   font-size: 12px;
   color: var(--sidebar-subtext);
@@ -1522,6 +1522,8 @@ onMounted(() => {
 
 .sidebar-footer {
   height: 52px;
+  flex-shrink: 0;
+  margin-top: auto;
   border-top: 1px solid var(--sidebar-border);
   padding: 0 10px;
   display: flex;

@@ -1,13 +1,17 @@
 import type { Pinia } from 'pinia'
-import apiClient from '@/api/client'
+import apiClient, { setAccountScopeChangedHandler } from '@/api/client'
 import { seedApiToken } from '@/api/token'
 import { useAuthStore } from '@/stores/auth'
 import { useAppStore } from '@/stores/app'
+import { releaseTaskConversationCaches } from '@/utils/taskConversationCache'
 
 export interface SessionResponse {
   local_authenticated: boolean
   cloud_logged_in: boolean
   account_scope?: string
+  session_generation?: string
+  server_url?: string
+  server_type?: 'official' | 'custom'
   user?: {
     id: string
     username: string
@@ -51,12 +55,16 @@ export function applySession(session: SessionResponse, pinia?: Pinia): void {
   console.log('[session] 应用会话结果', redactSession(session))
   const authStore = useAuthStore(pinia)
   const appStore = useAppStore(pinia)
+  if (authStore.cloudUser?.sessionGeneration !== session.session_generation || authStore.cloudUser?.accountScope !== session.account_scope) releaseTaskConversationCaches()
   if (session.api_token) seedApiToken(session.api_token)
   authStore.setLocalSession(session.local_authenticated)
   if (session.cloud_logged_in && session.user) {
     authStore.setCloudAuth('http-only-session', {
       id: session.user.id,
       accountScope: session.account_scope,
+      sessionGeneration: session.session_generation,
+      serverUrl: session.server_url,
+      serverType: session.server_type,
       username: session.user.username,
       displayName: session.user.display_name?.trim() || undefined,
       avatar: session.user.avatar,
@@ -67,6 +75,7 @@ export function applySession(session: SessionResponse, pinia?: Pinia): void {
     authStore.clearCloudAuth()
     appStore.setCloudStatus('offline')
   }
+  authStore.markSessionReady()
 }
 
 /** 重新拉取并应用会话（浏览器登录回注成功后调用）。 */
@@ -74,4 +83,15 @@ export async function refreshSession(pinia?: Pinia): Promise<SessionResponse> {
   const session = await fetchSession()
   applySession(session, pinia)
   return session
+}
+
+/** 其他窗口切换账号后恢复当前窗口；原业务操作不重放。 */
+export function registerSessionRecovery(pinia: Pinia): void {
+  const authStore = useAuthStore(pinia)
+  setAccountScopeChangedHandler(async () => {
+    const previousUser = authStore.cloudUser
+    const session = await fetchSession()
+    // 探测期间如已登录或退出，以用户刚完成的操作为准。
+    if (authStore.cloudUser === previousUser) applySession(session, pinia)
+  })
 }

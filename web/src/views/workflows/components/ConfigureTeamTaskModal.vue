@@ -6,16 +6,24 @@
       :class="{ 'is-fullscreen': fullscreen }"
       role="dialog"
       aria-modal="true"
-      @keydown.esc="emit('update:open', false)"
+      @keydown.esc="close"
     >
       <div
         class="configure-mask"
-        @click="emit('update:open', false)"
+        @click="close"
       />
       <section class="configure-panel">
+        <div
+          v-if="fullscreen && isMacDesktop"
+          class="configure-titlebar"
+          aria-hidden="true"
+        />
         <header class="configure-header">
           <strong>{{ t('teamwork.configure.title') }}</strong>
-          <div class="configure-header-actions">
+          <div
+            class="configure-header-actions"
+            :class="{ 'in-titlebar': fullscreen && isMacDesktop }"
+          >
             <button
               type="button"
               :aria-label="
@@ -29,8 +37,9 @@
             </button>
             <button
               type="button"
+              :disabled="saving"
               :aria-label="t('workflows.task.create.close')"
-              @click="emit('update:open', false)"
+              @click="close"
             >
               <CloseOutlined />
             </button>
@@ -38,7 +47,7 @@
         </header>
 
         <a-spin :spinning="loading">
-          <div class="configure-body">
+          <div class="configure-body" :inert="saving">
             <p class="configure-hint">
               <InfoCircleFilled
                 class="hint-icon"
@@ -47,13 +56,20 @@
               <span>{{ t('teamwork.configure.hint', { name: creatorName }) }}</span>
             </p>
 
-            <!-- 需求标题与描述本期不支持修改，只作为只读信息展示。 -->
-            <h2 class="work-item-title">{{ item?.title }}</h2>
-            <div class="work-item-description scrollbar--subtle">
-              <RichTextContent
-                :content="item?.description || ''"
-                :empty-text="t('teamwork.workItem.empty')"
-              />
+            <div class="requirement-heading">
+              <h2 class="work-item-title">{{ form.title }}</h2>
+              <a-button type="text" :disabled="saving" @click="openRequirementEditor">
+                <template #icon><EditOutlined /></template>
+                {{ t('workflows.task.detail.edit') }}
+              </a-button>
+            </div>
+            <div class="work-item-description">
+              <div class="requirement-preview scrollbar--subtle">
+                <RichTextContent
+                  :content="form.description"
+                  :empty-text="t('teamwork.workItem.empty')"
+                />
+              </div>
             </div>
 
             <div
@@ -201,12 +217,12 @@
                   <a-menu>
                     <a-menu-item
                       key="projects"
-                      @click="showChildren = !showChildren"
+                      @click="toggleRelatedProjects"
                       ><AppstoreOutlined />{{ t('teamwork.configure.moreProject') }}</a-menu-item
                     >
                     <a-menu-item
                       key="dirs"
-                      @click="showDirs = !showDirs"
+                      @click="toggleRelatedDirectories"
                       ><FolderOpenOutlined />{{ t('teamwork.configure.moreDir') }}</a-menu-item
                     >
                   </a-menu>
@@ -223,14 +239,17 @@
                 class="expanded-row"
               >
                 <span>{{ t('teamwork.configure.moreProject') }}</span>
-                <a-select
-                  v-model:value="form.child_project_uuids"
-                  mode="multiple"
-                  :max-tag-count="1"
-                  :options="childProjectOptions"
-                  :placeholder="t('workflows.task.create.choose')"
-                  size="small"
-                />
+                <ConfigProvider :theme="relatedProjectTheme">
+                  <a-select
+                    v-model:value="form.child_project_uuids"
+                    mode="multiple"
+                    :max-tag-count="1"
+                    :options="childProjectOptions"
+                    :placeholder="t('workflows.task.create.choose')"
+                    size="middle"
+                  />
+                </ConfigProvider>
+                <button type="button" class="expanded-close" :aria-label="t('workflows.task.create.removeRelatedProjects')" @click="toggleRelatedProjects"><CloseOutlined /></button>
               </div>
               <div
                 v-if="showDirs"
@@ -250,9 +269,10 @@
                       <span :title="dir">{{ dir }}</span>
                       <button
                         type="button"
+                        :aria-label="t('workflows.task.detail.removeRelatedDirectory')"
                         @click="form.additional_dirs.splice(index, 1)"
                       >
-                        ×
+                        <CloseOutlined />
                       </button>
                     </div>
                   </div>
@@ -264,33 +284,65 @@
                     <PlusOutlined />{{ t('workflows.task.create.addRelatedDirectory') }}
                   </a-button>
                 </div>
+                <button type="button" class="expanded-close" :aria-label="t('workflows.task.create.removeRelatedDirectories')" @click="toggleRelatedDirectories"><CloseOutlined /></button>
               </div>
             </section>
           </div>
         </a-spin>
 
         <footer class="configure-footer">
-          <a-button @click="emit('update:open', false)">{{
+          <div class="execute-options">
+            <div class="execute-option">
+              <a-checkbox
+                v-model:checked="startImmediately"
+                :disabled="loading || saving"
+                aria-describedby="configure-execute-hint"
+              >
+                {{ t('teamwork.configure.startImmediately') }}
+              </a-checkbox>
+              <span id="configure-execute-hint" class="execute-hint">{{ t('teamwork.configure.startImmediatelyHint') }}</span>
+            </div>
+            <div class="execute-option">
+              <a-checkbox
+                v-model:checked="syncAgentOutput"
+                :disabled="loading || saving"
+                aria-describedby="configure-sync-output-hint"
+              >
+                {{ t('teamwork.configure.syncAgentOutput') }}
+              </a-checkbox>
+              <span id="configure-sync-output-hint" class="execute-hint">{{ t('teamwork.configure.syncAgentOutputHint') }}</span>
+            </div>
+          </div>
+          <a-button :disabled="saving" @click="close">{{
             t('teamwork.configure.cancel')
           }}</a-button>
           <a-button
             type="primary"
             :loading="saving"
+            :disabled="loading"
             @click="confirm"
             >{{ t('teamwork.configure.confirm') }}</a-button
           >
         </footer>
       </section>
     </div>
+    <TeamTaskRequirementEditModal
+      :open="requirementEditorOpen"
+      :title="form.title"
+      :description="form.description"
+      :on-upload-images="handleDescriptionImages"
+      @update:open="handleRequirementEditorOpenChange"
+      @saved="applyRequirementEdit"
+    />
     <AssignExecutionModeModal
       v-model:open="executionPickerOpen"
       select-only
-      :task-title="item?.title || ''"
+      :task-title="form.title"
       :initial-mode="form.execution_mode"
       :preferred-pipeline-uuid="form.pipeline_uuid"
       :preferred-expert-group-uuid="form.expert_group_uuid"
       :initial-cli-type="form.execution_mode === 'cli' ? form.execution_tool : ''"
-      :initial-model-name="form.execution_mode === 'cli' ? form.model_name : ''"
+      :initial-model-name="form.model_name"
       :initial-vibe-tool="form.execution_mode === 'vibe_coding' ? form.execution_tool : ''"
       @selected="applyExecutionSelection"
     />
@@ -298,14 +350,16 @@
 </template>
 
 <script setup lang="ts">
+import { showVibeToolOpenResult } from '@/composables/useVibeToolFeedback'
 import { computed, nextTick, reactive, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
-import { message } from 'ant-design-vue'
+import { ConfigProvider, message } from 'ant-design-vue'
 import {
   AppstoreOutlined,
   CloseOutlined,
   DeploymentUnitOutlined,
   DownOutlined,
+  EditOutlined,
   EllipsisOutlined,
   FlagOutlined,
   FolderOpenOutlined,
@@ -318,12 +372,15 @@ import apiClient from '@/api/client'
 import AssignExecutionModeModal, {
   type ExecutionModeSelection,
 } from '@/components/AssignExecutionModeModal.vue'
+import TeamTaskRequirementEditModal from '@/views/workflows/components/TeamTaskRequirementEditModal.vue'
 import RichTextContent from '@/components/RichTextContent.vue'
+import { useTaskImageAttachments } from '@/composables/useTaskImageAttachments'
 import { isVibeCodingTool, vibeToolLabelKey, vibeToolLogo } from '@/composables/useVibeCoding'
+import { readRecentVibeModels, useVibeModelPreferences } from '@/composables/useVibeModelPreferences'
 import { useCreateTaskDefaults } from '@/composables/useCreateTaskDefaults'
 import { useCliKickoffNavigation } from '@/composables/useCliKickoff'
-import { isDesktopRuntime, selectDirectory } from '@/composables/useDesktop'
-import { openTaskInCodex } from '@/composables/useTaskCodex'
+import { isDesktopRuntime, isMacDesktopRuntime, selectDirectory } from '@/composables/useDesktop'
+import { openTaskVibeTool } from '@/composables/useTaskVibeTool'
 import { usePipelineStore } from '@/stores/pipeline'
 import { useExpertGroupStore } from '@/stores/expert-group'
 import type { Pipeline, TaskExecutionMode } from '@/types/pipeline'
@@ -333,8 +390,20 @@ import { useAppI18n } from '@/i18n'
 import { ipcErrorMessage } from '@/utils/ipcError'
 
 const { t } = useAppI18n()
+const isMacDesktop = isMacDesktopRuntime()
 const { getCreateTaskDefaults, saveCreateTaskDefaults } = useCreateTaskDefaults()
 const { openCliConversation } = useCliKickoffNavigation()
+const relatedProjectTheme = {
+  components: {
+    Select: {
+      fontSize: 14,
+      lineHeight: 22 / 14,
+      controlHeight: 32,
+      controlHeightSM: 24,
+      borderRadius: 6,
+    },
+  },
+}
 
 const props = defineProps<{
   open: boolean
@@ -349,6 +418,12 @@ const { items: expertGroups } = storeToRefs(expertGroupStore)
 
 const loading = ref(false)
 const saving = ref(false)
+const requirementEditorOpen = ref(false)
+let editAttachmentIds = new Set<string>()
+const startImmediately = ref(false)
+// 同步 Agent 产出：默认勾选，取消勾选后该任务的产出文件不再自动上报线上。
+const syncAgentOutput = ref(true)
+const { addImages, buildDraftAttachmentInputs, items: imageAttachments, remove: removeImageAttachment, clear: clearImageAttachments, isSaving: isSavingPastedImages } = useTaskImageAttachments()
 const fullscreen = ref(false)
 const executionPickerOpen = ref(false)
 const projects = ref<LocalProject[]>([])
@@ -357,6 +432,8 @@ const showDirs = ref(false)
 const chipRowRef = ref<HTMLElement | null>(null)
 
 const form = reactive({
+  title: '',
+  description: '',
   project_uuid: '',
   child_project_uuids: [] as string[],
   work_dir: '',
@@ -368,6 +445,16 @@ const form = reactive({
   model_name: '',
   expert_group_uuid: '',
 })
+
+function toggleRelatedProjects() {
+  if (showChildren.value) form.child_project_uuids = []
+  showChildren.value = !showChildren.value
+}
+
+function toggleRelatedDirectories() {
+  if (showDirs.value) form.additional_dirs = []
+  showDirs.value = !showDirs.value
+}
 
 const selectedProject = computed(() =>
   projects.value.find((project) => project.uuid === form.project_uuid),
@@ -412,7 +499,7 @@ function pipelineLabel(pipeline?: Pipeline) {
 }
 
 function executionChipLabel() {
-  if (isCodexSelected.value) return t(vibeToolLabelKey(form.execution_tool))
+  if (isCodexSelected.value) return [t(vibeToolLabelKey(form.execution_tool)), form.model_name].filter(Boolean).join(' · ')
   if (isCLISelected.value) {
     return form.execution_tool
       ? `${t('workflows.task.assign.cliMode')} · ${form.execution_tool}`
@@ -432,7 +519,13 @@ function priorityLabel(priority: string) {
 }
 
 function reset() {
+  requirementEditorOpen.value = false
+  startImmediately.value = false
+  syncAgentOutput.value = true
+  clearImageAttachments()
   Object.assign(form, {
+    title: props.item?.title || '',
+    description: props.item?.description || '',
     project_uuid: '',
     child_project_uuids: [],
     work_dir: '',
@@ -451,6 +544,17 @@ function reset() {
   fullscreen.value = false
 }
 
+const { resetVibeModels, resolveVibeModel } = useVibeModelPreferences()
+
+async function validateVibeFormModel() {
+  if (form.execution_mode !== 'vibe_coding') return
+  const tool = form.execution_tool
+  const candidate = form.model_name || ''
+  resetVibeModels(tool, candidate)
+  const model = await resolveVibeModel(tool)
+  if (form.execution_mode === 'vibe_coding' && form.execution_tool === tool && (form.model_name || '') === candidate) form.model_name = model
+}
+
 function applyCreateTaskDefaults() {
   const defaults = getCreateTaskDefaults()
   if (defaults.project_uuid && projects.value.some((item) => item.uuid === defaults.project_uuid)) {
@@ -463,6 +567,8 @@ function applyCreateTaskDefaults() {
     if (project?.local_dir) form.work_dir = project.local_dir
   }
   form.priority = defaults.priority
+  // 记住上一次的勾选状态；没有记录时默认勾选
+  syncAgentOutput.value = defaults.sync_agent_output !== false
 
   const executionMode =
     defaults.execution_mode || (defaults.pipeline_uuid ? 'pipeline' : '')
@@ -486,6 +592,7 @@ function applyCreateTaskDefaults() {
   ) {
     form.execution_mode = 'vibe_coding'
     form.execution_tool = defaults.execution_tool
+    form.model_name = readRecentVibeModels()[defaults.execution_tool] ?? defaults.model_name ?? ''
   } else if (
     executionMode === 'cli' &&
     defaults.execution_tool &&
@@ -531,6 +638,11 @@ async function load() {
   if (projectResult.status === 'rejected')
     message.warning(t('workflows.task.create.projectLoadFailed'))
   applyCreateTaskDefaults()
+  try {
+    await validateVibeFormModel()
+  } catch {
+    // 提交时重试校验，暂时保留历史偏好。
+  }
   loading.value = false
 }
 
@@ -571,11 +683,17 @@ async function addDirectory() {
 }
 
 async function confirm() {
+  if (loading.value || saving.value) return
   const item = props.item
   if (!item) return
+  const description = form.description
+  if (!form.title.trim()) return message.warning(t('workflows.task.create.titleRequired'))
+  if (isSavingPastedImages.value) return message.warning(t('workflows.task.create.waitImages'))
   if (!form.work_dir.trim()) return message.warning(t('teamwork.configure.workDirRequired'))
   if (form.additional_dirs.some((dir) => !dir.trim()))
     return message.warning(t('workflows.task.create.emptyRelatedDirectory'))
+  if (startImmediately.value && !form.execution_mode)
+    return message.warning(t('teamwork.configure.executionModeRequired'))
   if (form.execution_mode === 'pipeline' && !form.pipeline_uuid)
     return message.warning(t('workflows.task.create.executionTargetRequired'))
   // Vibe Coding 已支持多个工具（Codex CLI / Pi / Qoder / CodeBuddy / Claude），
@@ -588,15 +706,19 @@ async function confirm() {
     return message.warning(t('expertGroups.notReady'))
   saving.value = true
   const createdExecutionMode = form.execution_mode
+  const shouldStartImmediately = startImmediately.value
+  let started = false
   // 创建成功后弹窗可能被重置，先固定本次选定的 vibe 工具，供打开提示使用。
   const createdVibeTool = form.execution_tool
   let createdTaskUuid = ''
   try {
+    await validateVibeFormModel()
+    const attachments = await buildDraftAttachmentInputs(description)
     const result = await apiClient.post<{ uuid: string }>('/tasks', {
-      // 标题与描述沿用团队需求，本期不开放修改。
-      title: item.title,
-      content: item.description || '',
-      description: item.description || '',
+      title: form.title.trim(),
+      content: description,
+      description,
+      attachments,
       project_uuid: form.project_uuid || undefined,
       child_project_uuids: form.child_project_uuids,
       work_dir: form.work_dir,
@@ -607,8 +729,10 @@ async function confirm() {
       execution_tool: form.execution_tool || undefined,
       model_name: form.model_name || undefined,
       expert_group_uuid: form.expert_group_uuid || undefined,
-      // CLI 创建后直接进入进行中并打开对话；其他方式保持待开始，和新建任务一致。
-      status: form.execution_mode === 'cli' ? 'active' : 'pending',
+      // 关闭后该任务的产出文件不自动上报线上，需要在文件抽屉里手动上报
+      sync_agent_output: syncAgentOutput.value,
+      // 先创建待开始任务，再单独启动；启动失败时保留任务，避免重试配置重复创建。
+      status: 'pending',
       // 绑定云端工作项后，「我的工作」与团队看板都能识别这条本地任务。
       work_item_type: item.type,
       work_item_id: item.id,
@@ -627,9 +751,21 @@ async function confirm() {
       execution_tool: form.execution_tool,
       model_name: form.model_name,
       expert_group_uuid: form.expert_group_uuid,
+      // 记住本次勾选，下个团队任务配置自动沿用
+      sync_agent_output: syncAgentOutput.value,
     })
-    message.success(t('teamwork.configure.created'))
     createdTaskUuid = result.uuid
+    if (shouldStartImmediately) {
+      try {
+        await apiClient.put(`/tasks/${encodeURIComponent(result.uuid)}/status`, { status: 'active' })
+        started = true
+      } catch (error) {
+        message.warning(t('teamwork.configure.startFailed', {
+          error: error instanceof Error ? error.message : t('workflows.task.detail.startFailed'),
+        }))
+      }
+    }
+    if (!shouldStartImmediately || started) message.success(t('teamwork.configure.created'))
     emit('created', result.uuid)
     emit('update:open', false)
   } catch (error) {
@@ -637,7 +773,7 @@ async function confirm() {
   } finally {
     saving.value = false
   }
-  if (!createdTaskUuid) return
+  if (!createdTaskUuid || !started) return
   if (createdExecutionMode === 'cli') {
     await openCliConversation(createdTaskUuid)
     return
@@ -645,16 +781,38 @@ async function confirm() {
   if (createdExecutionMode !== 'vibe_coding') return
   // 提示文案跟随实际选定的工具，不能固定写 Codex。
   const toolName = t(vibeToolLabelKey(createdVibeTool))
-  const openResult = await openTaskInCodex(createdTaskUuid)
-  if (openResult.opened) {
-    message.success(t('workflows.task.detail.toolOpened', { tool: toolName }))
-  } else if (openResult.copied) {
-    message.warning(t('workflows.task.detail.toolCopiedFallback', { tool: toolName }))
-  } else if (openResult.error) {
-    message.error(openResult.error.message)
-  } else {
-    message.warning(t('workflows.task.detail.toolUnavailable', { tool: toolName }))
+  const openResult = await openTaskVibeTool(createdTaskUuid)
+  showVibeToolOpenResult(openResult, toolName)
+}
+
+function openRequirementEditor() {
+  editAttachmentIds = new Set(imageAttachments.value.map((attachment) => attachment.id))
+  requirementEditorOpen.value = true
+}
+
+function applyRequirementEdit(value: { title: string; description: string }) {
+  form.title = value.title
+  form.description = value.description
+  editAttachmentIds = new Set(imageAttachments.value.map((attachment) => attachment.id))
+}
+
+function handleRequirementEditorOpenChange(open: boolean) {
+  if (!open && requirementEditorOpen.value) {
+    // 取消仅释放本轮新增图片，保留此前已保存到配置草稿中的附件。
+    imageAttachments.value
+      .filter((attachment) => !editAttachmentIds.has(attachment.id))
+      .forEach((attachment) => removeImageAttachment(attachment.id))
   }
+  requirementEditorOpen.value = open
+}
+
+function close() {
+  if (!saving.value) emit('update:open', false)
+}
+
+async function handleDescriptionImages(files: File[]) {
+  if (saving.value || isSavingPastedImages.value) throw new Error(t('workflows.task.create.savingImages'))
+  return addImages(files).map((attachment) => attachment.marker)
 }
 
 /** chip 下拉统一向下展开，按 chip 行下沿到视口底部的距离限制菜单高度。 */
@@ -676,6 +834,7 @@ watch(
   () => props.open,
   (open) => {
     if (!open) {
+      handleRequirementEditorOpenChange(false)
       executionPickerOpen.value = false
       return
     }
@@ -705,11 +864,11 @@ watch(
 .configure-panel {
   position: relative;
   z-index: 1;
+  /* 放大后覆盖桌面标题栏，排除窗口拖拽区域以保证按钮可点击。 */
+  -webkit-app-region: no-drag;
   display: flex;
   width: 879px;
-  /* 设计稿 3115:16087 是固定尺寸弹窗 879x600（上 56 + 内容 492 + 下 52）；
-     标题块省掉了设计稿里给「0 / 200」计数器预留的高度，所以这里直接钉住总高，
-     多出的空间由可滚动的描述区吸收。窗口过矮时由 max-height 兜底。 */
+  /* 保持既有弹窗尺寸，正文编辑区吸收剩余高度；小窗口由 max-height 兜底。 */
   height: 600px;
   max-width: calc(100% - 32px);
   max-height: calc(100% - 32px);
@@ -747,6 +906,19 @@ watch(
   padding: 0 24px;
 }
 
+.configure-root.is-fullscreen .configure-header {
+  height: 24px;
+  flex: 0 0 24px;
+}
+
+.configure-titlebar {
+  /* 放大时为 macOS 原生窗口按钮预留顶部拖拽栏。 */
+  height: 38px;
+  flex: 0 0 38px;
+  -webkit-app-region: drag;
+  user-select: none;
+}
+
 .configure-header strong {
   color: #262626;
   font-size: 16px;
@@ -758,6 +930,14 @@ watch(
   display: flex;
   align-items: center;
   gap: 8px;
+}
+
+.configure-header-actions.in-titlebar {
+  position: absolute;
+  top: 7px;
+  right: 24px;
+  /* 操作按钮与原生窗口按钮同栏，但不能参与窗口拖拽。 */
+  -webkit-app-region: no-drag;
 }
 
 .configure-header-actions button {
@@ -780,8 +960,7 @@ watch(
   background: #f5f6f8;
 }
 
-/* 设计稿 body 为 492px：提示条 + 只读标题 + 只读描述 + chip 行都在 body 内，
-   描述区按设计稿取 293px 并允许伸缩（窗口变高时变高，展开更多配置时让位）。 */
+/* 正文编辑区随窗口伸缩，展开配置时让位，滚动由编辑器负责。 */
 .configure-body {
   display: flex;
   min-height: 0;
@@ -811,33 +990,45 @@ watch(
   font-size: 16px;
 }
 
-.work-item-title {
+.requirement-heading {
+  display: flex;
   flex: 0 0 auto;
+  align-items: center;
+  gap: 8px;
+}
+
+.requirement-heading :deep(.ant-btn) {
+  flex: 0 0 auto;
+}
+
+.work-item-title {
+  min-width: 0;
+  flex: 1;
   margin: 0;
-  padding: 4px 0 10px;
-  border-bottom: 1px solid #f0f0f0;
   color: #262626;
-  font-size: 22px;
-  font-weight: 500;
-  line-height: 27px;
-  word-break: break-word;
+  font-size: 20px;
+  font-weight: 600;
+  line-height: 28px;
+  overflow-wrap: anywhere;
 }
 
 .work-item-description {
+  display: flex;
   height: 293px;
   min-height: 0;
   flex: 1 1 auto;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.requirement-preview {
+  min-height: 0;
+  flex: 1;
   overflow-y: auto;
 }
 
-.work-item-description :deep(.markdown-preview-shell) {
+.requirement-preview :deep(.markdown-preview-shell) {
   padding: 0;
-}
-
-.work-item-description :deep(.markdown-preview) {
-  color: #262626;
-  font-size: 14px;
-  line-height: 28px;
 }
 
 .chip-row {
@@ -941,6 +1132,23 @@ watch(
   flex: 1;
 }
 
+.expanded-close {
+  display: inline-flex;
+  width: 24px;
+  height: 24px;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  color: #595959;
+  background: transparent;
+  cursor: pointer;
+}
+.expanded-close:hover { background: #f0f0f0; }
+.expanded-close:focus-visible { outline: 2px solid #3157e2; outline-offset: 2px; }
+
 .directory-content {
   display: flex;
   min-width: 0;
@@ -978,7 +1186,12 @@ watch(
 }
 
 .directory-item > button {
+  display: inline-flex;
+  width: 24px;
+  height: 24px;
   flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
   padding: 0;
   border: 0;
   background: transparent;
@@ -995,12 +1208,37 @@ watch(
 
 .configure-footer {
   display: flex;
-  height: 52px;
-  flex: 0 0 52px;
+  min-height: 52px;
+  flex: 0 0 auto;
+  box-sizing: border-box;
   align-items: center;
   justify-content: flex-end;
   gap: 8px;
-  padding: 0 24px;
+  padding: 12px 24px;
+}
+
+.execute-options {
+  display: flex;
+  min-width: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 2px;
+  margin-right: auto;
+}
+
+.execute-option {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+}
+
+.execute-hint {
+  color: #595959;
+  font-size: 12px;
+  line-height: 20px;
+  overflow-wrap: anywhere;
 }
 
 .menu-primary {

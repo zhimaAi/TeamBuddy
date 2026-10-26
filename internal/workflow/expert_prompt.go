@@ -92,6 +92,9 @@ func BuildExpertTaskPrompt(ctx context.Context, db *sql.DB, taskUUID, stepUUID, 
 		}
 		fmt.Fprintf(&b, "- %s：%s\n", label, path)
 	}
+	// 产出目录约定：客户端只同步任务专属目录（task_dir）内的文件，写到项目工作
+	// 目录的产出既不会上报到线上，客户端文件树里也看不到。
+	b.WriteString("- 需求中没有明确指定存放位置的产出文档，一律写入当前成员产出目录（位于任务专属目录内）；不要写入项目工作目录或其他位置。\n")
 	if strings.TrimSpace(handoff) != "" {
 		b.WriteString("\n# 本轮消息或交接内容\n\n")
 		b.WriteString(strings.TrimSpace(handoff))

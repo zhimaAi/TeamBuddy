@@ -30,8 +30,15 @@ import (
 // sessionValidity Validity period of local browser session and login state (30 days)
 const sessionValidity = 30 * 24 * time.Hour
 
+// 无地址的旧版官方登录凭证只归属于此服务，不能随当前配置改变目标。
+const legacyOfficialServerURL = "https://goteams.cn"
+
+// ErrLoginCredentialRejected 仅表示云端刷新接口明确拒绝认证，供恢复流程精确清理索引。
+var ErrLoginCredentialRejected = errors.New("云端登录态已失效，请重新登录")
+
 // lastLoginInfo The account information of the last successful login, persisted to SecretStore to restore the session after restart.
 type lastLoginInfo struct {
+	indexKey    string // 实际读取的索引，清理时不猜测旧版索引的位置。
 	AdminID     string `json:"admin_id"`
 	UserID      string `json:"user_id"`
 	UserName    string `json:"user_name"`
@@ -41,7 +48,8 @@ type lastLoginInfo struct {
 	// ServerType login target: official | custom. Used to select the correct cloud client after restarting.
 	ServerType string `json:"server_type,omitempty"`
 	// ServerURL Custom cloud address (after normalization); custom is filled in when logging in, official is empty.
-	ServerURL string `json:"server_url,omitempty"`
+	ServerURL         string `json:"server_url,omitempty"`
+	CredentialVersion int    `json:"credential_version,omitempty"`
 }
 
 // sessionManager local browser session management
@@ -52,15 +60,17 @@ type sessionManager struct {
 
 // browserSession local browser session
 type browserSession struct {
-	ID          string
-	UserID      string
-	UserName    string
-	DisplayName string
-	Avatar      string
-	Role        string
-	AdminID     string
-	CreatedAt   time.Time
-	ExpiresAt   time.Time
+	ID                string
+	UserID            string
+	UserName          string
+	DisplayName       string
+	Avatar            string
+	Role              string
+	AdminID           string
+	CreatedAt         time.Time
+	ExpiresAt         time.Time
+	AccountScope      string
+	SessionGeneration string
 }
 
 var sessionMgr = &sessionManager{
@@ -91,6 +101,40 @@ func (s *Server) persistBrowserSessions() {
 	if err := os.WriteFile(s.browserSessionsFile(), data, 0600); err != nil {
 		applog.Warn("[LocalServer] 持久化浏览器会话失败", "error", err)
 	}
+}
+
+// reconcileBrowserSessions 把内存中「没有用户信息」的浏览器会话补全为当前云端账号。
+// 这类会话产生于启动早期：Electron 用 ticket 打开窗口时 s.lastLogin 还没恢复，
+// handleBrowserTicket 只能建出空会话并被持久化；它的 Cookie 有效期 30 天，
+// 期间用它创建关联线上的任务就会把 cloud_user_id 写成空值（线上永远收不到沟通记录）。
+func (s *Server) reconcileBrowserSessions() {
+	client := s.currentCloudClient()
+	if client == nil || client.UserID() == "" {
+		return
+	}
+	userID := client.UserID()
+	adminID := ""
+	if s.lastLogin != nil {
+		adminID = strings.TrimSpace(s.lastLogin.AdminID)
+	}
+	changed := false
+	sessionMgr.mu.Lock()
+	for _, sess := range sessionMgr.sessions {
+		if sess == nil || strings.TrimSpace(sess.UserID) != "" {
+			continue
+		}
+		sess.UserID = userID
+		if sess.AdminID == "" && adminID != "" {
+			sess.AdminID = adminID
+		}
+		changed = true
+	}
+	sessionMgr.mu.Unlock()
+	if !changed {
+		return
+	}
+	applog.Info("[LocalServer] 已补全浏览器会话的用户信息", "user_id", userID)
+	s.persistBrowserSessions()
 }
 
 // loadBrowserSessions Restore browser sessions from disk on startup (automatically skipping expired entries).
@@ -158,6 +202,20 @@ func (s *Server) handleBrowserTicket(c *gin.Context) {
 		session.DisplayName = s.lastLogin.DisplayName
 		session.Avatar = s.lastLogin.Avatar
 		session.Role = s.lastLogin.Role
+		if cur := s.currentSession(); cur != nil && cur.CloudClient != nil {
+			session.AccountScope = AccountScope(cur.ServerURL, cur.AdminID, cur.UserID)
+			session.SessionGeneration = cur.CloudClient.SessionScope()
+		}
+	}
+	// lastLogin 是异步恢复的：窗口打开得早时它还是 nil，这里必须退回云客户端取账号 ID，
+	// 否则会落下一个没有用户信息的会话，后续用它创建的任务 cloud_user_id 会是空值。
+	if strings.TrimSpace(session.UserID) == "" {
+		if client := s.currentCloudClient(); client != nil && client.UserID() != "" {
+			session.UserID = client.UserID()
+			if session.AdminID == "" && s.lastLogin != nil {
+				session.AdminID = s.lastLogin.AdminID
+			}
+		}
 	}
 
 	sessionMgr.mu.Lock()
@@ -224,39 +282,12 @@ func (s *Server) handleLogin(c *gin.Context) {
 		serverType = "official"
 	}
 
-	// 1. 选择云端客户端。两种登录模式都保持固定的本地 Profile。
-	var client *cloud.Client
-	var normalized string // 归一化后的云端地址，用于派生账号索引与重启后恢复会话
-	switch serverType {
-	case "custom":
-		serverURL := strings.TrimSpace(body.ServerURL)
-		if serverURL == "" {
-			i18n.Error(c, http.StatusBadRequest, "auth_custom_url_required", "custom_url_required")
-			return
-		}
-		norm, err := normalizeServerURL(serverURL)
-		if err != nil {
-			i18n.Error(c, http.StatusBadRequest, "auth_cloud_url_invalid", "cloud_url_invalid")
-			return
-		}
-		normalized = norm
-		client = s.customCloudClient(normalized)
-	default: // official
-		if s.config.CloudClient == nil || !s.config.CloudClient.IsConfigured() {
-			i18n.Error(c, http.StatusBadRequest, "auth_official_url_missing", "official_url_missing")
-			return
-		}
-		client = s.config.CloudClient
-		// 持久化归一化的官方地址，便于重启后选择正确的客户端。
-		if s.config.CloudConfig != nil && s.config.CloudConfig.APIBaseURL != "" {
-			if norm, err := normalizeServerURL(s.config.CloudConfig.APIBaseURL); err == nil {
-				normalized = norm
-			}
-		}
-		if normalized == "" {
-			i18n.Error(c, http.StatusBadRequest, "auth_official_url_invalid", "official_url_invalid")
-			return
-		}
+	s.authTransitionMu.RLock()
+	client, normalized, key := s.resolveLoginTarget(serverType, body.ServerURL)
+	s.authTransitionMu.RUnlock()
+	if key != "" {
+		i18n.Error(c, http.StatusBadRequest, key, strings.TrimPrefix(strings.TrimPrefix(key, "auth_"), "common_"))
+		return
 	}
 
 	// 2. Call the cloud to log in (any account is acceptable, as long as the password is correct)
@@ -315,6 +346,14 @@ func (s *Server) completeCloudLogin(
 ) (bool, error) {
 	s.authTransitionMu.Lock()
 	defer s.authTransitionMu.Unlock()
+	registered, err := s.completeCloudLoginLocked(c, client, serverType, serverURL, loginResp)
+	if err == nil {
+		s.browserLogins.invalidate()
+	}
+	return registered, err
+}
+
+func (s *Server) completeCloudLoginLocked(c *gin.Context, client *cloud.Client, serverType, serverURL string, loginResp *cloud.LoginResponse) (bool, error) {
 	// 本地 Profile 与凭据文件始终是应用级的，不随账号或云端地址拆分。
 	profileDir := s.config.BaseProfileDir
 	if profileDir == "" {
@@ -327,14 +366,15 @@ func (s *Server) completeCloudLogin(
 		return false, errLoginAccountManagerGone
 	}
 
+	if mgr, ok := s.config.AccountMgr.(interface{ SetOfficialServerURL(string) }); ok {
+		mgr.SetOfficialServerURL(s.currentConfiguredServerURL())
+	}
 	opts := LoginOptions{
 		PersistLastLogin: true, // 两种登录都持久化最后登录索引，重启后自动恢复会话
 		ServerType:       serverType,
 		ServerURL:        serverURL,
 	}
-	if serverType == "custom" {
-		opts.CloudClient = client
-	}
+	opts.CloudClient = client
 
 	sessionInfo, err := s.config.AccountMgr.LoginAndCreateSession(
 		c.Request.Context(),
@@ -353,6 +393,9 @@ func (s *Server) completeCloudLogin(
 	s.SetSession(sessionInfo)
 	s.triggerCloudPipelineSync()
 	s.triggerCloudExpertGroupSync()
+	// 登录后立刻回填本环境历史任务的账号归属，否则归属为空的任务永远不上报。
+	s.reconcileBrowserSessions()
+	s.triggerTaskOwnerBackfill()
 
 	// 5. 设备注册检查。此时服务端已经处于登录态，任何提前返回都会造成
 	// 「服务端已登录、浏览器没拿到 Cookie」的割裂状态，因此设备相关失败一律降级：
@@ -390,15 +433,17 @@ func (s *Server) completeCloudLogin(
 	// 6. 创建本地浏览器会话并下发 HttpOnly Cookie（有效期 30 天）。
 	sessionID := generateSessionID()
 	browserSess := &browserSession{
-		ID:          sessionID,
-		UserID:      loginResp.User.ID,
-		UserName:    loginResp.User.Username,
-		DisplayName: loginResp.User.DisplayName,
-		Avatar:      loginResp.User.Avatar,
-		Role:        loginResp.User.Role,
-		AdminID:     loginResp.AdminID,
-		CreatedAt:   time.Now(),
-		ExpiresAt:   time.Now().Add(sessionValidity),
+		ID:                sessionID,
+		UserID:            loginResp.User.ID,
+		UserName:          loginResp.User.Username,
+		DisplayName:       loginResp.User.DisplayName,
+		Avatar:            loginResp.User.Avatar,
+		Role:              loginResp.User.Role,
+		AdminID:           loginResp.AdminID,
+		CreatedAt:         time.Now(),
+		ExpiresAt:         time.Now().Add(sessionValidity),
+		AccountScope:      AccountScope(serverURL, loginResp.AdminID, loginResp.User.ID),
+		SessionGeneration: sessionInfo.CloudClient.SessionScope(),
 	}
 
 	s.lastLogin = &lastLoginInfo{
@@ -427,15 +472,22 @@ func (s *Server) completeCloudLogin(
 func (s *Server) handleLogout(c *gin.Context) {
 	s.authTransitionMu.Lock()
 	defer s.authTransitionMu.Unlock()
+	s.browserLogins.invalidate()
 	//Clear browser session
 	sessionID, err := c.Cookie("goteams_local_session")
 	if err == nil && sessionID != "" {
 		sessionMgr.mu.Lock()
 		delete(sessionMgr.sessions, sessionID)
 		sessionMgr.mu.Unlock()
-		s.persistBrowserSessions()
 	}
-	c.SetCookie("goteams_local_session", "", -1, "/", "", false, true)
+	// 退出云端后仍保留独立的本地访问能力，旧 Cookie 不再有效。
+	localSession := &browserSession{ID: generateSessionID(), CreatedAt: time.Now(), ExpiresAt: time.Now().Add(sessionValidity)}
+	sessionMgr.mu.Lock()
+	sessionMgr.sessions[localSession.ID] = localSession
+	sessionMgr.mu.Unlock()
+	s.persistBrowserSessions()
+	c.SetSameSite(http.SameSiteStrictMode)
+	c.SetCookie("goteams_local_session", localSession.ID, int(sessionValidity.Seconds()), "/", "", false, true)
 
 	//Clear account session (close database, etc.)
 	s.ClearSession()
@@ -443,15 +495,6 @@ func (s *Server) handleLogout(c *gin.Context) {
 		s.config.AccountMgr.Logout()
 	}
 
-	// Clear JWT (current Profile key backend)
-	if s.config.SecretStore != nil {
-		if err := s.config.SecretStore.Delete(secrets.KeyJWT); err != nil {
-			applog.Warn("[LocalServer] 清除 JWT 失败", "error", err)
-		}
-		if err := s.config.SecretStore.Delete(secrets.KeyPrefix + "jwt-refresh"); err != nil {
-			applog.Warn("[LocalServer] 清除 JWT Refresh 失败", "error", err)
-		}
-	}
 	s.lastLogin = nil
 
 	// Return to the universal base Profile after logging out (the local function data is restored to the universal library, and the key backend is switched back to the universal directory)
@@ -468,17 +511,20 @@ func (s *Server) handleLogout(c *gin.Context) {
 // determined by the server-side account session (restored from the persistent login state on startup).
 func (s *Server) handleSessionStatus(c *gin.Context) {
 	cur := s.currentSession()
-	if !s.sessionMatchesConfig(cur) {
+	if cur != nil && !s.sessionMatchesConfig(cur) {
 		// 官方会话域名与当前配置不一致（共享本地数据目录的其他实例登录写入），
 		// 视为未登录，避免不同远程域名之间串用登录态；custom 会话由
 		// sessionMatchesConfig 放行，不在此列。
+		if cur != nil && s.config.AccountMgr != nil {
+			s.config.AccountMgr.Logout()
+		}
 		s.ClearSession()
 		cur = nil
 	}
 	cloudLoggedIn := cur != nil
 	accountScope := ""
 	if cur != nil && cur.CloudClient != nil {
-		accountScope = ServerProfileKey(cur.CloudClient.BaseURL()) + ":" + cur.AdminID + ":" + cur.UserID
+		accountScope = AccountScope(cur.CloudClient.BaseURL(), cur.AdminID, cur.UserID)
 	}
 	var user interface{}
 	if cloudLoggedIn {
@@ -524,7 +570,10 @@ func (s *Server) handleSessionStatus(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"local_authenticated": true,
 		"cloud_logged_in":     cloudLoggedIn,
+		"session_generation":  activeSessionGeneration(cur),
 		"account_scope":       accountScope,
+		"server_url":          activeServerURL(cur),
+		"server_type":         activeServerType(cur),
 		"user":                user,
 		// 无 Electron 注入（纯 Go 运行/浏览器直连 dev）时，前端需要从本接口
 		// 获取本次启动的 API token 用于后续请求；Electron 模式经 bridge 提供，不返回。
@@ -552,13 +601,21 @@ func (s *Server) browserSessionFromCookie(c *gin.Context) (*browserSession, bool
 	sessionMgr.mu.RLock()
 	session, ok := sessionMgr.sessions[sessionID]
 	sessionMgr.mu.RUnlock()
-	if !ok || time.Now().After(session.ExpiresAt) {
+	cur := s.currentSession()
+	if !ok || session == nil || time.Now().After(session.ExpiresAt) {
 		if ok {
 			sessionMgr.mu.Lock()
 			delete(sessionMgr.sessions, sessionID)
 			sessionMgr.mu.Unlock()
 			s.persistBrowserSessions()
 		}
+		return nil, false
+	}
+	// 本地访问会话独立于云端身份。匿名或旧账号 Cookie 仍可用于本地 WS，
+	// 但不得向业务处理器提供旧账号身份。
+	if cur == nil || cur.CloudClient == nil || session.AccountScope == "" ||
+		session.SessionGeneration != cur.CloudClient.SessionScope() ||
+		session.AccountScope != AccountScope(cur.ServerURL, cur.AdminID, cur.UserID) {
 		return nil, false
 	}
 	return session, true
@@ -570,6 +627,11 @@ func (s *Server) browserSessionFromCookie(c *gin.Context) (*browserSession, bool
 // 回退前校验会话域名与当前配置一致（仅官方会话），防止共享数据目录时串用其他实例的登录态。
 func (s *Server) validateSession() gin.HandlerFunc {
 	return func(c *gin.Context) {
+		// Auth mutations own their boundary; application-only routes do not consume a cloud identity.
+		if mutatesAccount(c.Request.URL.Path) || accountIndependentRequest(c.Request.URL.Path) {
+			c.Next()
+			return
+		}
 		if session, ok := s.browserSessionFromCookie(c); ok {
 			c.Set("session", session)
 		} else if cur := s.currentSession(); s.sessionMatchesConfig(cur) {
@@ -616,13 +678,8 @@ func (s *Server) RestoreSession(ctx context.Context) {
 	}
 
 	// The account index is persisted in the boot storage (configDir) and is isolated from the Profile key.
-	// No official address configured means the target domain is unknown; skip restore so that
-	// the stale index of another instance cannot silently log this instance in.
+	// 自部署连接从其固定索引恢复，不依赖官方默认地址。官方索引仍按配置地址定位。
 	configured := s.currentConfiguredServerURL()
-	if configured == "" {
-		applog.Info("[LocalServer] 未配置云端地址，跳过登录态恢复")
-		return
-	}
 
 	// 告知账号管理器官方地址：索引写入按"最后登录"语义互斥清理（官方登录
 	// 清除 custom 固定索引、custom 登录清除官方索引）。
@@ -630,42 +687,44 @@ func (s *Server) RestoreSession(ctx context.Context) {
 		mgr.SetOfficialServerURL(configured)
 	}
 
-	// Read the last login index: the per-address key first, then the fixed
-	// custom index, and finally the legacy single index written by older versions.
-	last := readLastLogin(s.config.BootstrapStore, configured)
+	// 先读取用户最后选择的自部署连接，再读取当前配置的官方索引，最后兼容旧版索引。
+	configuredRaw := ""
+	if s.config.CloudConfig != nil {
+		configuredRaw = s.config.CloudConfig.APIBaseURL
+	}
+	last := readLastLogin(s.config.BootstrapStore, configuredRaw)
 	if last == nil || last.AdminID == "" {
 		return
+	}
+	if last.ServerType == "" {
+		last.ServerType = "official"
+	}
+	last.ServerURL = strings.TrimSpace(last.ServerURL)
+	if last.ServerURL == "" {
+		// 仅兼容未升级的官方索引。新版或自部署索引缺少地址时不能猜测目标。
+		if last.CredentialVersion != 0 || last.ServerType != "official" {
+			return
+		}
+		last.ServerURL = legacyOfficialServerURL
 	}
 
 	// 域名一致性只约束官方登录：会话域名必须与当前配置的云端地址一致，防止
 	// 共享本地数据目录的多个实例互相串用登录态。custom 登录的地址由用户主动
-	// 选择，不受内置配置约束；legacy 索引（旧版本写入、无 ServerURL）视为旧版
-	// 官方登录，同样不比对，按当前配置地址恢复。
-	if last.ServerType != "custom" && last.ServerURL != "" && !sameServerDomain(last.ServerURL, configured) {
+	// 选择，不受内置配置约束；无地址的旧版官方索引同样按固定官方地址检查。
+	if last.ServerType != "custom" && !sameServerDomain(last.ServerURL, configured) {
 		applog.Info("[LocalServer] 上次登录云端地址与当前配置不一致，跳过登录态恢复",
 			"last_server", last.ServerURL,
 			"configured", configured)
 		return
 	}
 
-	// Resolve the target server address: new versions always persist the normalized
-	// ServerURL (official logins too). Old-version official indexes have no ServerURL,
-	// so fall back to the currently configured official address.
-	serverURL := strings.TrimSpace(last.ServerURL)
-	if serverURL == "" {
-		serverURL = configured
-	}
-	normalized := serverURL
-	if norm, err := normalizeServerURL(serverURL); err == nil {
-		normalized = norm
+	normalized, normalizeErr := normalizeServerURL(last.ServerURL)
+	if normalizeErr != nil {
+		return
 	}
 
-	// Select the cloud client according to the login target (directory derivation rules
-	// consistent with handleLogin): official uses the default client; custom rebuilds by address.
-	var client *cloud.Client
-	if last.ServerType == "custom" && normalized != "" {
-		client = s.customCloudClient(normalized)
-	}
+	// 两类连接均按已保存的目标地址创建无凭据客户端，刷新时只显式传入该账号 JWT。
+	client := s.customCloudClient(normalized)
 
 	opts := LoginOptions{}
 	profileDir := s.config.BaseProfileDir
@@ -675,10 +734,11 @@ func (s *Server) RestoreSession(ctx context.Context) {
 	secretDir := profileDir
 	if normalized != "" {
 		opts = LoginOptions{
-			CloudClient:      client,
-			PersistLastLogin: true,
-			ServerType:       last.ServerType,
-			ServerURL:        normalized,
+			CloudClient:           client,
+			PersistLastLogin:      true,
+			ServerType:            last.ServerType,
+			ServerURL:             normalized,
+			AllowLegacyCredential: last.CredentialVersion == 0,
 		}
 	}
 
@@ -691,18 +751,21 @@ func (s *Server) RestoreSession(ctx context.Context) {
 	sessionInfo, err := s.config.AccountMgr.LoginAndCreateSession(ctx, last.AdminID, last.UserID, last.UserName, last.DisplayName, "", opts)
 	if err != nil {
 		applog.Warn("恢复登录态失败", "error", err)
-		// legacy 索引（旧版本写入、无 ServerURL）没有 per-address key 可被
-		// Login 清理，失败后补删固定 legacy key，避免每次启动重复失败恢复。
-		if last.ServerURL == "" {
-			if dErr := s.config.BootstrapStore.Delete(secrets.KeyLastLogin); dErr != nil {
+		// 仅明确认证失效才删除实际读取的索引；缺凭证、身份不匹配或临时异常均保留。
+		if errors.Is(err, ErrLoginCredentialRejected) && last.indexKey != "" {
+			if dErr := s.config.BootstrapStore.Delete(last.indexKey); dErr != nil {
 				applog.Warn("[LocalServer] 清除旧版登录索引失败", "error", dErr)
 			}
 		}
 		return
 	}
+	s.removeMigratedLoginIndex(last, normalized)
 	s.SetSession(sessionInfo)
 	s.triggerCloudPipelineSync()
 	s.triggerCloudExpertGroupSync()
+	// 登录后立刻回填本环境历史任务的账号归属，否则归属为空的任务永远不上报。
+	s.reconcileBrowserSessions()
+	s.triggerTaskOwnerBackfill()
 	s.lastLogin = last
 	// GetMe must use the session cloud client: user information comes from the custom cloud during custom login.
 	if client := s.currentCloudClient(); client != nil {
@@ -734,28 +797,70 @@ func (s *Server) RestoreSession(ctx context.Context) {
 
 // readLastLogin reads the last login information from the boot storage.
 // The official index is stored per server address (LastLoginKey), so different
-// remote domains never share or overwrite each other's login state. When the
-// per-address index is missing, the fixed custom index (KeyLastLoginCustom,
-// written by custom logins whose address is chosen by the user and not bound
-// to the configuration) is tried next, and finally the legacy single index
+// remote domains never share or overwrite each other's login state. The
+// fixed custom index (KeyLastLoginCustom) is tried first because it records
+// the user-selected server independently of configuration, followed by the
+// canonical and original-case official indexes, and finally the legacy single index
 // (goteams:last_login) written by older versions.
 func readLastLogin(store secrets.Store, serverURL string) *lastLoginInfo {
 	if store == nil {
 		return nil
 	}
-	data, err := store.Get(LastLoginKey(serverURL))
-	if err != nil || data == "" {
-		if data, err = store.Get(secrets.KeyLastLoginCustom); err != nil || data == "" {
-			if data, err = store.Get(secrets.KeyLastLogin); err != nil || data == "" {
-				return nil
+	keys := []string{secrets.KeyLastLoginCustom}
+	if normalized, err := normalizeServerURL(serverURL); err == nil {
+		canonicalKey := LastLoginKey(normalized)
+		keys = append(keys, canonicalKey)
+		// master 的索引保留域名大小写，仅兼容原配置地址，不枚举或猜测其他账号。
+		legacyURL := strings.TrimSpace(serverURL)
+		if !strings.Contains(legacyURL, "://") {
+			legacyURL = "https://" + legacyURL
+		}
+		if parsed, err := url.Parse(legacyURL); err == nil {
+			legacyKey := LastLoginKey(strings.TrimRight(parsed.String(), "/"))
+			if legacyKey != canonicalKey {
+				keys = append(keys, legacyKey)
 			}
 		}
 	}
-	var info lastLoginInfo
-	if err := json.Unmarshal([]byte(data), &info); err != nil {
-		return nil
+	keys = append(keys, secrets.KeyLastLogin)
+	for _, key := range keys {
+		data, err := store.Get(key)
+		if errors.Is(err, secrets.ErrNotFound) || (err == nil && data == "") {
+			continue
+		}
+		// 读取异常时不回退到另一个账号；保留最后登录的选择供下次重试。
+		if err != nil {
+			return nil
+		}
+		var info lastLoginInfo
+		if err := json.Unmarshal([]byte(data), &info); err != nil {
+			return nil
+		}
+		info.indexKey = key
+		return &info
 	}
-	return &info
+	return nil
+}
+
+// Delete only the index actually migrated, after verified login and successful
+// persistence of the same account under the canonical key. Failures preserve it.
+func (s *Server) removeMigratedLoginIndex(last *lastLoginInfo, serverURL string) {
+	canonicalKey := LastLoginKey(serverURL)
+	if last.indexKey == "" || last.indexKey == canonicalKey || last.indexKey == secrets.KeyLastLoginCustom {
+		return
+	}
+	data, err := s.config.BootstrapStore.Get(canonicalKey)
+	if err != nil {
+		return
+	}
+	var saved lastLoginInfo
+	if json.Unmarshal([]byte(data), &saved) != nil || saved.CredentialVersion != 1 ||
+		saved.AdminID != last.AdminID || saved.UserID != last.UserID || saved.ServerURL != serverURL {
+		return
+	}
+	if err := s.config.BootstrapStore.Delete(last.indexKey); err != nil {
+		applog.Warn("[LocalServer] 清除已迁移登录索引失败", "error", err)
+	}
 }
 
 // LastLoginKey derives the boot-storage key of the last-login index from the
@@ -874,9 +979,13 @@ func normalizeServerURL(raw string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("无法解析地址: %w", err)
 	}
-	if u.Host == "" {
+	if u.Host == "" || u.Hostname() == "" {
 		return "", fmt.Errorf("缺少主机名")
 	}
+	if u.User != nil || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" || len(value) > 2048 {
+		return "", fmt.Errorf("服务地址不能包含凭据、查询参数或片段")
+	}
+	u.Host = strings.ToLower(u.Host)
 	if u.Scheme != "http" && u.Scheme != "https" {
 		return "", fmt.Errorf("仅支持 http/https 协议")
 	}
@@ -893,7 +1002,7 @@ func (s *Server) customCloudClient(baseURL string) *cloud.Client {
 	if s.config.CloudConfig != nil {
 		cfg.ListenAddr = s.config.CloudConfig.ListenAddr
 	}
-	return cloud.NewClient(cfg, s.config.SecretStore)
+	return cloud.NewClient(cfg, nil)
 }
 
 // ServerProfileKey assigns a stable and file system-safe subdirectory key from the standardized cloud address.
@@ -908,4 +1017,55 @@ func ServerProfileKey(normalizedURL string) string {
 	}
 	h := sha256.Sum256([]byte(key))
 	return hex.EncodeToString(h[:])[:12]
+}
+
+// AccountScope is the shared non-secret identity used by credentials, sessions and UI caches.
+func AccountScope(serverURL, adminID, userID string) string {
+	return ServerProfileKey(serverURL) + ":" + adminID + ":" + userID
+}
+func activeServerURL(s *SessionInfo) string {
+	if s == nil {
+		return ""
+	}
+	return s.ServerURL
+}
+func activeServerType(s *SessionInfo) string {
+	if s == nil {
+		return ""
+	}
+	return s.ServerType
+}
+
+func activeSessionGeneration(s *SessionInfo) string {
+	if s == nil || s.CloudClient == nil {
+		return ""
+	}
+	return s.CloudClient.SessionScope()
+}
+
+// resolveLoginTarget treats official as a preset URL, never as a second business
+// client. Snapshot the address before authentication so later config edits cannot
+// redirect ticket exchange or persist credentials under the wrong server.
+func (s *Server) resolveLoginTarget(serverType, rawURL string) (*cloud.Client, string, string) {
+	switch serverType {
+	case "official":
+		if s.config.CloudConfig == nil || strings.TrimSpace(s.config.CloudConfig.APIBaseURL) == "" {
+			return nil, "", "auth_official_url_missing"
+		}
+		rawURL = s.config.CloudConfig.APIBaseURL
+	case "custom":
+		if strings.TrimSpace(rawURL) == "" {
+			return nil, "", "auth_custom_url_required"
+		}
+	default:
+		return nil, "", "common_request_invalid"
+	}
+	normalized, err := normalizeServerURL(rawURL)
+	if err != nil {
+		if serverType == "official" {
+			return nil, "", "auth_official_url_invalid"
+		}
+		return nil, "", "auth_cloud_url_invalid"
+	}
+	return s.customCloudClient(normalized), normalized, ""
 }

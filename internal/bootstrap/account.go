@@ -3,7 +3,10 @@ package bootstrap
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"net/http"
+	"strings"
 	"sync"
 
 	"goteams-client/internal/applog"
@@ -69,7 +72,8 @@ type accountLastLogin struct {
 	// ServerType login target: official | custom. Select the cloud client accordingly when restarting and restoring.
 	ServerType string `json:"server_type,omitempty"`
 	// ServerURL Custom cloud address (after normalization); custom is filled in when logging in, official is empty.
-	ServerURL string `json:"server_url,omitempty"`
+	ServerURL         string `json:"server_url,omitempty"`
+	CredentialVersion int    `json:"credential_version,omitempty"`
 }
 
 // NewAccountManager creates an account manager
@@ -118,13 +122,6 @@ func (m *AccountManager) IsLoggedIn() bool {
 func (m *AccountManager) Login(ctx context.Context, adminID, userID, userName, displayName, token string, opts localserver.LoginOptions) (*AccountSession, error) {
 	m.transitionMu.Lock()
 	defer m.transitionMu.Unlock()
-	// Always rebuild the account session when logging in explicitly or resuming login, ensuring the latest JWT and device credentials are used.
-	m.mu.RLock()
-	hasCurrent := m.current != nil
-	m.mu.RUnlock()
-	if hasCurrent {
-		m.logout()
-	}
 
 	// Select the cloud client. Local task storage is application-scoped and is
 	// never selected, created, or migrated as part of login.
@@ -137,20 +134,49 @@ func (m *AccountManager) Login(ctx context.Context, adminID, userID, userName, d
 		return nil, fmt.Errorf("本地任务运行时未初始化")
 	}
 
-	// Parse and persist the JWT.
-	// The key backend has been switched to the current Profile (base/custom) by Server before logging in.
-	// Therefore, the JWT will be saved to Profile's secrets.json, which has the same origin as the local function key.
-	// - Explicit login: The processor has verified the password and obtained the token, and the order is placed directly here;
-	// -Restore login: Read the persisted JWT from Profile storage and renew it to the cloud; if the renewal fails, the login status will be considered invalid.
+	if cloudClient == nil || !cloudClient.IsConfigured() || adminID == "" || userID == "" {
+		return nil, fmt.Errorf("云端账号信息不完整")
+	}
+	scope := localserver.AccountScope(cloudClient.BaseURL(), adminID, userID)
+	accountStore := secrets.NewScopedStore(m.secretStore, scope)
+
 	if token == "" {
-		persisted, getErr := m.secretStore.Get(secrets.KeyJWT)
+		persisted, getErr := accountStore.Get(secrets.KeyJWT)
+		if getErr != nil && !errors.Is(getErr, secrets.ErrNotFound) {
+			return nil, getErr
+		}
+		// master 会重新写公共凭证及旧版索引。旧版索引存在时优先使用该凭证，
+		// 避免切回旧版登录后仍拿以前迁移过的过时凭证恢复。
+		if opts.AllowLegacyCredential {
+			legacy, legacyErr := m.secretStore.Get(secrets.KeyJWT)
+			if legacyErr != nil && !errors.Is(legacyErr, secrets.ErrNotFound) {
+				return nil, legacyErr
+			}
+			if legacyErr == nil && legacy != "" {
+				claims, claimsErr := localauth.ParseClaims(legacy)
+				// 官方历史凭证包含不透明的单段令牌，无法在本地解析身份。
+				// 仅旧索引允许将它交给该索引定位的原云端验证；下方必须核对刷新返回的账号。
+				opaqueLegacy := !strings.Contains(legacy, ".")
+				if opaqueLegacy || (claimsErr == nil && claims.AdminID == adminID && claims.UserID == userID) {
+					persisted, getErr = legacy, nil
+				} else {
+					return nil, fmt.Errorf("无可用登录凭证（JWT 缺失且未提供）")
+				}
+			}
+		}
 		if getErr != nil || persisted == "" {
 			return nil, fmt.Errorf("无可用登录凭证（JWT 缺失且未提供）")
 		}
 		refreshed, rErr := cloudClient.RefreshToken(ctx, persisted)
 		if rErr != nil || refreshed == nil || refreshed.Token == "" {
-			// The login state has expired: clear the JWT in the Profile and the account index in the boot store to avoid another recovery failure after restarting.
-			if dErr := m.secretStore.Delete(secrets.KeyJWT); dErr != nil {
+			// 网络、存储及服务端异常保留凭证和索引，避免一次启动失败破坏升级恢复入口。
+			var apiErr *cloud.APIError
+			if ctx.Err() != nil || !errors.As(rErr, &apiErr) || apiErr.StatusCode != http.StatusUnauthorized {
+				// 不输出云端原始错误体，刷新响应可能包含凭据。
+				return nil, fmt.Errorf("恢复登录态失败，保留登录信息供下次启动重试")
+			}
+			// 只有刷新接口明确拒绝认证时才清理本账号；旧公共 JWT 不影响其他账号。
+			if dErr := accountStore.Delete(secrets.KeyJWT); dErr != nil {
 				applog.Warn("[Account] 清除 JWT 失败", "error", dErr)
 			}
 			if dErr := m.bootstrapStore.Delete(localserver.LastLoginKey(opts.ServerURL)); dErr != nil {
@@ -161,15 +187,12 @@ func (m *AccountManager) Login(ctx context.Context, adminID, userID, userName, d
 					applog.Warn("[Account] 清除自定义登录索引失败", "error", dErr)
 				}
 			}
-			return nil, fmt.Errorf("云端登录态已失效，请重新登录")
+			return nil, localserver.ErrLoginCredentialRejected
+		}
+		if refreshed.AdminID != adminID || refreshed.User.ID != userID {
+			return nil, fmt.Errorf("云端恢复的账号与保存的账号不一致")
 		}
 		token = refreshed.Token
-		if refreshed.AdminID != "" {
-			adminID = refreshed.AdminID
-		}
-		if refreshed.User.ID != "" {
-			userID = refreshed.User.ID
-		}
 		if refreshed.User.Username != "" {
 			userName = refreshed.User.Username
 		}
@@ -177,14 +200,26 @@ func (m *AccountManager) Login(ctx context.Context, adminID, userID, userName, d
 			displayName = refreshed.User.DisplayName
 		}
 	}
-	if err := m.secretStore.Set(secrets.KeyJWT, token); err != nil {
-		return nil, fmt.Errorf("保存 JWT 失败: %w", err)
+	// Persist once under the previous session's write barrier. A failed write
+	// keeps that session alive, including when signing into the same account again.
+	persist := func() error { return accountStore.Set(secrets.KeyJWT, token) }
+	m.mu.RLock()
+	previous := m.current
+	m.mu.RUnlock()
+	var persistErr error
+	if previous != nil && previous.credentials != nil {
+		persistErr = previous.credentials.RevokeAfter(persist)
+	} else {
+		persistErr = persist()
 	}
-
+	if persistErr != nil {
+		return nil, fmt.Errorf("保存 JWT 失败: %w", persistErr)
+	}
+	m.closeSession()
 	db := m.localRuntime.DB
 
 	//Initialize JWT manager
-	credentials := secrets.NewSessionStore(m.secretStore, token)
+	credentials := secrets.NewSessionStore(accountStore, token)
 	jwtMgr := localauth.NewJWTManager(credentials)
 
 	//Initialize device manager
@@ -238,12 +273,13 @@ func (m *AccountManager) Login(ctx context.Context, adminID, userID, userName, d
 	// Both official and custom logins are persistent: when the custom login is restored, rebuild the client according to the ServerURL and renew it to the cloud.
 	if opts.PersistLastLogin {
 		m.writeLastLogin(accountLastLogin{
-			AdminID:     adminID,
-			UserID:      userID,
-			UserName:    userName,
-			DisplayName: displayName,
-			ServerType:  opts.ServerType,
-			ServerURL:   opts.ServerURL,
+			AdminID:           adminID,
+			UserID:            userID,
+			UserName:          userName,
+			DisplayName:       displayName,
+			ServerType:        opts.ServerType,
+			ServerURL:         opts.ServerURL,
+			CredentialVersion: 1,
 		})
 	}
 
@@ -323,21 +359,33 @@ func (m *AccountManager) Logout() {
 
 func (m *AccountManager) logout() {
 	m.mu.RLock()
+	current := m.current
 	serverURL := ""
 	serverType := ""
 	officialURL := m.officialServerURL
-	if m.current != nil {
-		serverURL = m.current.ServerURL
-		serverType = m.current.ServerType
+	if current != nil {
+		serverURL = current.ServerURL
+		serverType = current.ServerType
 	}
 	m.mu.RUnlock()
 
 	m.closeSession()
+	if current != nil && current.CloudClient != nil {
+		store := secrets.NewScopedStore(m.secretStore, localserver.AccountScope(current.CloudClient.BaseURL(), current.AdminID, current.UserID))
+		for _, key := range []string{secrets.KeyJWT, secrets.KeyDeviceCredential, secrets.KeyPrefix + "jwt_refresh", secrets.KeyPrefix + "jwt_expires_at"} {
+			if err := store.Delete(key); err != nil {
+				applog.Warn("[Account] 清除当前账号凭据失败", "error", err)
+			}
+		}
+	}
 
 	// Actively log out/switch accounts: clear the account index in the boot storage to avoid automatic recovery by mistake at next startup.
 	// 清除当前会话索引、custom 固定索引与官方索引，登出后重启不恢复任何会话；
 	// 共享目录下其他配置实例的索引不受影响。
 	if m.bootstrapStore != nil {
+		if err := m.bootstrapStore.Delete(secrets.KeyLastLogin); err != nil {
+			applog.Warn("[Account] 清除旧版登录索引失败", "error", err)
+		}
 		if err := m.bootstrapStore.Delete(localserver.LastLoginKey(serverURL)); err != nil {
 			applog.Warn("[Account] 清除上次登录信息失败", "error", err)
 		}
@@ -366,6 +414,9 @@ func (m *AccountManager) writeLastLogin(ll accountLastLogin) {
 	if err := m.bootstrapStore.Set(localserver.LastLoginKey(ll.ServerURL), string(data)); err != nil {
 		applog.Warn("[Account] 写入上次登录信息失败", "error", err)
 		return
+	}
+	if err := m.bootstrapStore.Delete(secrets.KeyLastLogin); err != nil {
+		applog.Warn("[Account] 清除旧版登录索引失败", "error", err)
 	}
 	m.mu.RLock()
 	officialURL := m.officialServerURL

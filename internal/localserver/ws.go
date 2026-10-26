@@ -14,6 +14,7 @@ import (
 	"github.com/gorilla/websocket"
 
 	"goteams-client/internal/applog"
+	"goteams-client/internal/cloud"
 	"goteams-client/internal/executor"
 	"goteams-client/internal/i18n"
 	"goteams-client/internal/storage/log"
@@ -35,23 +36,30 @@ const wsQueueBytes = 4 << 20
 // PushFunc push function signature: returns the push type and data, and returns nil to indicate that no push is required in this round.
 type PushFunc func() (pushType string, data interface{})
 
+// AccountPushFunc 使用本轮固定的账号查询，结果只投递给同代连接。
+type AccountPushFunc func(account *cloud.Client) (pushType string, data interface{})
+
 // WSHub local WebSocket manager
 type WSHub struct {
-	mu       sync.RWMutex
-	clients  map[*websocket.Conn]*wsClient
-	logDB    *sql.DB
-	apiToken string
+	mu         sync.RWMutex
+	clients    map[*websocket.Conn]*wsClient
+	logDB      *sql.DB
+	apiToken   string
+	account    *cloud.Client
+	generation uint64
 
 	// Universal push
-	pushMu     sync.RWMutex
-	pushFuncs  []PushFunc
-	pushCancel context.CancelFunc
+	pushMu           sync.RWMutex
+	pushFuncs        []PushFunc
+	accountPushFuncs []AccountPushFunc
+	pushCancel       context.CancelFunc
 }
 
 // wsClient local WebSocket client
 type wsClient struct {
-	conn     *websocket.Conn
-	taskUUID string
+	conn       *websocket.Conn
+	generation uint64
+	taskUUID   string
 	// subscribedSessions 本连接订阅执行事件的 CLI 会话集合。
 	// 旧协议一次只订阅一个 session，动态区与执行窗口可能同时订阅不同
 	// session，因此改为集合，保持互不覆盖。
@@ -84,6 +92,13 @@ func (h *WSHub) SetAPIToken(token string) {
 func (h *WSHub) RegisterPushFunc(fn PushFunc) {
 	h.pushMu.Lock()
 	h.pushFuncs = append(h.pushFuncs, fn)
+	h.pushMu.Unlock()
+}
+
+// RegisterAccountPushFunc 注册随账号隔离的周期推送；查询不持有 hub 锁。
+func (h *WSHub) RegisterAccountPushFunc(fn AccountPushFunc) {
+	h.pushMu.Lock()
+	h.accountPushFuncs = append(h.accountPushFuncs, fn)
 	h.pushMu.Unlock()
 }
 
@@ -125,6 +140,7 @@ func (h *WSHub) runPushCycle() {
 	h.pushMu.RLock()
 	fns := make([]PushFunc, len(h.pushFuncs))
 	copy(fns, h.pushFuncs)
+	accountFns := append([]AccountPushFunc(nil), h.accountPushFuncs...)
 	h.pushMu.RUnlock()
 
 	for _, fn := range fns {
@@ -133,6 +149,15 @@ func (h *WSHub) runPushCycle() {
 			continue
 		}
 		h.BroadcastToAll(pushType, data)
+	}
+	for _, fn := range accountFns {
+		h.mu.RLock()
+		account, generation := h.account, h.generation
+		h.mu.RUnlock()
+		pushType, data := fn(account)
+		if data != nil {
+			h.broadcastAccount(generation, pushType, data)
+		}
 	}
 }
 
@@ -167,7 +192,7 @@ func (h *WSHub) BroadcastTaskChanged(taskUUID string) {
 	if taskUUID == "" {
 		return
 	}
-	h.BroadcastToAll("task.changed", map[string]interface{}{"task_uuid": taskUUID})
+	h.broadcastTask(taskUUID, "task.changed", map[string]interface{}{"task_uuid": taskUUID})
 }
 
 // BroadcastExecutorCompleted notifies global app listeners that a CLI reply has
@@ -176,7 +201,7 @@ func (h *WSHub) BroadcastExecutorCompleted(taskUUID, stepKey, sessionUUID, statu
 	if taskUUID == "" || sessionUUID == "" {
 		return
 	}
-	h.BroadcastToAll("executor.completed", map[string]interface{}{
+	h.broadcastTask(taskUUID, "executor.completed", map[string]interface{}{
 		"task_uuid":    taskUUID,
 		"step_key":     stepKey,
 		"session_uuid": sessionUUID,
@@ -191,7 +216,7 @@ func (h *WSHub) BroadcastActivity(taskUUID, sessionUUID string, sequence int, ev
 	if taskUUID == "" || sessionUUID == "" {
 		return
 	}
-	h.BroadcastToAll("executor.activity", map[string]interface{}{
+	h.broadcastTask(taskUUID, "executor.activity", map[string]interface{}{
 		"task_uuid":    taskUUID,
 		"session_uuid": sessionUUID,
 		"sequence":     sequence,
@@ -252,7 +277,7 @@ func (h *WSHub) HandleWebSocket(c *gin.Context) {
 	sessionMgr.mu.RLock()
 	session, ok := sessionMgr.sessions[sessionID]
 	sessionMgr.mu.RUnlock()
-	if !ok || time.Now().After(session.ExpiresAt) {
+	if !ok || session == nil || time.Now().After(session.ExpiresAt) {
 		i18n.Error(c, http.StatusUnauthorized, "common_session_expired", "session_expired")
 		return
 	}
@@ -265,6 +290,7 @@ func (h *WSHub) HandleWebSocket(c *gin.Context) {
 
 	client := &wsClient{conn: conn, send: make(chan []byte, 256), done: make(chan struct{}), space: make(chan struct{}, 1)}
 	h.mu.Lock()
+	client.generation = h.generation
 	h.clients[conn] = client
 	h.mu.Unlock()
 
@@ -307,7 +333,15 @@ func (h *WSHub) readLoop(conn *websocket.Conn, client *wsClient) {
 
 		switch msg.Type {
 		case "executor.subscribe":
+			generation, allowed := h.taskAllowed(msg.TaskUUID, msg.SessionUUID)
+			if !allowed {
+				continue
+			}
 			h.mu.Lock()
+			if generation != h.generation || client.generation != generation {
+				h.mu.Unlock()
+				continue
+			}
 			client.taskUUID = msg.TaskUUID
 			if client.subscribedSessions == nil {
 				client.subscribedSessions = make(map[string]bool)
@@ -334,7 +368,7 @@ func (h *WSHub) readLoop(conn *websocket.Conn, client *wsClient) {
 
 // backfillEvents re-sends historical events
 func (h *WSHub) backfillEvents(client *wsClient, sessionUUID string, afterSeq int) {
-	if h.logDB == nil || sessionUUID == "" {
+	if h.logDB == nil || sessionUUID == "" || !h.sessionSubscribed(client, sessionUUID) {
 		return
 	}
 
@@ -345,6 +379,9 @@ func (h *WSHub) backfillEvents(client *wsClient, sessionUUID string, afterSeq in
 	}
 
 	for _, event := range events {
+		if !h.sessionSubscribed(client, sessionUUID) {
+			return
+		}
 		msg := map[string]interface{}{
 			"type":         "executor.event",
 			"session_uuid": event.SessionUUID,
@@ -363,7 +400,7 @@ func (h *WSHub) BroadcastEvent(sessionUUID string, sequence int, event executor.
 	h.mu.RLock()
 	clients := make([]*wsClient, 0, len(h.clients))
 	for _, c := range h.clients {
-		if c.subscribedSessions[sessionUUID] {
+		if c.generation == h.generation && c.subscribedSessions[sessionUUID] {
 			clients = append(clients, c)
 		}
 	}
@@ -393,7 +430,7 @@ func (h *WSHub) BroadcastStateChanged(taskUUID, stepKey, sessionUUID, status str
 	h.mu.RLock()
 	clients := make([]*wsClient, 0, len(h.clients))
 	for _, c := range h.clients {
-		if c.taskUUID == taskUUID {
+		if c.generation == h.generation && c.taskUUID == taskUUID {
 			clients = append(clients, c)
 		}
 	}

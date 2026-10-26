@@ -72,6 +72,20 @@ function buildVibeArguments(tool, execPath, prompt, threadId) {
   return { execPath, args }
 }
 
+function vibeModelArguments(tool, model) {
+  if (model == null || model === '') return []
+  if (typeof model !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._:/@+\-]{0,255}$/.test(model)
+    || !['codex_cli', 'pi', 'antigravity', 'qoder', 'codebuddy'].includes(tool)) {
+    throw new Error('Vibe CLI model is invalid')
+  }
+  if (tool === 'pi' && model.includes('/')) {
+    const separator = model.indexOf('/')
+    if (separator === model.length - 1) throw new Error('Vibe CLI model is invalid')
+    return ['--provider', model.slice(0, separator), '--model', model.slice(separator + 1)]
+  }
+  return ['--model', model]
+}
+
 function codebuddyUpdateGuard(tool) {
   // CodeBuddy 会在交互会话里执行 npm install -g 升级自己。
   // 升级会删掉当前进程还要加载的 dist/lazy 分片，随后 Read/Bash 报找不到模块。
@@ -301,14 +315,16 @@ function windowsLaunchOptions(scriptPath, directory) {
   }
 }
 
-async function vibeLaunchPlan(directory, tool, execPath, prompt, threadId, platform = process.platform, mcp = undefined) {
-  let prefixArgs = []
+async function vibeLaunchPlan(directory, tool, execPath, prompt, threadId, platform = process.platform, mcp = undefined, model = '') {
+  const modelArgs = vibeModelArguments(tool, model)
+  // 恢复已有会话时沿用该会话配置，模型只用于首次启动。
+  let prefixArgs = threadId ? [] : modelArgs
   let launchPrompt = prompt
   let cleanupDir = ''
   if (mcp) {
     const prepared = await prepareVibeMCP(tool, { ...mcp, workDir: directory })
     if (prepared.channel === 'mcp') {
-      prefixArgs = prepared.prefixArgs
+      prefixArgs = [...prefixArgs, ...prepared.prefixArgs]
       launchPrompt = withMcpChannel(prompt, 'mcp')
       cleanupDir = prepared.cleanupDir || ''
     }
@@ -335,8 +351,8 @@ async function vibeLaunchPlan(directory, tool, execPath, prompt, threadId, platf
   throw new Error('Unsupported desktop platform')
 }
 
-async function openVibeCli(directory, tool, execPath, prompt, threadId, platform = process.platform, spawnProcess = spawn, mcp = undefined) {
-  const plan = await vibeLaunchPlan(directory, tool, execPath, prompt, threadId, platform, mcp)
+async function openVibeCli(directory, tool, execPath, prompt, threadId, platform = process.platform, spawnProcess = spawn, mcp = undefined, model = '') {
+  const plan = await vibeLaunchPlan(directory, tool, execPath, prompt, threadId, platform, mcp, model)
   await new Promise((resolve, reject) => {
     const options = /** @type {import('node:child_process').SpawnOptions} */ (plan.launch.options)
     const child = spawnProcess(plan.launch.command, plan.launch.args, options)
@@ -377,5 +393,6 @@ module.exports = {
   normalizeVibeThreadID,
   openVibeCli,
   vibeLaunchPlan,
+  vibeModelArguments,
   windowsLaunchOptions,
 }

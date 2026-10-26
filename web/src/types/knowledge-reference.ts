@@ -16,6 +16,22 @@ export interface KnowledgeReferenceFragment {
   suffix: string
 }
 
+/** 输入框已登记的知识库引用，随任务草稿保留。 */
+export interface KnowledgeDocumentReference {
+  id: string
+  marker: string
+  name: string
+  kind: 'knowledge'
+  knowledge: {
+    uuid: string
+    filePath: string
+    folderPath: string
+    /** null 表示整篇文档 */
+    fragment: KnowledgeReferenceFragment | null
+    invalid: boolean
+  }
+}
+
 /**
  * 待投递的知识库引用草稿（编辑器选中内容 → 对话输入区）。
  * `fragment` 恒为编辑器选中片段；整篇文档引用（T5 的「从资料库中选择」）由对话侧的引用类型承载。

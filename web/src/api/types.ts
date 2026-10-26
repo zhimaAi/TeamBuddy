@@ -4,6 +4,9 @@
 export interface UserInfo {
   id: string
   accountScope?: string
+  sessionGeneration?: string
+  serverUrl?: string
+  serverType?: 'official' | 'custom'
   username: string
   displayName?: string
   avatar?: string

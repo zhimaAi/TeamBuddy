@@ -3,334 +3,34 @@
     class="task-detail-page"
     :class="{ embedded }"
   >
-    <header class="detail-header">
-      <button
-        v-if="!embedded"
-        type="button"
-        class="back-button"
-        :title="t('workflows.task.detail.back')"
-        :aria-label="t('workflows.task.detail.back')"
-        @click="returnToBoard"
-      >
-        <LeftOutlined />
-      </button>
-      <div class="detail-title">
-        <h1 class="detail-title-text">{{ t('workflows.task.detail.title') }}</h1>
-      </div>
-      <div
-        v-if="task"
-        class="header-controls"
-      >
-        <a-select
-          v-model:value="selectedTaskStatus"
-          style="width: 120px"
-          class="status-select"
-          :disabled="changingStatus"
-          :options="taskStatusOptions"
-          :aria-label="t('workflows.task.detail.taskStatus')"
-          @change="changeStatus"
-        />
-        <div
-          class="work-dir"
-          :title="task.work_dir || t('workflows.task.common.unsetDirectory')"
-        >
-          <FolderOpenOutlined /><span>{{
-            task.work_dir || t('workflows.task.common.unsetDirectory')
-          }}</span>
-        </div>
-        <button
-          type="button"
-          class="detail-button terminal-button"
-          :disabled="openingTerminal || !(task.work_dir || task.task_dir)"
-          :aria-label="t('workflows.task.progress.openTerminal')"
-          :title="t('workflows.task.progress.openTerminal')"
-          @click="openTaskTerminal"
-        >
-          <CodeOutlined />
-        </button>
-        <a-tooltip v-if="showCodexActions">
-          <template
-            v-if="!codexCapability.available"
-            #title
-          >
-            {{ codexCapability.message || t('workflows.task.codex.capabilityUnavailable') }}
-          </template>
-          <span
-            class="codex-tooltip-trigger"
-            :tabindex="codexCapability.available ? undefined : 0"
-            :aria-label="
-              codexCapability.available
-                ? undefined
-                : codexCapability.message || t('workflows.task.codex.capabilityUnavailable')
-            "
-          >
-            <a-dropdown
-              :disabled="codexBusy || !codexCapability.available"
-              trigger="click"
-            >
-              <button
-                type="button"
-                class="codex-button"
-                :disabled="codexBusy || !codexCapability.available"
-                :aria-label="t('workflows.task.detail.codexActions')"
-                aria-haspopup="menu"
-              >
-                <img
-                  class="codex-button-logo"
-                  :src="codexLogo"
-                  alt=""
-                  aria-hidden="true"
-                />
-                <span>{{ t('workflows.task.assign.codex') }}</span>
-              </button>
-              <template #overlay>
-                <a-menu>
-                  <a-menu-item
-                    key="open"
-                    @click="handleOpenCodex"
-                  >
-                    <DesktopOutlined /> {{ t('workflows.task.detail.openCodex') }}
-                  </a-menu-item>
-                  <a-menu-item
-                    key="copy"
-                    @click="handleCopyCodexPrompt"
-                  >
-                    <CopyOutlined /> {{ t('workflows.task.detail.copyCodexPrompt') }}
-                  </a-menu-item>
-                </a-menu>
-              </template>
-            </a-dropdown>
-          </span>
-        </a-tooltip>
-        <button
-          v-if="isCloudWorkItem"
-          type="button"
-          class="original-requirement-button"
-          :disabled="originalLoading"
-          @click="openOriginalRequirement"
-        >
-          {{ t('teamwork.workItem.view') }}
-        </button>
-        <button
-          type="button"
-          class="detail-button"
-          :title="t('workflows.task.detail.viewDetails')"
-          :aria-label="t('workflows.task.detail.viewDetails')"
-          @click="detailModalOpen = true"
-        >
-          <img
-            class="detail-info-icon"
-            :src="detailInfoIcon"
-            alt=""
-            aria-hidden="true"
-          />
-        </button>
-        <button
-          v-if="taskStatus === 'pending' && !isVibeCoding && !isCLI"
-          type="button"
-          class="start-button"
-          :disabled="starting"
-          @click="startTask"
-        >
-          {{ starting ? t('workflows.task.detail.starting') : t('workflows.task.detail.start') }}
-        </button>
-        <button
-          type="button"
-          class="delete-button"
-          :disabled="deleting"
-          :title="t('workflows.task.detail.delete')"
-          :aria-label="t('workflows.task.detail.delete')"
-          @click="deleteTask"
-        >
-          <img
-            :src="deleteTaskIcon"
-            alt=""
-            aria-hidden="true"
-          />
-        </button>
-      </div>
-    </header>
-
-    <section
+    <TaskWorkspaceHeader
+      :task="task"
+      :status="taskStatus"
+      :show-back="!embedded"
+      :changing-status="changingStatus"
+      :starting="starting"
+      :deleting="deleting"
+      :opening-terminal="openingTerminal"
+      :original-loading="originalLoading"
+      :has-requirement-update="hasRequirementUpdate"
+      @back="returnToBoard"
+      @status="changeStatus"
+      @start="startTask"
+      @original="openOriginalRequirement"
+      @details="openTaskDetails(false)"
+      @terminal="openTaskTerminal"
+      @delete="deleteTask"
+      @renamed="handleTitleRenamed"
+      @changed="handleAssigned"
+    />
+    <TaskExecutionOverview
       v-if="task"
-      class="pipeline-card"
-    >
-      <div
-        v-if="isVibeCoding"
-        class="direct-execution"
-      >
-        <img
-          class="direct-execution-logo"
-          :src="vibeCodingLogo"
-          alt=""
-          aria-hidden="true"
-        />
-        <span class="direct-execution-label">{{ t('workflows.task.assign.vibeCodingMode') }}</span>
-        <strong>{{ vibeCodingToolName }}</strong>
-        <div class="direct-execution-actions">
-          <button
-            type="button"
-            class="execution-action"
-            @click="openExecutionModeModal(true)"
-          >
-            <img
-              class="execution-switch-icon"
-              :src="switchExecutionModeIcon"
-              alt=""
-              aria-hidden="true"
-            />
-            {{ t('workflows.task.detail.switchExecutionMode') }}
-          </button>
-        </div>
-      </div>
-      <div
-        v-else-if="isCLI"
-        class="direct-execution"
-      >
-        <img
-          class="direct-execution-logo"
-          :src="cliExecutionLogo"
-          alt=""
-          aria-hidden="true"
-        />
-        <span class="direct-execution-label">{{ t('workflows.task.common.directExecution') }}</span>
-        <strong :title="cliRuntimeLabel">{{ cliRuntimeLabel }}</strong>
-        <!-- CLI 直接执行不需要「执行流水线」入口：切到流水线走「切换执行方式」，
-             那里的模式选择本来就包含流水线并带流水线列表 -->
-        <div class="direct-execution-actions">
-          <button
-            type="button"
-            class="execution-action"
-            @click="openExecutionModeModal(true)"
-          >
-            <img
-              class="execution-switch-icon"
-              :src="switchExecutionModeIcon"
-              alt=""
-              aria-hidden="true"
-            />
-            {{ t('workflows.task.detail.switchExecutionMode') }}
-          </button>
-        </div>
-      </div>
-      <div
-        v-else-if="isExpertGroup"
-        class="expert-summary"
-      >
-        <img
-          v-if="task.expert_group_avatar_snapshot"
-          :src="task.expert_group_avatar_snapshot"
-          alt=""
-        />
-        <span
-          ><small>{{ t('agents.expertTeam') }}</small
-          ><strong>{{ task.expert_group_name_snapshot }}</strong></span
-        >
-        <div class="expert-members">
-          <span
-            v-for="member in sortedSteps"
-            :key="member.uuid"
-            :title="member.name"
-            ><img
-              v-if="member.avatar"
-              :src="member.avatar"
-              alt=""
-            /><em v-else>{{ member.name.slice(0, 1) }}</em
-            ><b v-if="member.member_role === 'leader'">{{ t('expertGroups.leader') }}</b></span
-          >
-        </div>
-        <div class="direct-execution-actions">
-          <button
-            type="button"
-            class="execution-action"
-            @click="openExecutionModeModal(true)"
-          >
-            <img
-              class="execution-switch-icon"
-              :src="switchExecutionModeIcon"
-              alt=""
-              aria-hidden="true"
-            />
-            {{ t('workflows.task.detail.switchExecutionMode') }}
-          </button>
-        </div>
-      </div>
-      <template v-else>
-        <div class="pipeline-card-head">
-          <PipelineFlowIcon class="pipeline-card-icon" />
-          <span class="pipeline-card-label">{{
-            task.execution_mode === 'pipeline'
-              ? t('workflows.task.common.pipeline')
-              : t('workflows.task.assign.executionMode')
-          }}</span>
-          <span
-            class="pipeline-card-sep"
-            aria-hidden="true"
-          ></span>
-          <strong class="pipeline-card-name">{{
-            task.pipeline_name_snapshot ||
-              (task.execution_mode === 'pipeline'
-                ? t('workflows.task.common.unassignedPipeline')
-                : t('workflows.task.common.unassignedExecution'))
-          }}</strong>
-          <button
-            type="button"
-            class="pipeline-toggle"
-            :aria-expanded="pipelineExpanded"
-            :title="
-              pipelineExpanded
-                ? t('workflows.task.detail.collapse')
-                : t('workflows.task.detail.expand')
-            "
-            @click="pipelineExpanded = !pipelineExpanded"
-          >
-            <DownOutlined :class="{ rotated: !pipelineExpanded }" />
-          </button>
-          <span
-            v-if="sortedSteps.length"
-            class="pipeline-card-progress"
-            >{{
-              t('workflows.task.common.stepCount', {
-                current: currentStepIndex + 1,
-                total: sortedSteps.length,
-              })
-            }}</span
-          >
-          <div
-            v-if="task.execution_mode === 'pipeline'"
-            class="direct-execution-actions"
-          >
-            <button
-              type="button"
-              class="execution-action"
-              @click="openExecutionModeModal(true)"
-            >
-              <img
-                class="execution-switch-icon"
-                :src="switchExecutionModeIcon"
-                alt=""
-                aria-hidden="true"
-              />
-              {{ t('workflows.task.detail.switchExecutionMode') }}
-            </button>
-          </div>
-        </div>
-        <AgentStepStrip
-          v-if="hasPipelineSnapshot"
-          v-show="pipelineExpanded"
-          :steps="sortedSteps"
-          :current-step-index="currentStepIndex"
-          :current-step-uuid="effectiveCurrentStepUuid"
-          :selected-step-uuid="selectedStepUuid"
-          @select="selectStep"
-        />
-        <UnassignedPipelineGuide
-          v-else
-          v-show="pipelineExpanded"
-          @assign="openExecutionModeModal(false)"
-        />
-      </template>
-    </section>
+      :task="task"
+      :selected-step-uuid="selectedStepUuid"
+      :current-step-uuid="effectiveCurrentStepUuid"
+      @select="selectStep"
+      @assign="openExecutionModeModal(Boolean(task.execution_mode))"
+    />
 
     <div
       v-if="task"
@@ -346,79 +46,14 @@
             :completing="completing"
             @confirm="completeStep"
           />
-          <h2 class="task-title">{{ task.title }}</h2>
-          <div
-            v-if="task.description"
-            class="task-desc"
-            :class="{ expanded: descriptionExpanded }"
-          >
-            <div
-              ref="requirementContentRef"
-              class="task-desc-content"
-              @click="openImagePreview"
-            >
-              <div
-                v-if="descriptionUsesHtml"
-                v-html="renderedDescription"
-              />
-              <MarkdownPreview
-                v-else
-                :content="task.description"
-                :task-uuid="resolvedTaskUuid"
-                @attachments-loaded="measureDescriptionOverflow"
-              />
-            </div>
-            <button
-              v-if="descriptionNeedsExpand"
-              type="button"
-              class="desc-toggle"
-              @click="descriptionExpanded = !descriptionExpanded"
-            >
-              <DownOutlined v-if="!descriptionExpanded" />
-              <UpOutlined v-else />
-              {{
-                descriptionExpanded
-                  ? t('workflows.task.detail.collapse')
-                  : t('workflows.task.detail.expand')
-              }}
-            </button>
-          </div>
+          <TaskDescriptionPreview :task="task" @edit="openTaskDetails(true)" @documents="openTaskDocuments" @preview-image="showImagePreview" />
           <TaskExecutionHistory
             :task-uuid="resolvedTaskUuid"
             :revision="task.updated_at"
+            :file-roots="conversationFileRoots"
+            @resync="load(true)"
           />
-          <p
-            v-if="!isVibeCoding && !isExpertGroup && !isCLI"
-            class="conversation-scope-note"
-          >
-            <img
-              class="conversation-scope-icon"
-              :src="conversationFilterIcon"
-              alt=""
-              aria-hidden="true"
-            />
-            <span>{{
-              t('workflows.task.detail.filteredActivity', {
-                step: selectedStep?.name || t('workflows.task.common.currentStep'),
-              })
-            }}</span>
-          </p>
-          <!-- 需求设计图：CLI 直接执行没有多 Agent，动态区标题固定为「直接执行 · 单线程对话」 -->
-          <button
-            v-else-if="isCLI"
-            type="button"
-            class="conversation-scope-note conversation-scope-note--toggle"
-            :aria-expanded="cliActivityExpanded"
-            @click="cliActivityExpanded = !cliActivityExpanded"
-          >
-            <DownOutlined :class="{ rotated: !cliActivityExpanded }" />
-            <span>{{ t('workflows.task.detail.directExecutionActivity') }}</span>
-          </button>
-          <p
-            v-else
-            class="conversation-scope-note conversation-scope-note--placeholder"
-            aria-hidden="true"
-          ></p>
+          <TaskActivityHeading v-model:open="cliActivityExpanded" :task="task" :selected-step-name="selectedStep?.name" />
           <StepMessageList
             ref="messageListRef"
             v-show="!isCLI || cliActivityExpanded"
@@ -446,7 +81,9 @@
               isVibeCoding ? vibeCodingActorLogo : isCLI ? cliExecutionLogo : ''
             "
             :task-uuid="resolvedTaskUuid"
+            :file-roots="conversationFileRoots"
             @copy="copyResult"
+            @resync="load(true)"
           />
         </template>
         <div
@@ -480,6 +117,8 @@
     <VibeCodingConversationNotice
       v-if="task && isVibeCoding"
       :tool-name="vibeCodingToolName"
+      :tool-id="task?.execution_tool || ''"
+      :task-uuid="resolvedTaskUuid || task.uuid"
       :show-open-button="isVibeCoding"
       :open-label="t('workflows.task.detail.openInTool', { tool: vibeCodingToolName })"
       :opening="codexBusy"
@@ -491,21 +130,30 @@
       v-else-if="task && hasPipelineSnapshot"
       v-model="question"
       :can-ask="canAsk"
-      :submitting="submitting"
+      :submitting="submitting || completing"
       :running="Boolean(activeSelectedProgress)"
       :stopping="stoppingSessionUuid === activeSelectedProgress?.session_uuid"
       :cli-type="composerCliType"
       :model-name="composerModelName"
       :start-mode="selectedStepAwaitingStart"
+      :advance-action="composerAdvanceAction"
       :placeholder="composerPlaceholder"
       :context-text="composerContextText"
       :task-uuid="resolvedTaskUuid"
+      :draft-key="composerDraftIdentity"
+      :allow-draft="hasPipelineSnapshot"
+      :notice="pipelineConversation.notice.value"
+      :locate-step-uuid="hasPipelineSnapshot && activeTaskProgress?.task_step_uuid !== selectedStepUuid ? activeTaskProgress?.task_step_uuid : undefined"
       :current-step="selectedStep"
       :steps="sortedSteps"
-      :executing-step-uuid="effectiveCurrentStepUuid"
+      :executing-step-uuid="activeTaskProgress?.task_step_uuid || effectiveCurrentStepUuid"
       @submit="submitQuestion"
+      @advance="completeStep"
       @stop="stopSelectedConversation"
       @prompt-saved="load"
+      :execution-task="task"
+      @switch-execution="openExecutionModeModal(Boolean(task.execution_mode))"
+      @select-step="selectStep"
     />
     <ChatComposer
       ref="expertComposerRef"
@@ -524,6 +172,9 @@
       :task-uuid="resolvedTaskUuid"
       :expert-members="sortedSteps"
       :document-step="currentStep"
+      :execution-task="task"
+      @switch-execution="openExecutionModeModal(true)"
+      @select-step="selectStep"
       @submit="submitExpertMessage"
       @stop="stopExpertConversation"
     />
@@ -542,8 +193,11 @@
       "
       :context-text="cliRuntimeLabel"
       :task-uuid="resolvedTaskUuid"
+      :current-step="currentStep"
       :document-step="currentStep"
       :hide-agent-prompt="true"
+      :execution-task="task"
+      @switch-execution="openExecutionModeModal(true)"
       @submit="submitCLIQuestion"
       @stop="stopCLIConversation"
     />
@@ -560,6 +214,7 @@
       :task="task"
       :status="taskStatus"
       :rendered-description="renderedDescription"
+      :initial-editing="detailInitiallyEditing"
       @preview-image="showImagePreview"
       @saved="handleTaskSaved"
     />
@@ -574,88 +229,60 @@
       :image-url="previewImageUrl"
     />
 
-    <AssignExecutionModeModal
-      v-model:open="assignModalOpen"
+    <!--
+      任务详情标题旁的「产出文档」入口：有输入框的形态（流水线 / CLI / 专家团）
+      复用 ChatComposer 内的抽屉，保留「引用到输入框」；Vibe Coding 没有输入框，
+      这里挂一个独立实例承接入口。
+    -->
+    <TaskDocumentsDrawer
+      v-model:open="standaloneDocumentsOpen"
       :task-uuid="resolvedTaskUuid"
-      :task-title="task?.title || ''"
-      :initial-mode="
-        task?.execution_mode === 'pipeline'
-          ? 'pipeline'
-          : task?.execution_mode === 'expert_group'
-            ? 'expert_group'
-            : task?.execution_mode === 'cli'
-              ? 'cli'
-              : task?.execution_mode === 'vibe_coding'
-                ? 'vibe_coding'
-                : ''
-      "
-      :preferred-expert-group-uuid="task?.selected_expert_group_uuid || ''"
-      :preferred-pipeline-uuid="task?.selected_pipeline_uuid || ''"
-      :initial-cli-type="task?.execution_mode === 'cli' ? task?.execution_tool || '' : ''"
-      :initial-vibe-tool="task?.execution_mode === 'vibe_coding' ? task?.execution_tool || '' : ''"
-      :initial-model-name="task?.execution_mode === 'cli' ? task?.execution_model || '' : ''"
-      :replace-existing="assignReplaceExisting"
-      mode="detail"
-      @assigned="handleAssigned"
+      :current-step="currentStep"
+      :reference-enabled="false"
     />
+
+    <TaskExecutionModeDialog v-if="task" v-model:open="assignModalOpen" :task="task" :replace-existing="assignReplaceExisting" @assigned="handleAssigned" />
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, h, nextTick, onBeforeUnmount, ref, watch } from 'vue'
-import { message, Modal } from 'ant-design-vue'
-import {
-  CopyOutlined,
-  DesktopOutlined,
-  DownOutlined,
-  FolderOpenOutlined,
-  LeftOutlined,
-  UpOutlined,
-  CodeOutlined,
-} from '@ant-design/icons-vue'
+import { showVibeToolOpenResult } from '@/composables/useVibeToolFeedback'
+import TaskActivityHeading from '@/components/task-progress/TaskActivityHeading.vue'
+import TaskWorkspaceHeader from '@/components/task-progress/TaskWorkspaceHeader.vue'
+import TaskExecutionOverview from '@/components/task-progress/TaskExecutionOverview.vue'
+import TaskDescriptionPreview from '@/components/task-progress/TaskDescriptionPreview.vue'
+import TaskDocumentsDrawer from '@/components/task-progress/TaskDocumentsDrawer.vue'
+import TaskExecutionModeDialog from '@/components/task-progress/TaskExecutionModeDialog.vue'
+import { useTaskWorkspaceControls } from '@/composables/useTaskWorkspaceControls'
+
+import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
+import { message } from 'ant-design-vue'
 import { useRoute, useRouter } from 'vue-router'
 import apiClient from '@/api/client'
-import codexLogo from '@/assets/icons/codex-logo.svg'
-import vibeCodingLogo from '@/assets/icons/vibe-coding-logo.svg'
 import cliExecutionLogo from '@/assets/icons/task-composer-cli.svg'
-import detailInfoIcon from '@/assets/icons/task-detail-view.svg'
-import deleteTaskIcon from '@/assets/icons/task-detail-delete.svg'
-import switchExecutionModeIcon from '@/assets/icons/task-switch-execution-mode.svg'
-import conversationFilterIcon from '@/assets/icons/task-conversation-filter.svg'
 import MarkdownIt from 'markdown-it'
-import AssignExecutionModeModal from '@/components/AssignExecutionModeModal.vue'
-import MarkdownPreview from '@/components/MarkdownPreview.vue'
-import AgentStepStrip from '@/components/task-progress/AgentStepStrip.vue'
 import ChatComposer from '@/components/task-progress/ChatComposer.vue'
 import NextStepButton from '@/components/task-progress/NextStepButton.vue'
-import PipelineFlowIcon from '@/components/task-progress/PipelineFlowIcon.vue'
 import StepMessageList from '@/components/task-progress/StepMessageList.vue'
 import StopExecutionConfirmModal from '@/components/task-progress/StopExecutionConfirmModal.vue'
 import TaskExecutionHistory from '@/components/task-progress/TaskExecutionHistory.vue'
-import UnassignedPipelineGuide from '@/components/task-progress/UnassignedPipelineGuide.vue'
 import VibeCodingConversationNotice from '@/components/task-progress/VibeCodingConversationNotice.vue'
 import { isUserMessage, resultText, userMessageText } from '@/components/task-progress/utils'
 import { copyText } from '@/utils/clipboard'
+import { taskFileRoots } from '@/utils/localFileLink'
 import { isStopConfirmSuppressed, suppressStopConfirm } from '@/utils/stopConfirm'
 import { useDocumentTitle } from '@/composables/useDocumentTitle'
-import { readComposerDraft, writeComposerDraft } from '@/composables/useComposerDraft'
-import { openTerminal } from '@/composables/useDesktop'
+import { useComposerDraft, readComposerDraft, writeComposerDraft } from '@/composables/useComposerDraft'
+import { usePipelineStepConversation } from '@/composables/usePipelineStepConversation'
 import { useLocalWS, useLocalWSStatus } from '@/composables/useLocalWebSocket'
-import {
-  assignTaskToCodex,
-  copyTaskCodexPrompt,
-  loadCodexCapability,
-  openTaskInCodex,
-  type CodexCapability,
-} from '@/composables/useTaskCodex'
-import { vibeToolLabelKey, vibeToolLogo } from '@/composables/useVibeCoding'
+import { openTaskVibeTool } from '@/composables/useTaskVibeTool'
+import { vibeToolDisplayLabel, vibeToolLabelKey, vibeToolLogo } from '@/composables/useVibeCoding'
 import type { TaskProgress } from '@/types/pipeline'
 import type { ChatComposerSubmission } from '@/types/task-attachments'
 import type { TaskWithDetails } from '@/types/task-detail'
 import TaskDetailInfoModal from '@/views/workflows/components/TaskDetailInfoModal.vue'
 import TaskImagePreviewModal from '@/views/workflows/components/TaskImagePreviewModal.vue'
 import WorkItemDetailModal from '@/views/workflows/components/WorkItemDetailModal.vue'
-import type { MyWorkItem } from '@/types/workitem'
 import { useAppI18n } from '@/i18n'
 
 const { t } = useAppI18n()
@@ -669,60 +296,56 @@ const props = withDefaults(
 const emit = defineEmits<{ close: []; changed: [] }>()
 const resolvedTaskUuid = computed(() => props.taskUuid || String(route.params.taskUuid || ''))
 const task = ref<TaskWithDetails>()
-const deleting = ref(false)
-const starting = ref(false)
+const conversationFileRoots = computed(() => taskFileRoots(task.value))
+const {
+  changingStatus, starting, deleting, openingTerminal, originalLoading, originalOpen, originalItem,
+  assignModalOpen, assignReplaceExisting, hasRequirementUpdate,
+  changeStatus, startTask, openOriginalRequirement, openTaskTerminal, deleteTask, openExecutionModeModal,
+} = useTaskWorkspaceControls(task, {
+  refresh: async () => { await load(); emit('changed') },
+  deleted: () => { emit('changed'); returnToBoard() },
+})
+function handleTitleRenamed(title: string) {
+  if (task.value) task.value = { ...task.value, title }
+  void load()
+  emit('changed')
+}
+
 const codexBusy = ref(false)
-const codexCapability = ref<CodexCapability>({ available: false })
-const changingStatus = ref(false)
-const selectedTaskStatus = ref('pending')
 const detailModalOpen = ref(false)
-const originalOpen = ref(false)
-const originalItem = ref<MyWorkItem>()
-const originalLoading = ref(false)
-const assignModalOpen = ref(false)
-const assignReplaceExisting = ref(false)
+const detailInitiallyEditing = ref(false)
+function openTaskDetails(edit = false) {
+  detailInitiallyEditing.value = edit
+  detailModalOpen.value = true
+}
+
+/**
+ * 任务详情标题旁的「产出文档」入口。
+ * 有输入框的形态交给 ChatComposer 打开它自己的抽屉（保留「引用到输入框」能力）；
+ * Vibe Coding 没有输入框，改开页面级独立抽屉。
+ */
+function openTaskDocuments() {
+  const composer = composerRef.value || expertComposerRef.value
+  if (composer?.openDocuments()) return
+  standaloneDocumentsOpen.value = true
+}
 const previewImageUrl = ref('')
 const previewImageVisible = ref(false)
-const descriptionExpanded = ref(false)
-const pipelineExpanded = ref(true)
 // 需求设计图：CLI 任务的动态区标题带折叠箭头。
 const cliActivityExpanded = ref(true)
-const descriptionNeedsExpand = ref(false)
-const openingTerminal = ref(false)
-const requirementContentRef = ref<HTMLElement>()
 const taskTitle = computed(() => task.value?.title)
 const taskStatus = computed(() => statusValue(task.value?.status))
-const taskStatusOptions = computed(() => [
-  { value: 'pending', label: t('workflows.task.status.pending') },
-  { value: 'in_progress', label: t('workflows.task.status.inProgress') },
-  { value: 'blocked', label: t('workflows.task.status.blocked') },
-  { value: 'done', label: t('workflows.task.status.done') },
-])
 const hasPipelineSnapshot = computed(() =>
   Boolean(
     task.value?.execution_mode === 'pipeline' &&
     (task.value?.pipeline_snapshot_uuid || task.value?.steps?.length),
   ),
 )
-async function openTaskTerminal() {
-  const workDir = task.value?.work_dir || task.value?.task_dir || ''
-  if (!workDir || openingTerminal.value) return
-  openingTerminal.value = true
-  try {
-    await openTerminal(workDir)
-  } catch (error) {
-    message.error(
-      error instanceof Error ? error.message : t('workflows.task.progress.openTerminalFailed'),
-    )
-  } finally {
-    openingTerminal.value = false
-  }
-}
 const isVibeCoding = computed(() => task.value?.execution_mode === 'vibe_coding')
-const isCodexVibeCoding = computed(
-  () => isVibeCoding.value && task.value?.execution_tool === 'codex',
-)
-const vibeCodingToolName = computed(() => t(vibeToolLabelKey(task.value?.execution_tool || '')))
+const vibeCodingToolName = computed(() => {
+  const label = vibeToolDisplayLabel(task.value?.execution_tool || '', t(vibeToolLabelKey(task.value?.execution_tool || '')), task.value?.execution_tool_name)
+  return task.value?.execution_model ? `${label} · ${task.value.execution_model}` : label
+})
 const vibeCodingActorLogo = computed(() => vibeToolLogo(task.value?.execution_tool || ''))
 const isExpertGroup = computed(() => task.value?.execution_mode === 'expert_group')
 // CLI 直接执行：任务只有一条隐式步骤，CLI 与模型来自用户指派时的选择。
@@ -733,21 +356,7 @@ const cliRuntimeLabel = computed(() => {
   const model = task.value?.execution_model || sortedSteps.value[0]?.model_name || ''
   return model ? `${cli} · ${model}` : cli
 })
-const showCodexActions = computed(() => !task.value?.execution_mode || isCodexVibeCoding.value)
 useDocumentTitle(taskTitle)
-
-function openExecutionModeModal(replaceExisting: boolean) {
-  assignReplaceExisting.value = replaceExisting
-  assignModalOpen.value = true
-}
-
-watch(
-  taskStatus,
-  (status) => {
-    selectedTaskStatus.value = status
-  },
-  { immediate: true },
-)
 
 // 轮询、步骤选择和会话展示共享进度数据，由详情容器统一维护以避免重复请求。
 const loading = ref(false)
@@ -756,20 +365,21 @@ const completing = ref(false)
 const stoppingSessionUuid = ref('')
 const progress = ref<TaskProgress[]>([])
 const selectedStepUuid = ref('')
-const question = ref(readComposerDraft(resolvedTaskUuid.value))
-watch(resolvedTaskUuid, (next, prev) => {
-  if (prev && prev !== next) writeComposerDraft(prev, question.value)
-  question.value = readComposerDraft(next)
-})
-watch(question, (value) => writeComposerDraft(resolvedTaskUuid.value, value))
+const pipelineConversation = usePipelineStepConversation(task, progress, selectedStepUuid, resolvedTaskUuid)
+const composerDraftIdentity = pipelineConversation.draftKey
+const activeTaskProgress = pipelineConversation.activeTaskProgress
+const question = useComposerDraft(composerDraftIdentity)
 const highlightUuid = ref('')
 const messageListRef = ref<InstanceType<typeof StepMessageList>>()
 const stopConfirmOpen = ref(false)
 const stopConfirmSessionUuid = ref('')
 const composerRef = ref<InstanceType<typeof ChatComposer>>()
 const expertComposerRef = ref<InstanceType<typeof ChatComposer>>()
+// 任务详情标题旁的产出文档入口：只在没有输入框的形态（Vibe Coding）下使用独立抽屉
+const standaloneDocumentsOpen = ref(false)
 let refreshTimer: ReturnType<typeof setTimeout> | undefined
 let highlightTimer: ReturnType<typeof setTimeout> | undefined
+let loadVersion = 0
 const wsConnected = useLocalWSStatus()
 
 const sortedSteps = computed(() =>
@@ -835,18 +445,6 @@ const composerModelName = computed(
     '',
 )
 const selectedIsCurrent = computed(() => selectedStepUuid.value === effectiveCurrentStepUuid.value)
-const selectedStepReached = computed(() =>
-  Boolean(
-    selectedStep.value &&
-    (selectedIsCurrent.value ||
-      selectedStep.value.status === 'completed' ||
-      (currentStepIndex.value >= 0 &&
-        selectedStepIndex.value >= 0 &&
-        selectedStepIndex.value < currentStepIndex.value) ||
-      selectedProgress.value.length > 0),
-  ),
-)
-const hasRunningSelectedConversation = computed(() => Boolean(activeSelectedProgress.value))
 const currentStepLocked = computed(
   () =>
     !task.value ||
@@ -854,7 +452,7 @@ const currentStepLocked = computed(
     Boolean(task.value.current_step_completed) ||
     currentStep.value?.status === 'completed',
 )
-const canAsk = computed(() => selectedStepReached.value && !hasRunningSelectedConversation.value)
+const canAsk = computed(() => pipelineConversation.canSend.value)
 const selectedStepAwaitingStart = computed(
   () =>
     selectedIsCurrent.value &&
@@ -868,6 +466,7 @@ const canComplete = computed(
     !currentStepLocked.value &&
     canAsk.value &&
     !submitting.value &&
+    !completing.value &&
     selectedProgress.value.length > 0,
 )
 const lastProgressTerminal = computed(() => {
@@ -883,9 +482,17 @@ const nextStepName = computed(() =>
 const showNextStepCard = computed(
   () => selectedIsCurrent.value && !currentStepLocked.value && lastProgressTerminal.value,
 )
+const composerAdvanceAction = computed(() => {
+  if (!hasPipelineSnapshot.value || !showNextStepCard.value) return undefined
+  return {
+    label: t(isLastStep.value ? 'workflows.task.progress.completeTask' : 'workflows.task.progress.enterNext'),
+    disabled: !canComplete.value,
+    loading: completing.value,
+  }
+})
 const composerPlaceholder = computed(() => {
-  if (!selectedStepReached.value) return t('workflows.task.detail.stepUnavailable')
-  if (hasRunningSelectedConversation.value) return t('workflows.task.detail.stepRunning')
+  if (pipelineConversation.notice.value) return pipelineConversation.notice.value
+  if (activeSelectedProgress.value) return t('workflows.task.detail.stepRunning')
   return t('workflows.task.detail.messagePlaceholder')
 })
 const composerContextText = computed(() =>
@@ -914,30 +521,13 @@ function statusValue(status?: string) {
   return status || 'pending'
 }
 
-async function ensureCodexAssigned() {
-  if (!task.value || task.value.execution_mode) return
-  await assignTaskToCodex(resolvedTaskUuid.value, false)
-  task.value.execution_mode = 'vibe_coding'
-  task.value.execution_tool = 'codex'
-  emit('changed')
-}
-
 async function handleOpenCodex() {
   if (!task.value || codexBusy.value) return
   codexBusy.value = true
   try {
-    await ensureCodexAssigned()
-    const openResult = await openTaskInCodex(resolvedTaskUuid.value)
+    const openResult = await openTaskVibeTool(resolvedTaskUuid.value)
     const toolName = vibeCodingToolName.value
-    if (openResult.opened) {
-      message.success(t('workflows.task.detail.toolOpened', { tool: toolName }))
-    } else if (openResult.copied) {
-      message.warning(t('workflows.task.detail.toolCopiedFallback', { tool: toolName }))
-    } else if (openResult.error) {
-      message.error(openResult.error.message)
-    } else {
-      message.warning(t('workflows.task.detail.toolUnavailable', { tool: toolName }))
-    }
+    showVibeToolOpenResult(openResult, toolName)
     await load(true)
   } catch (error) {
     message.error(
@@ -948,158 +538,9 @@ async function handleOpenCodex() {
   }
 }
 
-async function handleCopyCodexPrompt() {
-  if (!task.value || codexBusy.value) return
-  codexBusy.value = true
-  try {
-    await ensureCodexAssigned()
-    await copyTaskCodexPrompt(resolvedTaskUuid.value)
-    message.success(t('workflows.task.detail.codexPromptCopied'))
-    await load(true)
-  } catch (error) {
-    message.error(
-      error instanceof Error ? error.message : t('workflows.task.detail.codexCopyFailed'),
-    )
-  } finally {
-    codexBusy.value = false
-  }
-}
-
-async function changeStatus(next: string) {
-  if (!task.value || changingStatus.value) return
-  const previous = statusValue(task.value.status)
-  if (next === previous) return
-  if (
-    next === 'in_progress' &&
-    (!task.value.execution_mode ||
-      (task.value.execution_mode === 'pipeline' && !hasPipelineSnapshot.value))
-  ) {
-    selectedTaskStatus.value = previous
-    openExecutionModeModal(false)
-    return
-  }
-  // CLI 直接执行任务缺隐式步骤时同样回分配弹窗补全（正常不会发生，兜底防御）。
-  if (next === 'in_progress' && task.value.execution_mode === 'cli' && !sortedSteps.value.length) {
-    selectedTaskStatus.value = previous
-    openExecutionModeModal(false)
-    return
-  }
-  // 启动依赖完整的步骤配置；缺项时回到分配弹窗补全，避免提交不可执行快照。
-  if (
-    next === 'in_progress' &&
-    task.value.execution_mode === 'pipeline' &&
-    hasPipelineSnapshot.value &&
-    task.value.steps?.some((s) => !s.prompt_snapshot || !s.cli_type || !s.model_name)
-  ) {
-    selectedTaskStatus.value = previous
-    openExecutionModeModal(false)
-    return
-  }
-  changingStatus.value = true
-  try {
-    await apiClient.put(`/tasks/${resolvedTaskUuid.value}/status`, { status: next })
-    task.value.status = next
-    if (next === 'in_progress' && previous === 'pending') {
-      message.success(t('workflows.board.started'))
-      void load()
-    }
-    emit('changed')
-  } catch (error) {
-    selectedTaskStatus.value = previous
-    message.error(error instanceof Error ? error.message : t('workflows.board.statusUpdateFailed'))
-  } finally {
-    changingStatus.value = false
-  }
-}
-
-async function startTask() {
-  if (!task.value || starting.value) return
-  if (!hasPipelineSnapshot.value && !isExpertGroup.value && !isCLI.value) {
-    openExecutionModeModal(false)
-    return
-  }
-  starting.value = true
-  try {
-    await apiClient.post(`/tasks/${resolvedTaskUuid.value}/start`, {})
-    task.value.status = 'in_progress'
-    message.success(t('workflows.task.detail.started'))
-    void load()
-    emit('changed')
-  } catch (error) {
-    message.error(error instanceof Error ? error.message : t('workflows.task.detail.startFailed'))
-  } finally {
-    starting.value = false
-  }
-}
-
 function handleAssigned() {
   void load()
   emit('changed')
-}
-
-const isCloudWorkItem = computed(
-  () => task.value?.source_type === 'cloud' && Boolean(task.value?.work_item_id),
-)
-
-async function openOriginalRequirement() {
-  const current = task.value
-  if (!current?.work_item_id || originalLoading.value) return
-  originalLoading.value = true
-  try {
-    const result = await apiClient.get<{ items: MyWorkItem[] }>('/team/my-work')
-    const found = (result.items || []).find(
-      (item) =>
-        String(item.id) === String(current.work_item_id) &&
-        (!current.work_item_type || item.type === current.work_item_type),
-    )
-    originalItem.value = found || {
-      type: current.work_item_type === 'defect' ? 'defect' : 'requirement',
-      id: Number(current.work_item_id),
-      workspace_id: Number(current.workspace_id || 0),
-      title: current.title,
-      description: current.description,
-      // 详情页入口没有「我的工作」列表行，这里补上本地任务关联，让弹窗能读到任务信息。
-      local_task_uuid: resolvedTaskUuid.value,
-      local_task_status: current.status,
-    }
-    originalOpen.value = true
-  } catch {
-    message.error(t('teamwork.workItem.loadFailed'))
-  } finally {
-    originalLoading.value = false
-  }
-}
-
-function deleteTask() {
-  Modal.confirm({
-    title: isCloudWorkItem.value
-      ? t('teamwork.delete.title')
-      : t('workflows.task.detail.deleteConfirm'),
-    content: isCloudWorkItem.value
-      ? h('div', { class: 'team-task-delete-copy' }, [
-          h('p', t('teamwork.delete.item1')),
-          h('p', t('teamwork.delete.item2')),
-        ])
-      : t('workflows.task.detail.deleteWarning'),
-    okText: isCloudWorkItem.value ? t('teamwork.delete.confirm') : t('common.actions.delete'),
-    okType: 'danger',
-    cancelText: t('common.actions.cancel'),
-    onOk: async () => {
-      deleting.value = true
-      try {
-        await apiClient.delete(`/tasks/${resolvedTaskUuid.value}`)
-        message.success(t('workflows.task.detail.deleted'))
-        emit('changed')
-        returnToBoard()
-      } catch (error) {
-        message.error(
-          error instanceof Error ? error.message : t('workflows.task.detail.deleteFailed'),
-        )
-      } finally {
-        deleting.value = false
-      }
-    },
-  })
 }
 
 const md = new MarkdownIt({ breaks: true, linkify: true })
@@ -1113,28 +554,21 @@ const renderedDescription = computed(() => {
   return md.render(text)
 })
 
-function measureDescriptionOverflow() {
-  const content = requirementContentRef.value
-  if (content) descriptionNeedsExpand.value = content.scrollHeight > content.clientHeight + 1
-}
-
 async function load(silent = false) {
-  if (!resolvedTaskUuid.value) return
+  const taskUuid = resolvedTaskUuid.value
+  if (!taskUuid) return
+  const requestVersion = ++loadVersion
   if (!silent) loading.value = true
   if (refreshTimer) clearTimeout(refreshTimer)
   try {
-    const [loadedTask, loadedProgress, loadedCodexCapability] = await Promise.all([
-      apiClient.get<TaskWithDetails>(`/tasks/${resolvedTaskUuid.value}`),
+    const [loadedTask, loadedProgress] = await Promise.all([
+      apiClient.get<TaskWithDetails>(`/tasks/${encodeURIComponent(taskUuid)}`),
       apiClient.get<{ items: TaskProgress[] } | TaskProgress[]>(
-        `/tasks/${resolvedTaskUuid.value}/progress`,
+        `/tasks/${encodeURIComponent(taskUuid)}/progress`,
       ),
-      loadCodexCapability().catch(() => ({
-        available: false,
-        message: t('workflows.task.codex.capabilityUnavailable'),
-      })),
     ])
+    if (requestVersion !== loadVersion || resolvedTaskUuid.value !== taskUuid) return
     task.value = loadedTask
-    codexCapability.value = loadedCodexCapability
     const progressItems = Array.isArray(loadedProgress)
       ? loadedProgress
       : loadedProgress.items || []
@@ -1155,17 +589,16 @@ async function load(silent = false) {
         loadedTask.steps[0]?.uuid ||
         ''
     }
-    descriptionExpanded.value = false
-    await nextTick()
-    measureDescriptionOverflow()
   } catch (error) {
-    if (!silent)
+    if (!silent && requestVersion === loadVersion)
       message.error(
         error instanceof Error ? error.message : t('workflows.task.feedback.progressLoadFailed'),
       )
   } finally {
-    if (!silent) loading.value = false
-    scheduleRefresh()
+    if (requestVersion === loadVersion) {
+      loading.value = false
+      scheduleRefresh()
+    }
   }
 }
 
@@ -1269,13 +702,16 @@ async function stopConversation(sessionUuid: string) {
 async function submitQuestion(submission: ChatComposerSubmission) {
   const text = submission.content.trim()
   const step = selectedStep.value
-  if (!text || !step || !canAsk.value) return
-  const startingStep = selectedStepAwaitingStart.value
+  if (!text || !step || !canAsk.value || submitting.value) return
+  const startingStep = hasPipelineSnapshot.value ? pipelineConversation.firstRun.value : selectedStepAwaitingStart.value
+  const taskUuid = resolvedTaskUuid.value
+  const draftKey = composerDraftIdentity.value
+  const draftText = question.value
   submitting.value = true
   try {
     const path = startingStep
-      ? `/tasks/${resolvedTaskUuid.value}/steps/${step.uuid}/runs`
-      : `/tasks/${resolvedTaskUuid.value}/steps/${step.uuid}/questions`
+      ? `/tasks/${encodeURIComponent(taskUuid)}/steps/${encodeURIComponent(step.uuid)}/runs`
+      : `/tasks/${encodeURIComponent(taskUuid)}/steps/${encodeURIComponent(step.uuid)}/questions`
     await apiClient.post(path, {
       question: text,
       display_question: submission.display_content?.trim() || text,
@@ -1283,15 +719,17 @@ async function submitQuestion(submission: ChatComposerSubmission) {
       cli_type: submission.config.cli_type,
       model_name: submission.config.model_name,
     })
-    question.value = ''
-    composerRef.value?.resetAfterSubmit()
+    if (readComposerDraft(draftKey) === draftText) writeComposerDraft(draftKey, '')
+    composerRef.value?.resetAfterSubmit(draftKey)
     message.success(
       startingStep
         ? t('workflows.task.feedback.agentStarted')
         : t('workflows.task.feedback.messageSent'),
     )
-    await load()
-    await locateTarget()
+    if (resolvedTaskUuid.value === taskUuid) {
+      await load()
+      if (selectedStepUuid.value === step.uuid) await locateTarget()
+    }
   } catch (error) {
     message.error(
       error instanceof Error ? error.message : t('workflows.task.feedback.messageFailed'),
@@ -1376,7 +814,7 @@ function stopSelectedConversationFor(sessionUUID: string) {
 
 async function completeStep() {
   const step = currentStep.value
-  if (!step || !canComplete.value) return
+  if (!step || !canComplete.value || completing.value) return
   completing.value = true
   try {
     await apiClient.post(`/tasks/${resolvedTaskUuid.value}/steps/${step.uuid}/complete`, {
@@ -1413,11 +851,6 @@ async function copyResult(item: TaskProgress) {
   }
 }
 
-function openImagePreview(e: MouseEvent) {
-  const target = e.target
-  if (target instanceof HTMLImageElement) showImagePreview(target.src)
-}
-
 function showImagePreview(url: string) {
   previewImageUrl.value = url
   previewImageVisible.value = true
@@ -1427,11 +860,15 @@ watch(
   resolvedTaskUuid,
   () => {
     selectedStepUuid.value = ''
+    task.value = undefined
+    progress.value = []
+    detailModalOpen.value = false
     void load()
   },
   { immediate: true },
 )
 onBeforeUnmount(() => {
+  loadVersion += 1
   if (refreshTimer) clearTimeout(refreshTimer)
   if (highlightTimer) clearTimeout(highlightTimer)
 })
@@ -1446,241 +883,6 @@ onBeforeUnmount(() => {
   background: #fff;
 }
 
-.detail-header {
-  display: flex;
-  min-height: 44px;
-  flex: 0 0 auto;
-  align-items: center;
-  gap: 4px;
-  padding: 8px 24px;
-  border-bottom: 1px solid #f0f0f0;
-  background: #fff;
-}
-
-.detail-title {
-  display: flex;
-  min-width: 0;
-  flex: 1;
-  align-items: center;
-}
-
-.back-button {
-  display: inline-flex;
-  width: 24px;
-  height: 24px;
-  flex: 0 0 auto;
-  align-items: center;
-  justify-content: center;
-  border: 0;
-  border-radius: 6px;
-  padding: 4px;
-  color: #262626;
-  background: transparent;
-  cursor: pointer;
-  font-size: 16px;
-}
-
-.back-button:hover {
-  background: #f5f5f5;
-}
-
-.detail-button,
-.delete-button {
-  display: inline-flex;
-  width: 28px;
-  height: 28px;
-  flex: 0 0 auto;
-  align-items: center;
-  justify-content: center;
-  border: 0;
-  border-radius: 6px;
-  padding: 6px;
-  color: #8c8c8c;
-  background: #fff;
-  cursor: pointer;
-}
-
-.detail-button img,
-.delete-button img {
-  display: block;
-  width: 16px;
-  height: 16px;
-}
-
-.detail-button .detail-info-icon {
-  width: 11.3px;
-  height: 13.3px;
-}
-
-.detail-button:hover,
-.delete-button:hover {
-  color: #262626;
-  background: #f5f5f5;
-}
-
-.detail-header h1 {
-  min-width: 120px;
-  flex: 1;
-  overflow: hidden;
-  margin: 0;
-  color: #262626;
-  font-size: 20px;
-  font-weight: 600;
-  line-height: 28px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.header-controls {
-  display: flex;
-  min-width: 0;
-  align-items: center;
-  gap: 4px;
-}
-
-.original-requirement-button {
-  display: inline-flex;
-  height: 28px;
-  align-items: center;
-  border: 1px solid #d9d9d9;
-  border-radius: 6px;
-  padding: 2px 8px;
-  color: #262626;
-  background: #fff;
-  cursor: pointer;
-  font-size: 14px;
-  line-height: 22px;
-}
-
-.original-requirement-button:hover:not(:disabled) {
-  border-color: #3157e2;
-  color: #3157e2;
-}
-
-.original-requirement-button:disabled {
-  cursor: not-allowed;
-  opacity: 0.45;
-}
-
-.status-select {
-  width: 92px;
-}
-
-.status-select :deep(.ant-select-selector) {
-  height: 28px;
-  border: 0;
-  border-radius: 6px;
-  padding: 0 20px 0 4px;
-  box-shadow: none;
-}
-
-.status-select :deep(.ant-select-selection-item) {
-  color: #8c8c8c;
-  font-size: 14px;
-  line-height: 28px;
-}
-
-.status-select :deep(.ant-select-arrow) {
-  right: 4px;
-  width: 16px;
-  height: 16px;
-  margin-top: -8px;
-  align-items: center;
-  justify-content: center;
-}
-
-.work-dir {
-  display: flex;
-  min-height: 28px;
-  max-width: 320px;
-  align-items: center;
-  gap: 4px;
-  padding: 3px 4px;
-  border-radius: 6px;
-  color: #8c8c8c;
-  background: #f2f4f7;
-  font-size: 14px;
-  line-height: 22px;
-}
-
-.work-dir :deep(.anticon) {
-  font-size: 16px;
-}
-
-.work-dir span {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.codex-button {
-  display: inline-flex;
-  min-height: 28px;
-  align-items: center;
-  gap: 6px;
-  border: 0;
-  border-radius: 6px;
-  padding: 3px 8px;
-  color: #8c8c8c;
-  background: transparent;
-  cursor: pointer;
-  font-size: 14px;
-  line-height: 22px;
-}
-
-.codex-button-logo {
-  width: 16px;
-  height: 16px;
-  flex: 0 0 auto;
-}
-
-.codex-tooltip-trigger {
-  display: inline-flex;
-}
-
-.codex-button:hover:not(:disabled) {
-  background: #f2f4f7;
-}
-
-.codex-button:focus-visible {
-  outline: 2px solid #3157e2;
-  outline-offset: 2px;
-}
-
-.codex-button:disabled {
-  cursor: not-allowed;
-  opacity: 0.55;
-}
-
-.start-button {
-  display: inline-flex;
-  height: 28px;
-  align-items: center;
-  border: 1px solid #3157e2;
-  border-radius: 6px;
-  padding: 2px 8px;
-  border-color: #3157e2;
-  color: #fff;
-  background: #3157e2;
-  cursor: pointer;
-  font-size: 14px;
-  line-height: 22px;
-}
-
-.start-button:disabled {
-  cursor: not-allowed;
-  opacity: 0.45;
-}
-
-.delete-button {
-  color: #595959;
-}
-
-.delete-button:hover {
-  color: #ef4444;
-  background: #fff1f2;
-}
-
 .detail-scroll {
   display: flex;
   min-height: 0;
@@ -1689,262 +891,9 @@ onBeforeUnmount(() => {
   overflow-y: auto;
 }
 
-.pipeline-card {
-  flex: 0 0 auto;
-  padding: 16px 24px 12px 24px;
-  background: #fff;
-  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.08);
-  z-index: 1;
-}
-
-.pipeline-card-head {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  margin-bottom: 15px;
-}
-
-.direct-execution {
-  display: flex;
-  min-height: 32px;
-  align-items: center;
-  gap: 8px;
-  color: #8c8c8c;
-  font-size: 14px;
-  line-height: 22px;
-}
-
-.direct-execution-logo {
-  width: 14px;
-  height: 14px;
-  flex: 0 0 auto;
-}
-
-/* 需求设计图用「直接执行：」的冒号分隔，不再使用竖线 */
-.direct-execution-label::after {
-  content: ':';
-}
-
-/* 右侧「切换执行方式」描边按钮 */
-.direct-execution-actions {
-  display: flex;
-  margin-left: auto;
-  align-items: center;
-  gap: 8px;
-}
-
-.pipeline-card-head > .direct-execution-actions {
-  margin-left: 8px;
-}
-
-.execution-action {
-  display: inline-flex;
-  height: 28px;
-  align-items: center;
-  gap: 6px;
-  border: 1px solid #e5e5e5;
-  padding: 0 12px;
-  border-radius: 8px;
-  color: #262626;
-  background: #fff;
-  cursor: pointer;
-  font-size: 13px;
-  line-height: 20px;
-}
-
-.execution-action:hover {
-  border-color: #3157e2;
-  color: #3157e2;
-}
-
-.execution-switch-icon {
-  width: 16px;
-  height: 16px;
-  flex: 0 0 16px;
-}
-
-.direct-execution strong {
-  color: #262626;
-  font-weight: 500;
-}
-
-.expert-summary {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}
-.expert-summary > img {
-  width: 36px;
-  height: 36px;
-  border-radius: 50%;
-  object-fit: cover;
-}
-.expert-summary > span {
-  display: flex;
-  flex-direction: column;
-}
-.expert-summary small {
-  color: #8c8c8c;
-}
-.expert-summary > .expert-members {
-  display: flex;
-  margin-left: auto;
-}
-.expert-summary > .expert-members > span {
-  position: relative;
-  margin-left: -5px;
-}
-.expert-summary > .expert-members img,
-.expert-summary > .expert-members em {
-  display: flex;
-  width: 30px;
-  height: 30px;
-  align-items: center;
-  justify-content: center;
-  border: 2px solid #fff;
-  border-radius: 50%;
-  background: #e5efff;
-  object-fit: cover;
-  font-style: normal;
-}
-.expert-summary > .expert-members b {
-  position: absolute;
-  right: -4px;
-  bottom: -8px;
-  padding: 0 4px;
-  border-radius: 8px;
-  color: #d97706;
-  background: #fff5e5;
-  font-size: 9px;
-  white-space: nowrap;
-}
-.expert-summary > .direct-execution-actions {
-  margin-left: 16px;
-}
-
-.pipeline-card-label {
-  color: #8c8c8c;
-  font-size: 14px;
-}
-
-.pipeline-card-sep {
-  width: 1px;
-  height: 12px;
-  background: #f0f0f0;
-}
-
-.pipeline-card-name {
-  color: #262626;
-  font-size: 14px;
-  font-weight: 400;
-}
-
-.pipeline-card-progress {
-  color: #8c8c8c;
-  font-size: 14px;
-}
-.pipeline-toggle {
-  margin-left: auto;
-  border: 0;
-  padding: 4px;
-  color: #8c8c8c;
-  background: transparent;
-  cursor: pointer;
-}
-.pipeline-toggle .rotated {
-  transform: rotate(-90deg);
-}
-
 .detail-content {
   flex: 1 0 auto;
   padding: 0 24px 24px;
-}
-
-.task-title {
-  margin: 28px 0 0;
-  color: #262626;
-  font-size: 16px;
-  font-weight: 600;
-  line-height: 24px;
-}
-
-.task-desc {
-  margin-top: 12px;
-}
-
-.task-desc :deep(.task-desc-content) {
-  display: -webkit-box;
-  overflow: hidden;
-  margin: 0;
-  color: #262626;
-  font-size: 14px;
-  line-height: 28px;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 5;
-}
-
-.task-desc.expanded :deep(.task-desc-content) {
-  display: block;
-  -webkit-line-clamp: unset;
-}
-
-.task-desc :deep(.task-desc-content p) {
-  display: inline;
-  margin: 0;
-  color: inherit;
-  font-size: inherit;
-}
-
-.task-desc :deep(.markdown-preview-shell) {
-  min-height: 0;
-  padding: 0;
-  background: transparent;
-}
-
-.desc-toggle {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  margin-top: 8px;
-  border: 0;
-  padding: 0;
-  color: #1d5ec9;
-  background: transparent;
-  cursor: pointer;
-  font-size: 14px;
-  line-height: 22px;
-}
-
-.conversation-scope-note {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin: 24px 0 12px;
-  color: #8c8c8c;
-  font-size: 12px;
-  line-height: 19.2px;
-}
-
-.conversation-scope-icon {
-  width: 16px;
-  height: 16px;
-  flex: 0 0 auto;
-}
-
-/* 需求设计图：CLI 任务的动态区标题可折叠 */
-.conversation-scope-note--toggle {
-  border: 0;
-  padding: 0;
-  background: transparent;
-  cursor: pointer;
-}
-
-.conversation-scope-note--toggle:hover {
-  color: #262626;
-}
-
-.conversation-scope-note--toggle .rotated {
-  transform: rotate(-90deg);
 }
 
 .pipeline-empty {
@@ -1954,11 +903,6 @@ onBeforeUnmount(() => {
   flex-direction: column;
   padding: 80px 0;
   color: #8c8c8c;
-}
-
-.conversation-scope-note--placeholder {
-  min-height: 0;
-  margin: 24px 0 0;
 }
 
 .pipeline-empty-icon {
@@ -1994,30 +938,6 @@ onBeforeUnmount(() => {
   flex: 1;
   align-items: center;
   justify-content: center;
-}
-
-/* 限制详情图片尺寸，避免长图撑开页面；完整内容通过预览弹窗查看。 */
-.task-desc :deep(.task-desc-content img) {
-  max-width: 100px;
-  max-height: 60px;
-  object-fit: cover;
-  cursor: pointer;
-  border-radius: 3px;
-  border: 1px solid #e5e7eb;
-  margin: 0 2px;
-  vertical-align: middle;
-}
-
-.task-desc :deep(.task-desc-content img):hover {
-  border-color: #3157e2;
-  box-shadow: 0 0 0 2px rgba(49, 87, 226, 0.15);
-}
-
-@media (max-width: 760px) {
-  .work-dir,
-  .detail-button {
-    display: none;
-  }
 }
 
 @media (max-width: 720px) {

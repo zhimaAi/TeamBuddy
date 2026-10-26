@@ -327,7 +327,7 @@ import {
   ShareAltOutlined,
 } from '@ant-design/icons-vue'
 import apiClient from '@/api/client'
-import directoryToggleIcon from '@/assets/icons/knowledge-directory-toggle.svg'
+import directoryToggleIcon from '@/assets/icons/common-sidebar-toggle.svg'
 import MarkdownPreview from '@/components/MarkdownPreview.vue'
 import { useAppI18n } from '@/i18n'
 import { useLocale } from '@/composables/useLocale'

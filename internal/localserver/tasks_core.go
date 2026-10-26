@@ -141,12 +141,16 @@ func annotateExecutionModeError(err error) error {
 		return nil
 	}
 	switch {
+	case errors.Is(err, taskruntime.ErrVibeModelInvalid):
+		return newCoreStatusError(http.StatusBadRequest, "localserver_vibe_model_invalid", "vibe_model_invalid", err)
 	case errors.Is(err, taskruntime.ErrNotFound):
 		return newCoreStatusError(http.StatusNotFound, "", "", err)
 	case errors.Is(err, taskruntime.ErrExecutionModeUnsupported):
 		return newCoreStatusError(http.StatusNotImplemented, "", "", err)
 	case errors.Is(err, taskruntime.ErrExecutionModeRequired):
 		return newCoreStatusError(http.StatusConflict, "localserver_execution_mode_required", "execution_mode_required", err)
+	case errors.Is(err, taskruntime.ErrVibeBindingStale):
+		return newCoreStatusError(http.StatusConflict, "localserver_vibe_session_stale", "vibe_session_stale", err)
 	case errors.Is(err, taskruntime.ErrExecutionModeUnchanged):
 		return newCoreStatusError(http.StatusConflict, "localserver_execution_mode_unchanged", "execution_mode_unchanged", err)
 	default:
@@ -274,7 +278,7 @@ func (h *TasksHandler) assignExecutionModeCore(ctx context.Context, taskUUID str
 		h.pushTaskSync(taskUUID)
 		return ExecutionModeResult{Response: response}, nil
 	case taskruntime.ExecutionModeVibeCoding:
-		if err := taskruntime.NewService(h.taskDB(), h.taskRoot).AssignVibeCoding(ctx, taskUUID, input.Tool, input.Start); err != nil {
+		if err := taskruntime.NewService(h.taskDB(), h.taskRoot).AssignVibeCoding(ctx, taskUUID, input.Tool, input.ModelName, input.Start); err != nil {
 			return ExecutionModeResult{}, annotateExecutionModeError(err)
 		}
 		if input.Start {
@@ -333,6 +337,7 @@ func (h *TasksHandler) switchExecutionModeCore(ctx context.Context, taskUUID str
 	before, _ := h.executionModeState(ctx, taskUUID)
 	replacement := taskruntime.SwitchExecutionInput{
 		Mode: input.Mode, Tool: input.Tool, ModelName: input.ModelName,
+		RebindExecutionIndex: input.RebindExecutionIndex,
 		SelectedPipelineUUID: input.PipelineUUID,
 	}
 	switch input.Mode {
@@ -375,12 +380,19 @@ func (h *TasksHandler) switchExecutionModeCore(ctx context.Context, taskUUID str
 		return ExecutionModeResult{}, annotateExecutionModeError(err)
 	}
 	defer switchLease.Close()
+	// 等待锁期间其他请求可能已换代；重新绑定必须在停止会话前复核，
+	// 避免旧页面请求影响刚启动的新执行。
+	if input.RebindExecutionIndex != nil {
+		if err := switchService.ValidateExecutionSwitch(ctx, taskUUID, replacement); err != nil {
+			return ExecutionModeResult{}, annotateExecutionModeError(err)
+		}
+	}
 	// 等价的 gin-free 守卫（取代 guardRemoteExecutionMutation 的响应写入）。
 	if block, blockErr := remoteExecutionBlock(ctx, h.taskDB(), taskUUID); blockErr != nil {
 		return ExecutionModeResult{}, newCoreStatusError(http.StatusInternalServerError, "", "", blockErr)
 	} else if block == "uncertain" {
 		return ExecutionModeResult{}, newCoreStatusError(http.StatusConflict,
-			"remote_wechat_uncertain_action_required", "wechat_uncertain_action_required", nil)
+			"remote_channel_uncertain_action_required", "wechat_uncertain_action_required", nil)
 	} else if block != "" {
 		return ExecutionModeResult{}, newCoreStatusError(http.StatusConflict,
 			"localserver_active_sessions", "task_has_active_sessions", nil)
@@ -407,26 +419,15 @@ func (h *TasksHandler) switchExecutionModeCore(ctx context.Context, taskUUID str
 		"assigned": true, "switched": true, "execution_mode": input.Mode,
 		"execution_tool": input.Tool, "status": "active", "start_status": "started",
 	}
-	// After 在切换提交之后读取；接线失败分支（下面 reset）同样在返回前重读。
+	// 在切换提交之后读取新配置。
 	build := func() ExecutionModeResult {
 		after, _ := h.executionModeState(ctx, taskUUID)
 		return ExecutionModeResult{Before: before, After: after, Response: response}
 	}
-	if input.Mode == taskruntime.ExecutionModePipeline || input.Mode == taskruntime.ExecutionModeExpertGroup {
-		sessionUUID, startErr := h.startTaskExecutionForSwitch(ctx, taskUUID, requestIDFromContext(ctx), switchLease)
-		if startErr != nil {
-			applog.Warn("[execution-switch] 新执行方式自动启动失败", "task_uuid", taskUUID, "error", startErr)
-			if resetErr := switchService.ResetSwitchedExecutionStart(ctx, taskUUID); resetErr != nil {
-				applog.Error("[execution-switch] 恢复新执行方式待启动状态失败", "task_uuid", taskUUID, "error", resetErr)
-			}
-			response["status"] = "pending"
-			response["start_status"] = "failed"
-			response["start_error"] = i18n.WithLocale(i18n.LocaleFromContext(ctx), "localserver_execution_switch_start_failed")
-			h.pushTaskSync(taskUUID)
-			h.notifyTaskChanged(taskUUID)
-			return build(), nil
-		}
-		response["session_uuid"] = sessionUUID
+	// 切换只准备新的执行配置；首条用户消息负责创建 Session。Vibe Coding 保持原行为。
+	if input.Mode != taskruntime.ExecutionModeVibeCoding {
+		response["start_status"] = "awaiting_message"
+		response["status"] = "pending"
 	}
 	if input.Mode == taskruntime.ExecutionModeCLI {
 		response["model_name"] = input.ModelName

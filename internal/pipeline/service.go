@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"goteams-client/internal/cloudscope"
 	"regexp"
 	"strings"
 	"time"
@@ -648,7 +649,7 @@ func schemeVariantURL(baseURL string) string {
 // endpoint. The cloud payload does not include the CLI and model chosen on this
 // client, so those values are restored from gt_cloud_pipeline_step_execution.
 func (s *Service) SyncCloud(ctx context.Context, sourceKey string, items []CloudPipeline) ([]Pipeline, error) {
-	pipes, err := DefaultStore().ReplaceAll(sourceKey, items)
+	pipes, err := DefaultStore().ReplaceAll(sourceKey, items, cacheWriteScope(ctx)...)
 	if err != nil {
 		return nil, err
 	}
@@ -743,6 +744,13 @@ func validateStepInput(input StepInput) error {
 	}
 	if strings.TrimSpace(input.ModelName) == "" {
 		return fmt.Errorf("Agent 编排模型不能为空")
+	}
+	return nil
+}
+
+func cacheWriteScope(ctx context.Context) []string {
+	if scope, ok := cloudscope.From(ctx); ok {
+		return []string{scope}
 	}
 	return nil
 }

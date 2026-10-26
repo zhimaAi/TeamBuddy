@@ -7,9 +7,10 @@ const { openTerminalWindow } = require('../terminal-launcher.cjs')
 const channels = require('../../shared/channels.cjs')
 const { isTrustedURL } = require('../security.cjs')
 const { normalizeDirectoryPath } = require('./path-validation.cjs')
+const { locateTaskOutputFile } = require('./reveal-task-file.cjs')
 const { t } = require('../desktop-i18n.cjs')
 
-function registerDialogIPC(allowedOrigins) {
+function registerDialogIPC(allowedOrigins, getConnection) {
   /** @param {Electron.IpcMainInvokeEvent} event @param {{ defaultPath?: string, multiple?: boolean }} options */
   ipcMain.handle(channels.SELECT_DIRECTORIES, async (event, options = {}) => {
     if (!event.senderFrame || !isTrustedURL(event.senderFrame.url, allowedOrigins)) {
@@ -54,6 +55,27 @@ function registerDialogIPC(allowedOrigins) {
     return { opened: true }
   })
 
+  ipcMain.handle(channels.REVEAL_TASK_FILE, async (event, payload) => {
+    if (!event.senderFrame || !isTrustedURL(event.senderFrame.url, allowedOrigins)) {
+      throw new Error('Untrusted reveal-file request')
+    }
+    const connection = typeof getConnection === 'function' ? getConnection() : null
+    const located = await locateTaskOutputFile({
+      baseURL: connection && connection.baseURL,
+      apiToken: connection && connection.apiToken,
+      taskUuid: payload && payload.taskUuid,
+      fileRef: payload && payload.fileRef,
+      sessionUuid: payload && payload.sessionUuid,
+      locale: payload && payload.locale,
+    })
+    const realPath = await fs.realpath(located)
+    if (realPath !== located) throw new Error('Located file path is invalid')
+    const info = await fs.stat(realPath)
+    if (!info.isFile()) throw new Error('Requested path is not a file')
+    shell.showItemInFolder(realPath)
+    return { revealed: true }
+  })
+
   ipcMain.handle(channels.OPEN_TERMINAL, async (event, directoryPath) => {
     if (!event.senderFrame || !isTrustedURL(event.senderFrame.url, allowedOrigins)) throw new Error('Untrusted open-terminal request')
     const requestedPath = normalizeDirectoryPath(directoryPath)
@@ -71,6 +93,7 @@ function registerDialogIPC(allowedOrigins) {
   return () => {
     ipcMain.removeHandler(channels.SELECT_DIRECTORIES)
     ipcMain.removeHandler(channels.OPEN_DIRECTORY)
+    ipcMain.removeHandler(channels.REVEAL_TASK_FILE)
     ipcMain.removeHandler(channels.OPEN_TERMINAL)
   }
 }

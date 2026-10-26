@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, nextTick, ref } from 'vue'
 import { useAppI18n } from '@/i18n'
+import { useLastLogin } from '@/composables/useLastLogin'
 import { useBrowserLogin } from '@/composables/useBrowserLogin'
 import featureAgentIcon from '@/assets/icons/team-login-feature-agent.svg'
 import featureCollaborateIcon from '@/assets/icons/team-login-feature-collaborate.svg'
@@ -8,6 +9,11 @@ import featureSyncIcon from '@/assets/icons/team-login-feature-sync.svg'
 
 const { t } = useAppI18n()
 const { pending, errorMessage, startBrowserLogin, cancelBrowserLogin } = useBrowserLogin()
+const { getLastLogin, getSavedServers, saveLastLogin } = useLastLogin()
+const customLoginOpen = ref(false)
+const customUrl = ref('')
+const addressError = ref('')
+const addressInput = ref<{ focus: () => void } | null>(null)
 
 const emit = defineEmits<{
   (event: 'use-local'): void
@@ -21,7 +27,45 @@ const features = computed(() => [
 
 function handleLogin() {
   if (pending.value) return
+  addressError.value = ''
   void startBrowserLogin()
+}
+
+async function showCustomLogin() {
+  const last = getLastLogin()
+  customUrl.value = last?.serverType === 'custom' ? last.serverUrl : getSavedServers()[0] || ''
+  addressError.value = ''
+  customLoginOpen.value = true
+  await nextTick()
+  addressInput.value?.focus()
+}
+
+async function authorizeCustomLogin() {
+  if (pending.value) return
+  addressError.value = ''
+  const address = customUrl.value.trim()
+  if (!address) {
+    addressError.value = t('teamwork.connection.addressRequired')
+    addressInput.value?.focus()
+    return
+  }
+  let serverUrl: string
+  try {
+    const parsed = new URL(address.includes('://') ? address : `https://${address}`)
+    if (!['https:', 'http:'].includes(parsed.protocol) || !parsed.hostname || parsed.username || parsed.password || parsed.search || parsed.hash) throw new Error()
+    serverUrl = parsed.toString()
+  } catch {
+    addressError.value = t('teamwork.connection.addressInvalid')
+    addressInput.value?.focus()
+    return
+  }
+  const ok = await startBrowserLogin({ serverType: 'custom', serverUrl })
+  if (ok) saveLastLogin({ serverType: 'custom', serverUrl })
+}
+
+function closeCustomLogin() {
+  customLoginOpen.value = false
+  addressError.value = ''
 }
 
 function handleCancel() {
@@ -56,6 +100,29 @@ function handleCancel() {
         {{ t('teamwork.login.action') }}
       </button>
 
+      <button v-if="!customLoginOpen" type="button" class="team-login-link" :disabled="pending" @click="showCustomLogin">
+        {{ t('teamwork.connection.customAction') }}
+      </button>
+      <form v-else class="custom-login-form" @submit.prevent="authorizeCustomLogin">
+        <label for="team-custom-server">{{ t('teamwork.connection.openSourceAddress') }}</label>
+        <a-input
+          id="team-custom-server"
+          ref="addressInput"
+          v-model:value="customUrl"
+          size="large"
+          :disabled="pending"
+          :placeholder="t('teamwork.connection.openSourceAddressPlaceholder')"
+          :status="addressError ? 'error' : undefined"
+          :aria-invalid="!!addressError"
+          :aria-describedby="addressError ? 'team-custom-server-error' : undefined"
+          @update:value="addressError = ''"
+        />
+        <p v-if="addressError" id="team-custom-server-error" class="team-login-error" role="alert">{{ addressError }}</p>
+        <a-button class="custom-login-authorize" size="large" html-type="submit" :loading="pending" :disabled="pending">
+          {{ t('teamwork.connection.authorize') }}
+        </a-button>
+        <a-button v-if="!pending" type="text" @click="closeCustomLogin">{{ t('common.actions.cancel') }}</a-button>
+      </form>
       <p v-if="pending" class="team-login-hint">
         <span>{{ t('teamwork.login.pending') }}</span>
         <button type="button" class="team-login-link" @click="handleCancel">
@@ -197,6 +264,27 @@ function handleCancel() {
   font-weight: 400;
   line-height: 24px;
   transition: background-color 180ms ease, box-shadow 180ms ease;
+}
+
+.custom-login-form {
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.custom-login-form label {
+  color: #595959;
+  font-size: 14px;
+}
+
+.custom-login-authorize {
+  height: auto;
+  min-height: 40px;
+  border-color: #3157e2;
+  color: #3157e2;
+  white-space: normal;
 }
 
 .team-login-submit:hover:not(:disabled) {

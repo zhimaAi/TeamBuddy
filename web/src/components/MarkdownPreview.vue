@@ -16,7 +16,9 @@ import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { message } from 'ant-design-vue'
 import MarkdownIt from 'markdown-it'
 import apiClient from '@/api/client'
+import { revealTaskOutputFile } from '@/composables/useDesktop'
 import { useAppI18n } from '@/i18n'
+import { allowLocalFileLinks, LOCAL_FILE_LINK_ATTRIBUTE, localFileTarget, renderInlineFileCode } from '@/utils/localFileLink'
 
 const { t } = useAppI18n()
 
@@ -24,10 +26,16 @@ const props = withDefaults(defineProps<{
   content?: string
   emptyText?: string
   taskUuid?: string
+  sessionUuid?: string
+  fileRoots?: string[]
+  resolveImage?: (source: string, signal: AbortSignal) => Promise<Blob | undefined>
+  openLink?: (href: string) => boolean
 }>(), {
   content: '',
   emptyText: '',
   taskUuid: '',
+  sessionUuid: '',
+  fileRoots: () => [],
 })
 const emit = defineEmits<{
   'attachments-loaded': []
@@ -37,10 +45,12 @@ const markdown = new MarkdownIt({
   breaks: true,
   linkify: true,
 })
+allowLocalFileLinks(markdown)
 
 const previewRef = ref<HTMLElement>()
 const objectUrls = new Set<string>()
 let hydrationVersion = 0
+let imageController: AbortController | undefined
 
 function taskAttachmentPath(value: string) {
   const normalized = value.trim().replace(/\\/g, '/').replace(/[?#].*$/, '')
@@ -51,11 +61,13 @@ function taskAttachmentPath(value: string) {
 const originalImageRenderer = markdown.renderer.rules.image
 markdown.renderer.rules.image = (tokens, index, options, env, self) => {
   const token = tokens[index]
-  const path = env.taskUuid ? taskAttachmentPath(token.attrGet('src') || '') : ''
-  if (path) {
+  const source = token.attrGet('src') || ''
+  const path = env.taskUuid ? taskAttachmentPath(source) : ''
+  if (props.resolveImage || path) {
     const sourceIndex = token.attrIndex('src')
     if (sourceIndex >= 0) token.attrs?.splice(sourceIndex, 1)
-    token.attrSet('data-task-attachment-path', path)
+    if (props.resolveImage) token.attrSet('data-preview-image-source', source)
+    else token.attrSet('data-task-attachment-path', path)
   }
   return originalImageRenderer
     ? originalImageRenderer(tokens, index, options, env, self)
@@ -65,10 +77,15 @@ markdown.renderer.rules.image = (tokens, index, options, env, self) => {
 const originalLinkOpenRenderer = markdown.renderer.rules.link_open
 markdown.renderer.rules.link_open = (tokens, index, options, env, self) => {
   const token = tokens[index]
-  const path = env.taskUuid ? taskAttachmentPath(token.attrGet('href') || '') : ''
+  const href = token.attrGet('href') || ''
+  const path = env.taskUuid ? taskAttachmentPath(href) : ''
   if (path) {
     token.attrSet('href', '#')
     token.attrSet('data-task-attachment-path', path)
+  } else if (env.taskUuid && localFileTarget(href, env.fileRoots || [])) {
+    token.attrSet('href', '#')
+    token.attrSet(LOCAL_FILE_LINK_ATTRIBUTE, href)
+    token.attrSet('title', t('components.markdown.revealInFolder'))
   }
   return originalLinkOpenRenderer
     ? originalLinkOpenRenderer(tokens, index, options, env, self)
@@ -133,8 +150,26 @@ function normalizeMarkdown(text: string) {
     .trim()
 }
 
+const originalCodeRenderer = markdown.renderer.rules.code_inline
+markdown.renderer.rules.code_inline = (tokens, index, options, env, self) => {
+  const html = renderInlineFileCode(
+    markdown,
+    tokens[index].content,
+    env.fileRoots || [],
+    t('components.markdown.revealInFolder'),
+    env.sessionUuid || '',
+  )
+  if (env.taskUuid && html) return html
+  return originalCodeRenderer
+    ? originalCodeRenderer(tokens, index, options, env, self)
+    : self.renderToken(tokens, index, options)
+}
+
 const renderedContent = computed(() =>
-  markdown.render(normalizeMarkdown(props.content || ''), { taskUuid: props.taskUuid }),
+  markdown.render(normalizeMarkdown(props.content || ''), {
+    taskUuid: props.taskUuid,
+    fileRoots: props.fileRoots,
+  }),
 )
 
 watch(
@@ -145,8 +180,42 @@ watch(
 
 async function hydrateAttachmentImages() {
   const version = ++hydrationVersion
+  imageController?.abort()
+  const controller = new AbortController()
+  imageController = controller
   releaseObjectUrls()
   await nextTick()
+  if (version !== hydrationVersion) return
+  const resolveImage = props.resolveImage
+  if (resolveImage) {
+    const images = [...(previewRef.value?.querySelectorAll<HTMLImageElement>('img[data-preview-image-source]') || [])]
+    // 自定义资源加载保持有限并发，避免长文档同时请求大量本地文件。
+    let nextImage = 0
+    await Promise.all(Array.from({ length: Math.min(4, images.length) }, async () => {
+      while (nextImage < images.length && !controller.signal.aborted) {
+        const image = images[nextImage++]
+        if (!image) break
+        const source = image.dataset.previewImageSource || ''
+        try {
+          const blob = await resolveImage(source, controller.signal)
+          if (version !== hydrationVersion || !image.isConnected) continue
+          if (blob) {
+            const objectUrl = URL.createObjectURL(blob)
+            objectUrls.add(objectUrl)
+            image.src = objectUrl
+          } else {
+            image.src = source
+          }
+        } catch {
+          if (version !== hydrationVersion || !image.isConnected) continue
+          image.classList.add('attachment-load-failed')
+          image.title = t('components.markdown.attachmentLoadFailed')
+        }
+      }
+    }))
+    if (version === hydrationVersion) emit('attachments-loaded')
+    return
+  }
   if (!props.taskUuid || version !== hydrationVersion) return
   const images = [...(previewRef.value?.querySelectorAll<HTMLImageElement>('img[data-task-attachment-path]') || [])]
   await Promise.all(
@@ -175,6 +244,23 @@ async function hydrateAttachmentImages() {
 async function handleAttachmentClick(event: MouseEvent) {
   const target = event.target
   if (!(target instanceof Element)) return
+  const link = target.closest<HTMLAnchorElement>('a[href]')
+  if (link && props.openLink?.(link.getAttribute('href') || '')) {
+    event.preventDefault()
+    return
+  }
+  const fileAnchor = target.closest<HTMLAnchorElement>(`a[${LOCAL_FILE_LINK_ATTRIBUTE}]`)
+  const fileRef = fileAnchor?.getAttribute(LOCAL_FILE_LINK_ATTRIBUTE)
+  if (fileAnchor && fileRef && props.taskUuid) {
+    event.preventDefault()
+    try {
+      const result = await revealTaskOutputFile(props.taskUuid, fileRef, props.sessionUuid)
+      if (result === 'copied') message.info(t('components.markdown.revealUseDesktop'))
+    } catch (error) {
+      message.error(error instanceof Error && error.message ? error.message : t('components.markdown.revealFailed'))
+    }
+    return
+  }
   const anchor = target.closest<HTMLAnchorElement>('a[data-task-attachment-path]')
   const path = anchor?.dataset.taskAttachmentPath
   if (!anchor || !path || !props.taskUuid) return
@@ -202,6 +288,7 @@ function releaseObjectUrls() {
 
 onBeforeUnmount(() => {
   hydrationVersion += 1
+  imageController?.abort()
   releaseObjectUrls()
 })
 </script>

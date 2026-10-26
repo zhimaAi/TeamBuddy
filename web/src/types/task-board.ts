@@ -64,6 +64,9 @@ export interface TaskBoardTask {
   selected_pipeline_uuid?: string
   execution_mode?: import('@/types/pipeline').TaskExecutionMode
   execution_tool?: string
+  execution_tool_name?: string
+  execution_bound?: boolean
+  execution_index?: number
   // CLI 直接执行：模型由看板接口透出（若后端返回），缺省回退隐式步骤。
   execution_model?: string
   pipeline_name_snapshot?: string

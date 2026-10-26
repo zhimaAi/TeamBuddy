@@ -1,6 +1,8 @@
 import type { TaskNotification, TaskProgress } from '@/types/pipeline'
 import type { TaskWithDetails } from '@/types/task-detail'
 import { t } from '@/i18n'
+import { getActivePinia } from 'pinia'
+import { useAuthStore } from '@/stores/auth'
 
 const DATABASE_NAME = 'teamsboard-conversations'
 const DATABASE_VERSION = 1
@@ -45,7 +47,16 @@ export interface PersistentTaskConversationCache {
   pipelineExpanded: boolean
 }
 
-let databasePromise: Promise<IDBDatabase> | undefined
+const databasePromises = new Map<string, Promise<IDBDatabase>>()
+
+export function taskConversationCacheScope(): string {
+  return getActivePinia() ? useAuthStore().cloudUser?.accountScope || 'local' : 'local'
+}
+
+export function releaseTaskConversationCaches() {
+  for (const promise of databasePromises.values()) void promise.then(database => database.close()).catch(() => {})
+  databasePromises.clear()
+}
 
 function requestResult<T>(request: IDBRequest<T>) {
   return new Promise<T>((resolve, reject) => {
@@ -62,14 +73,15 @@ function transactionCompleted(transaction: IDBTransaction) {
   })
 }
 
-function openDatabase() {
-  if (databasePromise) return databasePromise
-  databasePromise = new Promise<IDBDatabase>((resolve, reject) => {
+function openDatabase(scope: string) {
+  const existing = databasePromises.get(scope)
+  if (existing) return existing
+  const databasePromise = new Promise<IDBDatabase>((resolve, reject) => {
     if (typeof indexedDB === 'undefined') {
       reject(new Error(t('components.errors.indexedDbUnsupported')))
       return
     }
-    const request = indexedDB.open(DATABASE_NAME, DATABASE_VERSION)
+    const request = indexedDB.open(`${DATABASE_NAME}-scoped-${encodeURIComponent(scope)}`, DATABASE_VERSION)
     request.onupgradeneeded = () => {
       const database = request.result
       if (!database.objectStoreNames.contains(NOTIFICATION_STORE)) {
@@ -86,24 +98,25 @@ function openDatabase() {
       const database = request.result
       database.onversionchange = () => {
         database.close()
-        databasePromise = undefined
+        if (databasePromises.get(scope) === databasePromise) databasePromises.delete(scope)
       }
       resolve(database)
     }
     request.onerror = () => {
-      databasePromise = undefined
+      if (databasePromises.get(scope) === databasePromise) databasePromises.delete(scope)
       reject(request.error || new Error(t('components.errors.indexedDbOpen')))
     }
     request.onblocked = () => {
-      databasePromise = undefined
+      if (databasePromises.get(scope) === databasePromise) databasePromises.delete(scope)
       reject(new Error(t('components.errors.indexedDbBlocked')))
     }
   })
+  databasePromises.set(scope, databasePromise)
   return databasePromise
 }
 
-export async function readTaskConversationCache(): Promise<PersistentTaskConversationCache> {
-  const database = await openDatabase()
+export async function readTaskConversationCache(scope = taskConversationCacheScope()): Promise<PersistentTaskConversationCache> {
+  const database = await openDatabase(scope)
   const transaction = database.transaction(
     [NOTIFICATION_STORE, TASK_VIEW_STORE, VIEW_STATE_STORE],
     'readonly',
@@ -150,8 +163,8 @@ export async function readTaskConversationCache(): Promise<PersistentTaskConvers
   }
 }
 
-export async function saveTaskNotificationSnapshot(items: TaskNotification[]) {
-  const database = await openDatabase()
+export async function saveTaskNotificationSnapshot(items: TaskNotification[], scope = taskConversationCacheScope()) {
+  const database = await openDatabase(scope)
   const transaction = database.transaction(NOTIFICATION_STORE, 'readwrite')
   transaction.objectStore(NOTIFICATION_STORE).put({
     key: NOTIFICATION_SNAPSHOT_KEY,
@@ -166,8 +179,9 @@ export async function saveTaskView(
   taskUuid: string,
   task: TaskWithDetails,
   progress: TaskProgress[],
+  scope = taskConversationCacheScope(),
 ) {
-  const database = await openDatabase()
+  const database = await openDatabase(scope)
   const transaction = database.transaction(TASK_VIEW_STORE, 'readwrite')
   transaction.objectStore(TASK_VIEW_STORE).put({
     taskUuid,
@@ -182,8 +196,9 @@ export async function saveTaskView(
 export async function saveTaskConversationViewState(
   taskUuid: string,
   pipelineExpanded: boolean,
+  scope = taskConversationCacheScope(),
 ) {
-  const database = await openDatabase()
+  const database = await openDatabase(scope)
   const transaction = database.transaction(VIEW_STATE_STORE, 'readwrite')
   transaction.objectStore(VIEW_STATE_STORE).put({
     key: VIEW_STATE_KEY,
@@ -195,15 +210,15 @@ export async function saveTaskConversationViewState(
   await transactionCompleted(transaction)
 }
 
-export async function deleteTaskView(taskUuid: string) {
-  const database = await openDatabase()
+export async function deleteTaskView(taskUuid: string, scope = taskConversationCacheScope()) {
+  const database = await openDatabase(scope)
   const transaction = database.transaction(TASK_VIEW_STORE, 'readwrite')
   transaction.objectStore(TASK_VIEW_STORE).delete(taskUuid)
   await transactionCompleted(transaction)
 }
 
-export async function removeDeletedTaskFromCache(taskUuid: string) {
-  const database = await openDatabase()
+export async function removeDeletedTaskFromCache(taskUuid: string, scope = taskConversationCacheScope()) {
+  const database = await openDatabase(scope)
   const transaction = database.transaction(
     [NOTIFICATION_STORE, TASK_VIEW_STORE, VIEW_STATE_STORE], 'readwrite',
   )
@@ -229,8 +244,8 @@ export async function removeDeletedTaskFromCache(taskUuid: string) {
   await completed
 }
 
-export async function deleteTaskViewsOutside(validTaskUuids: Set<string>) {
-  const database = await openDatabase()
+export async function deleteTaskViewsOutside(validTaskUuids: Set<string>, scope = taskConversationCacheScope()) {
+  const database = await openDatabase(scope)
   const transaction = database.transaction(TASK_VIEW_STORE, 'readwrite')
   const store = transaction.objectStore(TASK_VIEW_STORE)
   const cursorRequest = store.openCursor()

@@ -20,36 +20,35 @@
       @select-knowledge="openKnowledgePicker"
       @retry="reloadDocumentMention"
     />
+    <div v-if="notice" class="composer-notice" role="status">
+      <span>{{ notice }}</span>
+      <a-button v-if="locateStepUuid" type="link" size="small" @click="emit('select-step', locateStepUuid)">{{ t('workflows.task.detail.locateRunningStep') }}</a-button>
+    </div>
     <div
       class="composer-shell"
       :class="{ 'is-disabled': !canAsk && !running }"
     >
-      <!--
-        附件行只服务附件：# 引用在输入框里有自己的内联胶囊，不再重复出现在这里。
-        粘贴和「附件」按钮走的都是同一份附件列表，落点一致。
-      -->
+      <ComposerImageAttachments
+        :items="attachmentItems"
+        :disabled="fullyDisabled || submitting || preparingSubmission || isSavingPastedImages"
+        @remove="removeAttachment($event)"
+      />
       <div
-        v-if="attachmentItems.length"
+        v-if="fileAttachmentItems.length"
         class="attachment-chips"
         :aria-label="t('workflows.task.progress.attachedFiles')"
       >
         <button
-          v-for="attachment in attachmentItems"
+          v-for="attachment in fileAttachmentItems"
           :key="attachment.id"
           type="button"
           class="attachment-chip"
+          :disabled="fullyDisabled || submitting || preparingSubmission || isSavingPastedImages"
           :title="t('workflows.task.progress.removeAttachment', { name: attachment.name })"
           @click="removeAttachment(attachment.id)"
         >
           <span class="attachment-chip-icon-slot">
-            <PictureOutlined
-              v-if="attachment.isImage"
-              class="attachment-chip-icon"
-            />
-            <PaperClipOutlined
-              v-else
-              class="attachment-chip-icon"
-            />
+            <PaperClipOutlined class="attachment-chip-icon" />
             <CloseOutlined class="attachment-chip-close" aria-hidden="true" />
           </span>
           <span class="attachment-chip-name">{{ attachment.name }}</span>
@@ -57,7 +56,7 @@
       </div>
       <div
         class="composer-input"
-        :class="{ 'is-disabled': !canAsk, 'is-composing': isComposing }"
+        :class="{ 'is-disabled': !canAsk && !allowDraft, 'is-composing': isComposing }"
       >
         <div
           ref="inputLayerRef"
@@ -69,14 +68,21 @@
             :key="index"
             :class="{
               'mention-token': token.reference,
+              'mention-token-knowledge': token.isKnowledge,
               'mention-token-invalid': token.invalid,
               'mention-token-fragment': token.isFragment,
               'mention-token-clickable': token.isFragment,
             }"
+            :title="token.isKnowledge ? token.label : undefined"
             @mousedown="onMentionTokenClick(token)"
           >
             <template v-if="token.reference">
+              <span v-if="token.isKnowledge" class="knowledge-reference-content">
+                <img :src="knowledgeReferenceIcon" alt="" aria-hidden="true" />
+                <span>{{ token.label }}</span>
+              </span>
               <svg
+                v-else
                 class="mention-token-icon"
                 viewBox="0 0 16 16"
                 fill="none"
@@ -100,7 +106,7 @@
           ref="textareaRef"
           :value="modelValue"
           rows="3"
-          :disabled="!canAsk"
+          :disabled="fullyDisabled || submitting || preparingSubmission || (!canAsk && !allowDraft)"
           :placeholder="effectivePlaceholder"
           :aria-label="t('workflows.task.progress.messageAria')"
           @input="handleInput"
@@ -132,6 +138,7 @@
             （例如基于知识库和附件创建任务）。
           -->
           <ComposerPlusMenu
+            v-if="!executionTask"
             :disabled="fullyDisabled"
             :show-task-documents="Boolean(documentsStep) && !fullyDisabled"
             :show-knowledge="true"
@@ -139,6 +146,10 @@
             @documents="taskDocumentsOpen = true"
             @knowledge="openKnowledgePicker"
           />
+          <template v-else>
+            <button type="button" class="tool-button" :disabled="fullyDisabled" @click="openKnowledgePicker"><img class="tool-button-icon composer-design-icon" :src="knowledgeIcon" alt="" aria-hidden="true" />{{ t('workflows.task.progress.knowledge') }}</button>
+            <button type="button" class="tool-button" :disabled="fullyDisabled" @click="fileInputRef?.click()"><img class="tool-button-icon composer-design-icon" :src="attachmentIcon" alt="" aria-hidden="true" />{{ t('workflows.task.progress.attachment') }}</button>
+          </template>
           <button
             v-if="showWorkDirectory"
             type="button"
@@ -159,7 +170,7 @@
             @busy="branchChanging = $event"
           />
           <CliRuntimePicker
-            v-if="runtimeEnabled && !fullyDisabled"
+            v-if="runtimeEnabled && !fullyDisabled && (!executionTask || executionTask.execution_mode === 'cli')"
             v-model:open="cliPickerOpen"
             :cli-options="cliOptions"
             :cli-loading="cliLoading"
@@ -168,6 +179,8 @@
             :model-options="availableModels"
             :model-loading="modelLoading"
             :model-counts="modelCounts"
+            :show-execution-switch="Boolean(executionTask)"
+            @switch-execution="switchExecution"
             @select-cli="handleCliChange"
             @select-model="handleModelChange"
           >
@@ -181,6 +194,7 @@
             >
               <img
                 class="tool-button-icon cli-brand-icon"
+                :class="{ 'composer-design-icon': selectedCliLogo === cliTriggerIcon }"
                 :src="selectedCliLogo"
                 alt=""
                 aria-hidden="true"
@@ -188,8 +202,16 @@
               <span>{{ runtimeTriggerLabel }}</span>
             </button>
           </CliRuntimePicker>
+          <a-dropdown v-if="executionTask && executionTask.execution_mode !== 'cli'" v-model:open="executionMenuOpen" :trigger="['click']">
+            <button type="button" class="tool-button execution-picker-trigger" :disabled="fullyDisabled || submitting" :title="executionLabel" :aria-label="t('workflows.task.assign.executionMode')" aria-haspopup="menu" :aria-expanded="executionMenuOpen"><TeamOutlined v-if="executionTask.execution_mode === 'expert_group'" class="tool-button-icon" /><span v-else class="tool-button-icon composer-pipeline-icon" :style="{ '--pipeline-icon': pipelineIconMask }" aria-hidden="true" /><span>{{ executionLabel }}</span></button>
+            <template #overlay><a-menu :selected-keys="[currentStep?.uuid || '']">
+              <a-menu-item key="switch" @click="switchExecution"><SwapOutlined class="execution-switch-icon" /> <span class="execution-switch-label">{{ t('workflows.task.detail.switchExecutionMode') }}</span></a-menu-item>
+              <a-menu-item v-for="step in executionSteps" :key="step.uuid" @click="selectExecutionStep(step.uuid)"><span class="execution-step-name"><img :src="resolveAgentAvatar(step)" alt="" />{{ step.name }}</span></a-menu-item>
+            </a-menu></template>
+          </a-dropdown>
+          <button v-if="executionTask && documentsStep" type="button" class="tool-button" :disabled="fullyDisabled" @click="taskDocumentsOpen = true"><img class="tool-button-icon composer-design-icon" :src="documentIcon" alt="" aria-hidden="true" />{{ t('workflows.task.progress.documents') }}</button>
           <span
-            v-if="runtimeEnabled && !fullyDisabled"
+            v-if="runtimeEnabled && !fullyDisabled && !executionTask"
             class="tool-divider"
             aria-hidden="true"
           />
@@ -236,7 +258,7 @@
             @click="handleSubmit"
           >
             <LoadingOutlined
-              v-if="submitting || preparingSubmission"
+              v-if="submitting || preparingSubmission || (showAdvanceAction && advanceAction?.loading)"
               spin
             />
             <span
@@ -284,33 +306,46 @@ import {
   FolderOpenOutlined,
   LoadingOutlined,
   PaperClipOutlined,
-  PictureOutlined,
+  SwapOutlined,
+  TeamOutlined,
 } from '@ant-design/icons-vue'
 import { message } from 'ant-design-vue'
 import agentIcon from '@/assets/icons/task-composer-agent.svg'
+import knowledgeIcon from '@/assets/icons/task-composer-knowledge.svg'
+import knowledgeReferenceIcon from '@/assets/icons/task-knowledge-reference.svg'
+import attachmentIcon from '@/assets/icons/task-composer-attachment.svg'
+import documentIcon from '@/assets/icons/task-composer-documents.svg'
+import cliTriggerIcon from '@/assets/icons/task-composer-cli-trigger.svg'
+import cliFallbackIcon from '@/assets/icons/task-composer-cli.svg'
+import pipelineIcon from '@/assets/icons/task-composer-pipeline.svg'
+import { resolveAgentAvatar } from '@/config/agentAvatars'
+import type { TaskWithDetails } from '@/types/task-detail'
 import { cliLogo } from '@/composables/useCliLogo'
 import { useChatRuntimeDefaults } from '@/composables/useChatRuntimeDefaults'
 import { useCliModelOptions } from '@/composables/useCliModelOptions'
 import { useTaskImageAttachments } from '@/composables/useTaskImageAttachments'
+import { readComposerDraftReferences, writeComposerDraftReferences } from '@/composables/useComposerDraft'
 import {
   buildKnowledgeFolderPaths,
   buildKnowledgeReferenceBlock,
   countCharacters,
   KNOWLEDGE_REFERENCE_CHAR_LIMIT,
   loadKnowledgeReferenceContent,
+  knowledgeDocumentName,
   spillKnowledgeReference,
   validateKnowledgeReference,
 } from '@/composables/useKnowledgeReferences'
 import { normalizeClipboardText } from '@/utils/clipboard'
 import type { ChatComposerSubmission } from '@/types/task-attachments'
 import type { PipelineStep } from '@/types/pipeline'
-import type { KnowledgeReferenceDraft, KnowledgeReferenceFragment } from '@/types/knowledge-reference'
+import type { KnowledgeDocumentReference, KnowledgeReferenceDraft, KnowledgeReferenceFragment } from '@/types/knowledge-reference'
 import type { KnowledgeDocument } from '@/api/knowledge'
 import { listKnowledgeFolders } from '@/api/knowledge'
 import { useKnowledgeReferenceStore } from '@/stores/knowledge-reference'
 import AgentPromptDrawer from './AgentPromptDrawer.vue'
 import CliRuntimePicker from './CliRuntimePicker.vue'
 import ComposerPlusMenu from './ComposerPlusMenu.vue'
+import ComposerImageAttachments from './ComposerImageAttachments.vue'
 import DocumentMentionMenu from './DocumentMentionMenu.vue'
 import KnowledgeDocumentPickerModal from './KnowledgeDocumentPickerModal.vue'
 import TaskDocumentsDrawer from './TaskDocumentsDrawer.vue'
@@ -350,11 +385,17 @@ const props = withDefaults(
     showWorkDirectory?: boolean
     workDirectory?: string
     fullyDisabled?: boolean
+    allowDraft?: boolean
+    draftKey?: string
+    notice?: string
+    locateStepUuid?: string
     disabledReason?: string
 	expertMembers?: Array<{ uuid: string; name: string; avatar?: string; member_role?: 'leader' | 'member' | '' }>
     /** 需求 2204：看板-任务详情的 CLI 任务输入框不展示 Agent 提示词入口。 */
     hideAgentPrompt?: boolean
     submitButtonLabel?: string
+    advanceAction?: { label: string; disabled: boolean; loading: boolean }
+    executionTask?: TaskWithDetails
   }>(),
   {
     submitting: false,
@@ -379,11 +420,26 @@ const emit = defineEmits<{
   'update:modelValue': [value: string]
   submit: [submission: ChatComposerSubmission]
   stop: []
+  advance: []
   'prompt-saved': []
   'select-work-directory': []
+  'switch-execution': []
+  'select-step': [uuid: string]
 }>()
 
 const agentPromptOpen = ref(false)
+const executionMenuOpen = ref(false)
+const executionSteps = computed(() => [...(props.executionTask?.steps || [])].sort((a, b) => a.sort_order - b.sort_order))
+const executionLabel = computed(() => props.executionTask?.execution_mode === 'expert_group' ? props.executionTask.expert_group_name_snapshot || t('agents.expertTeam') : props.executionTask?.pipeline_name_snapshot || t('workflows.task.common.pipeline'))
+function switchExecution() {
+  cliPickerOpen.value = false
+  executionMenuOpen.value = false
+  emit('switch-execution')
+}
+function selectExecutionStep(uuid: string) {
+  executionMenuOpen.value = false
+  emit('select-step', uuid)
+}
 const taskDocumentsOpen = ref(false)
 // S-UI-19: 「从资料库中选择」选择器（# 菜单固定项与工具按钮共用）
 const knowledgePickerOpen = ref(false)
@@ -418,7 +474,10 @@ const branchChanging = ref(false)
  * 登记先留着，撤销把标记原样放回来就能立刻恢复成胶囊、提交时也还能换成路径。
  * 不在正文里的登记本身无害 —— 渲染区间按正文匹配，序列化也是按标记替换。
  */
+const composerDraftIdentity = computed(() => props.draftKey || props.taskUuid)
 const documentReferences = ref<DocumentReference[]>([])
+// 引用的归属独立于正在更新的 Props，避免会话切换时写入目标会话。
+let documentReferencesDraftKey = composerDraftIdentity.value
 // S-UI-13: 选中片段预览状态（点击输入框里的片段胶囊触发，DocumentMentionMenu 用 'preview' 模式展示）
 const fragmentPreviewState = reactive({
   open: false,
@@ -439,7 +498,7 @@ const {
   addFiles,
   addImages,
   uploadAttachmentsToTask,
-} = useTaskImageAttachments()
+} = useTaskImageAttachments(composerDraftIdentity)
 const {
   cliLoading,
   cliOptions,
@@ -452,10 +511,12 @@ const {
   resetModelOptions,
 } = useCliModelOptions()
 const { getChatRuntimeSelection, saveChatRuntimeSelection } = useChatRuntimeDefaults()
-const runtimeEnabled = computed(() => Boolean(props.taskUuid && props.currentStep))
+const runtimeEnabled = computed(() => Boolean(props.taskUuid && (props.currentStep || props.executionTask?.execution_mode === 'cli')))
 const documentsStep = computed(() => props.documentStep || props.currentStep)
+const showAdvanceAction = computed(() => Boolean(props.advanceAction) && !props.modelValue.trim() && !hasAttachments.value)
 const resolvedSubmitButtonLabel = computed(
   () =>
+    (showAdvanceAction.value ? props.advanceAction?.label : '') ||
     props.submitButtonLabel ||
     (props.startMode && !props.modelValue.trim()
       ? t('workflows.task.progress.begin')
@@ -469,24 +530,33 @@ const availableModels = computed(() => {
   }
   return result
 })
+const fileAttachmentItems = computed(() => attachmentItems.value.filter((item) => !item.isImage))
 /** 附件只在上方附件行里，正文可能为空，所以「只有附件」也算可发送 */
 const hasAttachments = computed(() => attachmentItems.value.length > 0)
 const canSubmit = computed(
   () =>
     props.canAsk &&
+    !props.fullyDisabled &&
+    !props.running &&
     !props.submitting &&
     !branchChanging.value &&
     !preparingSubmission.value &&
     !isSavingPastedImages.value &&
-    (Boolean(props.modelValue.trim()) || hasAttachments.value || props.startMode) &&
-    (!runtimeEnabled.value || Boolean(selectedCliType.value && selectedModelName.value)),
+    (showAdvanceAction.value
+      ? !props.advanceAction?.disabled && !props.advanceAction?.loading
+      : (Boolean(props.modelValue.trim()) || hasAttachments.value || props.startMode) &&
+        (!runtimeEnabled.value || Boolean(selectedCliType.value && selectedModelName.value))),
 )
 const selectedCliLabel = computed(
   () =>
     cliOptions.value.find((item) => item.type === selectedCliType.value)?.name ||
     selectedCliType.value,
 )
-const selectedCliLogo = computed(() => cliLogo(selectedCliType.value))
+const pipelineIconMask = `url("${pipelineIcon}")`
+const selectedCliLogo = computed(() => {
+  const logo = cliLogo(selectedCliType.value)
+  return logo === cliFallbackIcon ? cliTriggerIcon : logo
+})
 const runtimeTriggerLabel = computed(() => {
   if (selectedCliType.value && selectedModelName.value) {
     return `${selectedCliLabel.value} / ${selectedModelName.value}`
@@ -536,6 +606,11 @@ const mentionTokens = computed(() => {
       .filter((reference) => reference.kind === 'knowledge' && reference.knowledge.invalid)
       .map((reference) => reference.marker),
   )
+  const knowledgeMarkers = new Set(
+    documentReferences.value
+      .filter((reference) => reference.kind === 'knowledge')
+      .map((reference) => reference.marker),
+  )
   return [
     ...splitDocumentMentionTokens(
       props.modelValue,
@@ -549,10 +624,12 @@ const mentionTokens = computed(() => {
         fragmentText:
           reference.kind === 'knowledge' ? reference.knowledge.fragment?.text : undefined,
       })),
-    ).map((token) =>
-      token.reference && invalidMarkers.has(token.text) ? { ...token, invalid: true } : token,
-    ),
-    { text: '\n', reference: false },
+    ).map((token) => ({
+      ...token,
+      isKnowledge: token.reference && knowledgeMarkers.has(token.text),
+      invalid: token.reference && invalidMarkers.has(token.text),
+    })),
+    { text: '\n', reference: false, isKnowledge: false, invalid: false },
   ]
 })
 
@@ -686,22 +763,6 @@ interface TaskFileDocumentReference {
   name: string
   kind: 'task-file'
   absolutePath: string
-}
-
-interface KnowledgeDocumentReference {
-  id: string
-  marker: string
-  name: string
-  kind: 'knowledge'
-  knowledge: {
-    uuid: string
-    filePath: string
-    folderPath: string
-    /** 选中片段；null 表示整篇文档 */
-    fragment: KnowledgeReferenceFragment | null
-    /** 提交前校验失败（文档已入回收站或磁盘文件不存在）→ 胶囊显示「引用失效」 */
-    invalid: boolean
-  }
 }
 
 type DocumentReference = TaskFileDocumentReference | KnowledgeDocumentReference
@@ -1000,7 +1061,7 @@ function handleComposerKeydown(event: KeyboardEvent) {
 
 function syncDocumentMention(textarea: HTMLTextAreaElement) {
   if (!documentMentionAvailable.value) {
-    documentMentionContext.value = null
+    closeDocumentMention()
     return
   }
   const context = resolveDocumentMentionContext(
@@ -1008,15 +1069,16 @@ function syncDocumentMention(textarea: HTMLTextAreaElement) {
     textarea.selectionStart ?? textarea.value.length,
   )
   if (!context) {
-    documentMentionContext.value = null
+    closeDocumentMention()
     return
   }
   const dismissed = documentMentionDismissed.value
-  // Esc 收起后只有查询词再次变化才重新弹出，避免刚关掉又被同一次输入顶开
+  // 仅抑制尚未变化的同一次引用，避免刚关掉又被点击事件重新顶开
   if (dismissed && dismissed.start === context.start && dismissed.query === context.query) {
     documentMentionContext.value = null
     return
   }
+  documentMentionDismissed.value = null
   documentMentionContext.value = context
 }
 
@@ -1092,7 +1154,7 @@ function handleComposerClick(event: MouseEvent) {
   // 这里不再手动触发，避免出现"click 开、mousedown 关"的来回闪烁。
 }
 
-/** 用户按 Esc 主动收起：记住当前上下文，改词之前不再自动弹出 */
+/** 用户主动收起：记住当前上下文，改词之前不再自动弹出 */
 function dismissDocumentMention() {
   const context = documentMentionContext.value
   documentMentionDismissed.value = context ? { ...context } : null
@@ -1202,11 +1264,6 @@ function insertDocumentReference(file: MentionableTaskFile) {
   const context = documentMentionContext.value
   if (!context) return
   insertDocumentMarker(file, context)
-}
-
-/** 知识库文档的真实文件名：优先用 file_path 末段，取不到时退化用标题 + 扩展名 */
-function knowledgeDocumentName(document: KnowledgeDocument) {
-  return basenameFromPath(document.file_path) || `${document.title}.${document.ext}`
 }
 
 /** 按需加载一次文件夹路径表；失败时退化为默认文件夹，不阻断引用（位置仅用于提示来源） */
@@ -1319,6 +1376,13 @@ function consumeKnowledgeReferenceDrafts() {
   void nextTick(resizeTextarea)
 }
 
+/** 从任务详情等外部入口打开产出文档抽屉：没有步骤上下文时返回 false，由调用方自行兜底 */
+function openDocuments(): boolean {
+  if (!documentsStep.value) return false
+  taskDocumentsOpen.value = true
+  return true
+}
+
 /** 产出文档抽屉里点「引用到输入框」：不依赖 # 触发上下文，直接在光标处插入标记 */
 function handleDrawerReference(file: TaskFileNode) {
   if (!file.absolute_path) return
@@ -1383,16 +1447,21 @@ type AttachmentAdder = (files: File[]) => Array<{ marker: string }>
  * 正文里不写任何占位标记，markdown 引用等上传完成后再在提交时拼到消息末尾。
  */
 async function attachFiles(files: File[], add: AttachmentAdder, failureText: string) {
+  if (props.submitting || preparingSubmission.value) return
+  const taskUuid = props.taskUuid
+  const draftKey = composerDraftIdentity.value
   let added: Array<{ marker: string }> = []
   try {
     added = add(files)
-    await uploadAttachmentsToTask(props.taskUuid)
+    await uploadAttachmentsToTask(taskUuid)
     await nextTick()
-    textareaRef.value?.focus()
-    resizeTextarea()
+    if (draftKey === composerDraftIdentity.value) {
+      textareaRef.value?.focus()
+      resizeTextarea()
+    }
   } catch (error) {
     // 撤掉这一批，避免附件行里留下没上传成功的条目
-    added.forEach((attachment) => removeAttachment(attachment.marker))
+    added.forEach((attachment) => removeAttachment(attachment.marker, draftKey))
     message.error(error instanceof Error ? error.message : failureText)
   }
 }
@@ -1445,6 +1514,7 @@ function serializeDocumentReferences(value: string) {
 async function buildKnowledgeReferenceContent(
   reference: KnowledgeDocumentReference,
   content: string,
+  taskUuid: string,
 ): Promise<{ content: string; displayNote: string; spilledPath: string } | null> {
   const block = {
     name: reference.name,
@@ -1456,9 +1526,9 @@ async function buildKnowledgeReferenceContent(
     return { content: buildKnowledgeReferenceBlock(block), displayNote: '', spilledPath: '' }
   }
   try {
-    const spilled = await spillKnowledgeReference(props.taskUuid, reference.name, content)
+    const spilled = await spillKnowledgeReference(taskUuid, reference.name, content)
     // 新产出文件立刻进入「产出文档」索引，用户切到抽屉即可看到
-    invalidateDocumentMentionIndex(props.taskUuid)
+    invalidateDocumentMentionIndex(taskUuid)
     return {
       content: buildKnowledgeReferenceBlock({ ...block, spilledPath: spilled.absolute_path }),
       displayNote: t('workflows.task.progress.referenceSpillNote', {
@@ -1490,7 +1560,9 @@ async function buildKnowledgeReferenceContent(
 async function resolveKnowledgeReferences(promptContent: string, displayContent: string) {
   let content = promptContent
   let display = displayContent
-  for (const reference of documentReferences.value) {
+  const taskUuid = props.taskUuid
+  const references = [...documentReferences.value]
+  for (const reference of references) {
     if (reference.kind !== 'knowledge') continue
     if (!content.includes(reference.marker)) continue
 
@@ -1506,7 +1578,7 @@ async function resolveKnowledgeReferences(promptContent: string, displayContent:
       reference.knowledge.uuid,
       reference.knowledge.fragment,
     )
-    const resolved = await buildKnowledgeReferenceContent(reference, text)
+    const resolved = await buildKnowledgeReferenceContent(reference, text, taskUuid)
     if (!resolved) return null
     content = content.split(reference.marker).join(resolved.content)
     if (resolved.displayNote) {
@@ -1519,6 +1591,11 @@ async function resolveKnowledgeReferences(promptContent: string, displayContent:
 
 async function handleSubmit() {
   if (!canSubmit.value) return
+  if (showAdvanceAction.value) {
+    emit('advance')
+    return
+  }
+  const identity = runtimeIdentity.value
   closeDocumentMention()
 	expertMentionOpen.value = false
   preparingSubmission.value = true
@@ -1531,7 +1608,7 @@ async function handleSubmit() {
     // 产出文件引用先按现状序列化；知识库引用再做校验 / 取值 / 落盘 / 替换
     const promptContent = serializeDocumentReferences(displayContent)
     const resolved = await resolveKnowledgeReferences(promptContent, displayContent)
-    if (!resolved) return
+    if (!resolved || identity !== runtimeIdentity.value) return
     emit('submit', {
       content: resolved.content.trim(),
       // 聊天记录展示原始输入（保留 #[名称] 标记）：绝对路径与引用正文只有 CLI 需要，
@@ -1573,12 +1650,13 @@ async function initialiseRuntimeConfig() {
   const requestId = ++runtimeRequestId
   runtimeTouched.value = false
   const cached = getChatRuntimeSelection(props.taskUuid, props.currentStep?.uuid || '')
-  selectedCliType.value = cached?.cli_type || props.cliType || props.currentStep?.cli_type || ''
+  selectedCliType.value = cached?.cli_type || props.cliType || props.currentStep?.cli_type || props.executionTask?.execution_tool || ''
   selectedModelName.value =
     cached?.model_name ||
     props.modelName ||
     props.currentStep?.model_name ||
     props.currentStep?.model ||
+    props.executionTask?.execution_model ||
     ''
   if (!runtimeEnabled.value) {
     resetModelOptions()
@@ -1645,9 +1723,8 @@ function handleModelChange(model: string) {
 
 onMounted(() => {
   resizeTextarea()
-  // S-UI-13: 点击组件外部任意位置关闭片段预览。
-  // mousedown 比 click 更早触发，能在用户聚焦其他控件之前完成关闭，避免闪烁。
-  document.addEventListener('mousedown', handleDocumentMousedown)
+  // 捕获阶段处理外部点击，避免其他控件阻止冒泡后文档选择菜单无法关闭。
+  document.addEventListener('mousedown', handleDocumentMousedown, true)
   // selectionchange 是浏览器原生的「光标 / 选区变化」事件，覆盖 click、方向键、
   // Backspace、Delete、粘贴、程序设置 selection 等所有路径，
   // 是 preview 跟随 caret 同步最稳的事件源。
@@ -1655,12 +1732,12 @@ onMounted(() => {
 })
 
 onUnmounted(() => {
-  document.removeEventListener('mousedown', handleDocumentMousedown)
+  document.removeEventListener('mousedown', handleDocumentMousedown, true)
   document.removeEventListener('selectionchange', syncFragmentPreview)
 })
 
 /**
- * S-UI-13: 点击组件外部任意位置关闭片段预览。
+ * 点击菜单外部关闭文档选择菜单；片段预览仍按光标位置同步。
  * mousedown 比 click 更早触发，能在用户聚焦其他控件之前完成关闭，避免闪烁。
  *
  * 决策不再直接 closeFragmentPreview，而是交给 syncFragmentPreview 统一处理：
@@ -1674,19 +1751,39 @@ function handleDocumentMousedown(event: MouseEvent) {
   const menu = documentMentionMenuRef.value?.menuRef
   const tokenEl = (target as Element).closest?.('.mention-token-clickable')
   if (menu?.contains(target)) return
+  if (documentMentionOpen.value) dismissDocumentMention()
   if (tokenEl) return
   // 其他位置：提前同步一次，click 期间 selectionchange 再调一次，最终态由 sync 决定
   syncFragmentPreview()
 }
+
+// 同步保存，确保路由卸载或任务切换前最后一次选择也已写入草稿。
+// 产出文件仍通过任务文件索引重新登记，避免缓存失效的绝对路径。
+function persistKnowledgeReferences() {
+  if (documentReferencesDraftKey !== composerDraftIdentity.value) return
+  writeComposerDraftReferences(
+    documentReferencesDraftKey,
+    documentReferences.value.filter((reference): reference is KnowledgeDocumentReference => reference.kind === 'knowledge'),
+  )
+}
+
+watch(documentReferences, persistKnowledgeReferences, { deep: true, flush: 'sync' })
 
 watch(
   runtimeIdentity,
   () => {
     closeDocumentMention()
     cliPickerOpen.value = false
+    executionMenuOpen.value = false
     knowledgePickerOpen.value = false
-    documentReferences.value = []
-    clearImageAttachments()
+    documentReferencesDraftKey = composerDraftIdentity.value
+    documentReferences.value = readComposerDraftReferences(composerDraftIdentity.value)
+    // 恢复去重序号，避免返回页面后再选同名文档生成已有的 marker。
+    documentReferenceSequence = documentReferences.value.reduce(
+      (sequence, reference) => Math.max(sequence, Number(reference.marker.match(/ · (\d+)\]$/)?.[1] || 0)),
+      0,
+    )
+    closeFragmentPreview()
     bindDocumentMentionIndex(props.taskUuid)
     // 挂载即预取产出文件列表，用户真正输入 # 时过滤已退化为内存计算
     void loadDocumentMentionIndex()
@@ -1715,6 +1812,8 @@ watch(
   () => props.modelValue,
   (value) => {
     nextTick(resizeTextarea)
+    // 更新 Props 时正文可能先触发监听；等待 runtimeIdentity 恢复目标会话的引用。
+    if (documentReferencesDraftKey !== composerDraftIdentity.value) return
     // 同步清理「既不在 value 里、候选池里也没同名」的引用：
     // - 不在 value 里但候选池里仍有同名（task-file 还在 files / knowledge 引用由选择器管理），
     //   用户大概率是剪切走 marker 准备粘贴到别处，保留登记让粘贴后能直接渲染。
@@ -1731,6 +1830,8 @@ watch(
     }
     // 手输 / 粘贴 / 外部 v-model 修改：把恰好写对的 #[xxx] 补登到引用表（首次出现的 marker）
     reconcileDocumentReferences(value)
+    // 正文清空后撤销时，引用登记可能未变化，也需要重新关联到恢复的草稿。
+    persistKnowledgeReferences()
   },
 )
 
@@ -1738,20 +1839,31 @@ watch(
 // 知识库选择器新登记等场景下的「恰好写对」的 #[xxx]
 watch(
   () => mentionCandidateMap.value,
-  () => reconcileDocumentReferences(props.modelValue),
+  () => {
+    if (documentReferencesDraftKey !== composerDraftIdentity.value) return
+    reconcileDocumentReferences(props.modelValue)
+  },
 )
 
-function resetAfterSubmit() {
+function resetAfterSubmit(draftKey = composerDraftIdentity.value) {
+  clearImageAttachments(draftKey)
+  writeComposerDraftReferences(draftKey, [])
+  if (draftKey !== composerDraftIdentity.value) return
   closeDocumentMention()
   documentReferences.value = []
   documentReferenceSequence = 0
-  clearImageAttachments()
 }
 
-defineExpose({ resetAfterSubmit })
+defineExpose({ resetAfterSubmit, openDocuments })
 </script>
 
 <style scoped>
+.composer-notice { display: flex; align-items: center; flex-wrap: wrap; gap: 4px; margin-bottom: 8px; color: #8c8c8c; font-size: 12px; line-height: 20px; }
+.execution-picker-trigger span { overflow: hidden; max-width: 180px; text-overflow: ellipsis; white-space: nowrap; }
+.execution-step-name { display: inline-flex; align-items: center; gap: 8px; }
+.execution-step-name img { width: 20px; height: 20px; border-radius: 50%; object-fit: cover; }
+.execution-switch-label, .execution-switch-icon { color: #3157e2; }
+
 .expert-mention-menu {
   position: absolute;
   z-index: 12;
@@ -1897,6 +2009,50 @@ defineExpose({ resetAfterSubmit })
   transform: translateY(-50%);
   color: rgba(0, 0, 0, 0.5);
   pointer-events: none;
+}
+/* 原始标记保留 textarea 的排版宽度，独立绘制 12px 标签，避免改变光标与选区的位置。 */
+.mention-token-knowledge {
+  padding: 0;
+  background: transparent;
+  -webkit-text-stroke: 0;
+}
+.mention-token-knowledge > .mention-token-label {
+  color: transparent;
+}
+.knowledge-reference-content {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  width: max-content;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.05);
+  color: #262626;
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 20px;
+  transform: translate(-50%, -50%);
+  box-sizing: border-box;
+}
+.knowledge-reference-content img {
+  flex: 0 0 12px;
+}
+.knowledge-reference-content > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mention-token-fragment .knowledge-reference-content {
+  color: #3157e2;
+  background: #e5efff;
+}
+.mention-token-invalid .knowledge-reference-content {
+  color: #fb363f;
+  background: #fef2f2;
 }
 /*
  * 不可编辑时不做富文本渲染，直接显示原生文本。
@@ -2089,6 +2245,22 @@ defineExpose({ resetAfterSubmit })
   width: 16px;
   height: 16px;
   flex: 0 0 auto;
+}
+.composer-design-icon {
+  width: 14px;
+  height: 14px;
+}
+.composer-pipeline-icon {
+  display: inline-flex;
+  border-radius: 4px;
+  background: #3157e2;
+}
+.composer-pipeline-icon::before {
+  content: '';
+  width: 16px;
+  height: 16px;
+  background: #fff;
+  mask: var(--pipeline-icon) center / 16px 16px no-repeat;
 }
 .cli-brand-icon {
   object-fit: contain;

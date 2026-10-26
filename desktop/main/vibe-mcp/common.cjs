@@ -4,7 +4,10 @@ const fs = require('node:fs/promises')
 const path = require('node:path')
 
 const CHANNEL_MCP = '回传通道：mcp'
-const SERVER_NAME = 'teamsboard'
+const SERVER_NAME = 'teambuddy'
+// 旧版本注入过的 server 名。仍然按「已配置」处理，漏检会在用户配置里重复注入一份。
+const LEGACY_SERVER_NAMES = ['teamsboard']
+const SERVER_NAMES = [SERVER_NAME, ...LEGACY_SERVER_NAMES]
 
 function mcpBackendPath(command) {
   return typeof command === 'string' && path.isAbsolute(command) ? command : ''
@@ -23,6 +26,10 @@ async function readConfig(file) {
 function serverMapHas(map, name) {
   return Boolean(map) && typeof map === 'object' && !Array.isArray(map)
     && Object.prototype.hasOwnProperty.call(map, name)
+}
+
+function serverMapHasAny(map, names) {
+  return names.some(name => serverMapHas(map, name))
 }
 
 function projectEntry(projects, workDir) {
@@ -79,7 +86,8 @@ function stripJsonConfig(text) {
   return out.replace(/,(\s*[}\]])/g, '$1')
 }
 
-function jsonHasTeamsboard(text, workDir) {
+// 新旧 server 名都算「用户已配置」，避免改名后在用户配置里重复注入。
+function jsonHasMcpServer(text, workDir) {
   if (text == null || text === '') return false
   let data
   try {
@@ -88,12 +96,12 @@ function jsonHasTeamsboard(text, workDir) {
     return false
   }
   if (!data || typeof data !== 'object' || Array.isArray(data)) return false
-  if (serverMapHas(data.mcpServers, SERVER_NAME) || serverMapHas(data.mcp_servers, SERVER_NAME)) {
+  if (serverMapHasAny(data.mcpServers, SERVER_NAMES) || serverMapHasAny(data.mcp_servers, SERVER_NAMES)) {
     return true
   }
   const project = projectEntry(data.projects, workDir)
   return Boolean(project) && (
-    serverMapHas(project.mcpServers, SERVER_NAME) || serverMapHas(project.mcp_servers, SERVER_NAME)
+    serverMapHasAny(project.mcpServers, SERVER_NAMES) || serverMapHasAny(project.mcp_servers, SERVER_NAMES)
   )
 }
 
@@ -117,7 +125,7 @@ function withMcpChannel(prompt, channel) {
 async function prepareJsonMcp({ backendPath, workDir, files }) {
   for (const file of files.filter(Boolean)) {
     const text = await readConfig(file)
-    if (text == null || jsonHasTeamsboard(text, workDir)) {
+    if (text == null || jsonHasMcpServer(text, workDir)) {
       return { channel: 'script', prefixArgs: [] }
     }
   }
@@ -132,7 +140,9 @@ async function prepareJsonMcp({ backendPath, workDir, files }) {
 module.exports = {
   CHANNEL_MCP,
   SERVER_NAME,
-  jsonHasTeamsboard,
+  LEGACY_SERVER_NAMES,
+  SERVER_NAMES,
+  jsonHasMcpServer,
   mcpBackendPath,
   mcpConfigDocument,
   prepareJsonMcp,

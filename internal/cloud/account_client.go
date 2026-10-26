@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 
+	"github.com/google/uuid"
 	"goteams-client/internal/secrets"
 )
 
@@ -14,9 +15,16 @@ func (c *Client) ForAccount(ctx context.Context, store secrets.Store, userID str
 	bound := *c
 	bound.secretStore = store
 	bound.userID = userID
+	bound.sessionScope = uuid.NewString()
 	boundHTTP := *c.httpClient
 	boundHTTP.Transport = &accountTransport{session: ctx, base: c.httpClient.Transport}
 	bound.httpClient = &boundHTTP
+	// 大文件上传也绑定本次登录，切换账号或退出时取消旧上传。
+	if c.transfer != nil {
+		boundTransfer := *c.transfer
+		boundTransfer.Transport = &accountTransport{session: ctx, base: c.transfer.Transport}
+		bound.transfer = &boundTransfer
+	}
 	return &bound
 }
 
@@ -56,3 +64,14 @@ func (b *accountResponseBody) Close() error {
 	defer b.cleanup()
 	return b.ReadCloser.Close()
 }
+
+// WithoutCredentials is used before authentication. Credentials of the active
+// server must never accompany a login or ticket exchange to another endpoint.
+func (c *Client) WithoutCredentials() *Client {
+	anonymous := *c
+	anonymous.secretStore = nil
+	anonymous.userID = ""
+	return &anonymous
+}
+
+func (c *Client) SessionScope() string { return c.sessionScope }

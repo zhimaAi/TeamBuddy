@@ -61,6 +61,9 @@ func getSession(c *gin.Context) (*browserSession, bool) {
 
 // apiBaseURL gets the cloud API address
 func (s *Server) apiBaseURL() string {
+	if client := s.currentCloudClient(); client != nil {
+		return client.BaseURL()
+	}
 	if s.config.CloudConfig != nil {
 		return s.config.CloudConfig.APIBaseURL
 	}

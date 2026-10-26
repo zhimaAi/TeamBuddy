@@ -76,45 +76,40 @@
 			  <div class="pipeline-description">{{ resource.description || t('agents.noDescription') }}</div>
             </div>
           </div>
-          <div
-            class="avatar-chain"
-            :class="{ 'avatar-chain--expert': isExpertResource(resource) }"
-          >
+          <div class="avatar-chain">
             <a-tooltip
 			  v-for="(step, index) in visibleMembers(resource)"
               :key="step.uuid"
               :title="step.name"
             >
-              <span
-                class="agent-avatar-item"
-                :class="{ 'agent-avatar-item--leader': isExpertLeader(resource, step) }"
-              >
+              <span class="agent-avatar-item">
                 <img
 				  :src="memberAvatar(step, index)"
                   alt=""
                 />
-                <span
-                  v-if="isExpertLeader(resource, step)"
-                  class="expert-leader-badge"
-                  :aria-label="t('expertGroups.leader')"
-                >
-                  <CrownOutlined />
-                </span>
-                <img
-				  v-if="!isExpertResource(resource) && (index < visibleMembers(resource).length - 1 || hiddenMemberCount(resource))"
-                  class="agent-flow-icon"
-                  :src="pipelineAgentFlowIcon"
-                  alt=""
-                  aria-hidden="true"
-                />
               </span>
             </a-tooltip>
-            <span
-			  v-if="hiddenMemberCount(resource)"
-              class="avatar-overflow"
+            <a-tooltip
+              v-if="hiddenMemberCount(resource)"
+              :trigger="['hover', 'focus']"
             >
-			  {{ `+${hiddenMemberCount(resource)}` }}
-            </span>
+              <template #title>
+                <div
+                  v-for="(member, index) in hiddenMembers(resource)"
+                  :key="member.uuid"
+                  class="overflow-member"
+                >
+                  <img
+                    :src="memberAvatar(member, visibleMemberLimit(resource) + index)"
+                    alt=""
+                  />
+                  <span class="overflow-member-name">{{ member.name }}</span>
+                </div>
+              </template>
+              <span class="avatar-overflow" tabindex="0">
+                {{ `+${hiddenMemberCount(resource)}` }}
+              </span>
+            </a-tooltip>
           </div>
         </div>
         <a-dropdown
@@ -186,7 +181,6 @@
 import {
   ApartmentOutlined,
   CopyOutlined,
-  CrownOutlined,
   DeleteOutlined,
   EditOutlined,
   ExclamationOutlined,
@@ -196,7 +190,6 @@ import {
 } from '@ant-design/icons-vue'
 import { computed, onDeactivated, ref } from 'vue'
 import type { ExpertGroup, ExpertMember, Pipeline, PipelineStep } from '@/types/pipeline'
-import pipelineAgentFlowIcon from '@/assets/icons/pipeline-agent-flow.svg'
 import commonMoreActionsIcon from '@/assets/icons/common-more-actions.svg'
 import {
   isPipelineCloud,
@@ -228,7 +221,7 @@ const emit = defineEmits<{
 }>()
 
 const MAX_VISIBLE_PIPELINE_STEPS = 6
-const MAX_VISIBLE_EXPERT_MEMBERS = 10
+const MAX_VISIBLE_EXPERT_MEMBERS = 7
 const activeMenuUuid = ref('')
 const resources = computed<Array<Pipeline | ExpertGroup>>(() =>
 	props.mode === 'expert_group' ? props.expertGroups : props.pipelines,
@@ -289,6 +282,10 @@ function hiddenMemberCount(resource: Pipeline | ExpertGroup) {
 	return Math.max(resourceMembers(resource).length - visibleMemberLimit(resource), 0)
 }
 
+function hiddenMembers(resource: Pipeline | ExpertGroup) {
+  return resourceMembers(resource).slice(visibleMemberLimit(resource))
+}
+
 function visibleMemberLimit(resource: Pipeline | ExpertGroup) {
 	return isExpertResource(resource)
 		? MAX_VISIBLE_EXPERT_MEMBERS
@@ -300,13 +297,6 @@ function memberAvatar(member: PipelineStep | ExpertMember, index: number) {
 		return member.avatar || AGENT_AVATARS[index % AGENT_AVATARS.length]
 	}
 	return resolveAgentAvatar(member as PipelineStep, index)
-}
-
-function isExpertLeader(
-  resource: Pipeline | ExpertGroup,
-  member: PipelineStep | ExpertMember,
-) {
-  return isExpertResource(resource) && resource.leader?.uuid === member.uuid
 }
 
 function resourceLabel(resource: Pipeline | ExpertGroup) {
@@ -559,93 +549,11 @@ onDeactivated(() => {
   -webkit-line-clamp: 2;
 }
 
-.avatar-chain {
-  display: flex;
-  min-height: 25px;
-  align-items: center;
-  gap: 4px;
-}
-
-.agent-avatar-item {
-  position: relative;
-  display: block;
-  width: 35px;
-  height: 25px;
-  flex: 0 0 35px;
-  opacity: 0.5;
-}
-
-.agent-avatar-item > img:first-child {
-  position: absolute;
-  top: 1px;
-  left: 0;
-  width: 24px;
-  height: 24px;
-  border-radius: 50%;
-  object-fit: cover;
-}
-
-.agent-flow-icon {
-  position: absolute;
-  top: 0;
-  right: 0;
-  width: 24px;
-  height: 16px;
-}
-
-.pipeline-card.active .agent-avatar-item {
-  opacity: 1;
-}
-
-.pipeline-main[aria-disabled='true'] {
-  cursor: not-allowed;
-}
-
-.agent-avatar-item--leader {
-  opacity: 1;
-}
-
-.avatar-chain--expert {
-  gap: 0;
-}
-
-.avatar-chain--expert .agent-avatar-item {
-  width: 22px;
-  flex-basis: 22px;
-}
-
-.avatar-chain--expert .agent-avatar-item > img:first-child {
-  background: #fff;
-  box-shadow: 0 0 0 2px #fff;
-}
-
-.avatar-chain--expert .agent-avatar-item--leader {
-  width: 34px;
-  flex-basis: 34px;
-  margin-right: 6px;
-}
-
-.avatar-chain--expert .avatar-overflow {
-  margin-left: 8px;
-}
-
-.expert-leader-badge {
-  position: absolute;
-  z-index: 1;
-  top: -3px;
-  left: 16px;
-  display: inline-flex;
-  width: 12px;
-  height: 12px;
-  align-items: center;
-  justify-content: center;
-  border: 1px solid #fff;
-  border-radius: 50%;
-  color: #fff;
-  background: #3157e2;
-  font-size: 7px;
-  line-height: 1;
-}
+.avatar-chain { display: flex; min-height: 25px; flex-wrap: nowrap; align-items: center; gap: 8px; padding-top: 12px; }
+.agent-avatar-item { position: relative; display: block; width: 24px; height: 24px; flex: 0 0 24px; opacity: .5; }
+.agent-avatar-item > img:first-child { width: 24px; height: 24px; border: 1px solid #fff; border-radius: 50%; object-fit: cover; background: #fff; }
+.pipeline-card.active .agent-avatar-item { opacity: 1; }
+.pipeline-main[aria-disabled='true'] { cursor: not-allowed; }
 
 .avatar-overflow {
   display: inline-flex;
@@ -660,7 +568,36 @@ onDeactivated(() => {
   background: #8c8c8c;
   font-size: 12px;
   line-height: 1;
+  white-space: nowrap;
   opacity: 0.55;
+}
+
+.avatar-overflow:focus-visible {
+  outline: 2px solid #3157e2;
+  outline-offset: 2px;
+}
+
+.overflow-member {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.overflow-member + .overflow-member {
+  margin-top: 8px;
+}
+
+.overflow-member > img {
+  width: 24px;
+  height: 24px;
+  flex: 0 0 24px;
+  border-radius: 50%;
+  object-fit: cover;
+}
+
+.overflow-member-name {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .action-btn {

@@ -2,7 +2,7 @@
   "login": {
     "title": "Team work",
     "subtitle": "Sign in to goteams and work with your team",
-    "description": "Once connected you can share requirements, tasks and AI Agent capabilities with your team. Team tasks sync to the client in real time",
+    "description": "Connect to share team work items and AI Agent capabilities. Execution records sync to the connected team service.",
     "featureSync": "Task sync",
     "featureCollaborate": "Teamwork",
     "featureAgent": "Agent collaboration",
@@ -74,7 +74,15 @@
   },
   "configure": {
     "title": "Configure team requirement",
-    "hint": "This requirement comes from {name}. Fill in the fields below to start",
+    "hint": "This requirement comes from {name}. Changes to the title and requirement apply only to local execution",
+    "taskTitle": "Task title",
+    "taskDescription": "Execution requirement",
+    "startImmediately": "Run immediately",
+    "startImmediatelyHint": "Select this option to start the task immediately based on the requirement content after confirming",
+    "syncAgentOutput": "Sync agent output",
+    "syncAgentOutputHint": "Agent output is synced online by default; clear this option and report files manually from the file drawer",
+    "executionModeRequired": "Select an execution mode before running immediately",
+    "startFailed": "The local task was created, but could not start: {error}. You can retry from the task",
     "unknownCreator": "a teammate",
     "project": "Project",
     "workDir": "Select working directory",
@@ -97,5 +105,13 @@
     "item2": "After deletion the team task returns to “To configure”, and a pipeline can be assigned again",
     "confirm": "Delete",
     "failed": "Failed to delete the team task"
+  },
+  "connection": {
+    "addressRequired": "Enter a server address",
+    "addressInvalid": "Enter an HTTP or HTTPS service address without credentials, query parameters, or fragments",
+    "customAction": "Click to sign in and link your open-source edition account",
+    "openSourceAddress": "Open-source edition address",
+    "openSourceAddressPlaceholder": "Enter your open-source edition URL",
+    "authorize": "Authorize"
   }
 }

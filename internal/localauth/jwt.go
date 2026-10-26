@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"sync"
 	"time"
 
@@ -97,12 +98,38 @@ func ParseClaims(token string) (*JWTClaims, error) {
 		return nil, fmt.Errorf("解码 JWT payload 失败: %w", err)
 	}
 
-	var claims JWTClaims
-	if err := json.Unmarshal(payload, &claims); err != nil {
+	// 历史云端可能把数字 ID 编码为 JSON number；保留整数精度再转为内部字符串。
+	// 不推断其他字段作为用户身份，迁移仍须同时匹配 admin_id 和 user_id。
+	var raw struct {
+		AdminID  json.RawMessage `json:"admin_id"`
+		UserID   json.RawMessage `json:"user_id"`
+		TenantID json.RawMessage `json:"tenant_id"`
+		Exp      int64           `json:"exp"`
+	}
+	if err := json.Unmarshal(payload, &raw); err != nil {
 		return nil, fmt.Errorf("解析 JWT claims 失败: %w", err)
 	}
-
-	return &claims, nil
+	claims := &JWTClaims{Exp: raw.Exp}
+	for _, field := range []struct {
+		raw json.RawMessage
+		dst *string
+	}{{raw.AdminID, &claims.AdminID}, {raw.UserID, &claims.UserID}, {raw.TenantID, &claims.TenantID}} {
+		if len(field.raw) == 0 || string(field.raw) == "null" {
+			continue
+		}
+		if err := json.Unmarshal(field.raw, field.dst); err == nil {
+			continue
+		}
+		var number json.Number
+		if err := json.Unmarshal(field.raw, &number); err != nil {
+			return nil, fmt.Errorf("无效的 JWT 身份字段")
+		}
+		if _, err := strconv.ParseUint(number.String(), 10, 64); err != nil {
+			return nil, fmt.Errorf("无效的 JWT 身份字段")
+		}
+		*field.dst = number.String()
+	}
+	return claims, nil
 }
 
 // splitJWT splits JWT into three parts

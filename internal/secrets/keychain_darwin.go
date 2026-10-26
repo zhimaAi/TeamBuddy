@@ -3,6 +3,7 @@
 package secrets
 
 import (
+	"errors"
 	"fmt"
 	"os/exec"
 	"strings"
@@ -37,11 +38,12 @@ func (s *keychainStore) Get(key string) (string, error) {
 		"-s", s.service, "-a", key, "-w")
 	output, err := cmd.Output()
 	if err != nil {
-		outputStr := string(output)
-		if strings.Contains(outputStr, "could not be found") {
+		// security 将错误写入 stderr，Output 的返回值只包含 stdout。
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) && strings.Contains(string(exitErr.Stderr), "could not be found") {
 			return "", ErrNotFound
 		}
-		return "", fmt.Errorf("Keychain 读取失败: %w, output: %s", err, outputStr)
+		return "", fmt.Errorf("Keychain 读取失败: %w", err)
 	}
 	// The security command output ends with a newline that must be stripped
 	return strings.TrimRight(string(output), "\n\r"), nil

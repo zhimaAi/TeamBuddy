@@ -8,7 +8,7 @@ import {
 import type { KnowledgeDocument, KnowledgeFolderNode } from '@/api/knowledge'
 import KnowledgeAddMenu from '@/views/knowledge/components/KnowledgeAddMenu.vue'
 import KnowledgeBlankAddDropdown from '@/views/knowledge/components/KnowledgeBlankAddDropdown.vue'
-import directoryToggleIcon from '@/assets/icons/knowledge-directory-toggle.svg'
+import directoryToggleIcon from '@/assets/icons/common-sidebar-toggle.svg'
 import knowledgeDocumentIcon from '@/assets/icons/knowledge-document.svg'
 import knowledgeFolderHeadingIcon from '@/assets/icons/knowledge-folder-heading.svg'
 import knowledgeFolderTreeIcon from '@/assets/icons/knowledge-folder-tree.svg'
@@ -490,7 +490,7 @@ function toggleSortDirection() {
 
 .detail-sort-select :deep(.ant-select-selector) {
   height: auto !important;
-  padding: 4px 7px !important;
+  padding: 2px 7px !important;
   font-size: 12px;
 }
 

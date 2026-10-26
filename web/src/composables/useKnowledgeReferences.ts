@@ -3,7 +3,7 @@ import {
   getKnowledgeDocumentPath,
   spillTaskReferenceFile,
 } from '@/api/knowledge'
-import type { KnowledgeFolderNode } from '@/api/knowledge'
+import type { KnowledgeDocument, KnowledgeFolderNode } from '@/api/knowledge'
 import type {
   KnowledgeReferenceFragment,
   KnowledgeReferenceValidation,
@@ -19,6 +19,15 @@ import type {
 
 /** CF-9：引用内容超过该码点数时降级为产出文件 */
 export const KNOWLEDGE_REFERENCE_CHAR_LIMIT = 10000
+
+/** 引用标签与提交内容共用真实文件名，路径缺失时用标题和扩展名补齐。 */
+export function knowledgeDocumentName(document: Pick<KnowledgeDocument, 'file_path' | 'title' | 'ext'>) {
+  const name = document.file_path.replace(/\\/g, '/').split('/').filter(Boolean).pop()
+  if (name) return name
+  const ext = document.ext.replace(/^\./, '')
+  if (!ext || document.title.toLowerCase().endsWith(`.${ext.toLowerCase()}`)) return document.title
+  return `${document.title}.${ext}`
+}
 
 /** CF-9：长度统一按 Unicode 码点计数（不是 UTF-16 码元长度） */
 export function countCharacters(text: string): number {

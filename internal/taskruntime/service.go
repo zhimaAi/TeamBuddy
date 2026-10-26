@@ -25,6 +25,10 @@ var (
 	ErrTaskTitleAndDescriptionRequired = errors.New("任务标题与任务描述不能同时为空")
 	ErrTaskContextLocked               = errors.New("任务已开始，不能修改流水线、关联项目或任务目录")
 	ErrPipelineSnapshotLocked          = errors.New("任务已经分配流水线，不能覆盖永久快照")
+	// ErrCloudUserIDRequired 关联线上的任务缺少账号归属：这类任务进不了上报队列。
+	ErrCloudUserIDRequired = errors.New("关联线上的任务必须包含云端账号归属")
+	// ErrCloudSourceKeyRequired 关联线上的任务缺少云端地址标识。
+	ErrCloudSourceKeyRequired = errors.New("关联线上的任务必须包含云端地址标识")
 )
 
 const generatedTaskTitleMaxRunes = 20
@@ -66,6 +70,7 @@ type UpdateInput struct {
 
 type CreateInput struct {
 	SourceType                 string
+	CreatedFromConversation    bool
 	CloudSourceKey             string
 	CloudUserID                string
 	WorkItemType               string
@@ -86,7 +91,10 @@ type CreateInput struct {
 	ExecutionMode              string
 	ExecutionTool              string
 	ExecutionModel             string
-	Snapshot                   Snapshot
+	// SyncAgentOutput 为指针：nil 表示沿用默认值（自动上报产出文件），
+	// 只有显式 false 才关闭该任务的产出文件自动上报。
+	SyncAgentOutput *bool
+	Snapshot        Snapshot
 }
 
 type Service struct {
@@ -117,8 +125,24 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (taskUUID string, 
 	if in.SourceType != "local" && in.SourceType != "cloud" {
 		return "", fmt.Errorf("无效任务来源: %s", in.SourceType)
 	}
+	// 关联线上的任务必须带账号归属与云端地址标识。缺其中任何一个，这条任务都进不了
+	// 上报队列（cloudsync 按 cloud_source_key + cloud_user_id 过滤），线上会永久丢失沟通记录。
+	if in.SourceType == "cloud" {
+		if strings.TrimSpace(in.CloudUserID) == "" {
+			return "", ErrCloudUserIDRequired
+		}
+		if strings.TrimSpace(in.CloudSourceKey) == "" {
+			return "", ErrCloudSourceKeyRequired
+		}
+	}
 	in.ExecutionMode = NormalizeExecutionMode(in.ExecutionMode)
 	in.ExecutionTool = strings.ToLower(strings.TrimSpace(in.ExecutionTool))
+	in.ExecutionModel = strings.TrimSpace(in.ExecutionModel)
+	if in.ExecutionMode == ExecutionModeVibeCoding {
+		if err := ValidateVibeModel(in.ExecutionTool, in.ExecutionModel); err != nil {
+			return "", err
+		}
+	}
 	if in.ExecutionMode == "" && strings.TrimSpace(in.SelectedPipelineUUID) != "" {
 		in.ExecutionMode = ExecutionModePipeline
 	}
@@ -213,20 +237,31 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (taskUUID string, 
 		return "", fmt.Errorf("开启任务事务失败: %w", err)
 	}
 	defer tx.Rollback()
+	// 「同步 Agent 产出」默认开启；未显式传入（nil）时按 1 落库。
+	syncAgentOutput := 1
+	if in.SyncAgentOutput != nil && !*in.SyncAgentOutput {
+		syncAgentOutput = 0
+	}
 	_, err = tx.ExecContext(ctx, `INSERT INTO gt_tasks
 		(uuid, source_type, cloud_source_key, cloud_user_id, work_item_type, work_item_id,
 		 cloud_work_item_type, cloud_work_item_id, workspace_id, project_uuid,
 		 title, content_snapshot, priority, planned_start_date, planned_end_date, task_dir_id, task_dir, task_md_path,
 		 selected_pipeline_uuid, selected_pipeline_config_json, pipeline_snapshot_uuid, selected_expert_group_uuid, execution_mode, execution_tool,
-		 status, execution_status, current_step_uuid, current_step_completed, work_dir, created_at, updated_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'idle', '', 0, ?, ?, ?)`,
+		 status, execution_status, current_step_uuid, current_step_completed, work_dir, created_at, updated_at, created_from_conversation,
+		 sync_agent_output)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'idle', '', 0, ?, ?, ?, ?, ?)`,
 		taskUUID, in.SourceType, in.CloudSourceKey, in.CloudUserID, in.WorkItemType, in.WorkItemID,
 		in.WorkItemType, in.WorkItemID, in.WorkspaceID,
 		strings.TrimSpace(in.ProjectUUID), in.Title, in.Content, strings.TrimSpace(in.Priority), strings.TrimSpace(in.PlannedStartDate), strings.TrimSpace(in.PlannedEndDate), taskDirID, taskDir, taskMDPath,
 		strings.TrimSpace(in.SelectedPipelineUUID), strings.TrimSpace(in.SelectedPipelineConfigJSON), snapshotUUID,
-		strings.TrimSpace(in.SelectedExpertGroupUUID), in.ExecutionMode, in.ExecutionTool, status, workDirs[0], now, now)
+		strings.TrimSpace(in.SelectedExpertGroupUUID), in.ExecutionMode, in.ExecutionTool, status, workDirs[0], now, now, in.CreatedFromConversation && in.SourceType == "local", syncAgentOutput)
 	if err != nil {
 		return "", fmt.Errorf("创建任务失败: %w", err)
+	}
+	if in.ExecutionMode == ExecutionModeVibeCoding {
+		if _, err = tx.ExecContext(ctx, `UPDATE gt_tasks SET vibe_coding_model=? WHERE uuid=?`, in.ExecutionModel, taskUUID); err != nil {
+			return "", err
+		}
 	}
 	if hasSnapshot {
 		_, err = tx.ExecContext(ctx, `INSERT INTO gt_task_pipeline_snapshots
@@ -606,9 +641,13 @@ func (s *Service) AssignPipelineSelection(ctx context.Context, taskUUID, selecte
 
 // AssignVibeCoding assigns the task to an external editor without starting the
 // internal workflow. start only moves the board status to active.
-func (s *Service) AssignVibeCoding(ctx context.Context, taskUUID, tool string, start bool) error {
+func (s *Service) AssignVibeCoding(ctx context.Context, taskUUID, tool, model string, start bool) error {
+	model = strings.TrimSpace(model)
 	tool = strings.ToLower(strings.TrimSpace(tool))
 	if err := ValidateExecutionAssignment(ExecutionModeVibeCoding, tool, ""); err != nil {
+		return err
+	}
+	if err := ValidateVibeModel(tool, model); err != nil {
 		return err
 	}
 	var mode, existingTool, status, pipelineUUID, snapshotUUID, currentStep string
@@ -633,9 +672,9 @@ func (s *Service) AssignVibeCoding(ctx context.Context, taskUUID, tool string, s
 	if start {
 		nextStatus = "active"
 	}
-	result, err := s.db.ExecContext(ctx, `UPDATE gt_tasks SET execution_mode=?, execution_tool=?, status=?, updated_at=?
+	result, err := s.db.ExecContext(ctx, `UPDATE gt_tasks SET execution_mode=?, execution_tool=?, vibe_coding_model=CASE WHEN execution_mode='' THEN ? ELSE vibe_coding_model END, status=?, updated_at=?
 		WHERE uuid=? AND execution_mode IN ('', 'vibe_coding') AND selected_pipeline_uuid='' AND pipeline_snapshot_uuid='' AND current_step_uuid=''`,
-		ExecutionModeVibeCoding, tool, nextStatus, time.Now().UnixMilli(), taskUUID)
+		ExecutionModeVibeCoding, tool, model, nextStatus, time.Now().UnixMilli(), taskUUID)
 	if err != nil {
 		return err
 	}
@@ -961,9 +1000,9 @@ func (s *Service) CompleteStep(ctx context.Context, taskUUID, stepUUID string) (
 	}
 	var activeSessions, terminalProgress int
 	if err = tx.QueryRowContext(ctx, `SELECT
-		(SELECT COUNT(*) FROM gt_cli_sessions WHERE task_uuid = ? AND step_uuid = ? AND status IN ('created','running','waiting_input','stop_requested')),
+		(SELECT COUNT(*) FROM gt_cli_sessions WHERE task_uuid = ? AND status IN ('created','running','waiting_input','stop_requested')),
 		(SELECT COUNT(*) FROM gt_task_progress WHERE task_uuid = ? AND task_step_uuid = ? AND status IN ('success','failed','stopped','interrupted'))`,
-		taskUUID, stepUUID, taskUUID, stepUUID).Scan(&activeSessions, &terminalProgress); err != nil {
+		taskUUID, taskUUID, stepUUID).Scan(&activeSessions, &terminalProgress); err != nil {
 		return nil, err
 	}
 	if activeSessions > 0 {

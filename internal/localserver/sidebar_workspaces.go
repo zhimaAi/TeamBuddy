@@ -69,6 +69,7 @@ func (h *TasksHandler) listSidebarWorkspaces(c *gin.Context) {
 func (h *TasksHandler) updateSidebarWorkspace(c *gin.Context) {
 	var input struct {
 		WorkDir     string  `json:"work_dir"`
+		CreateOnly  bool    `json:"create_only"`
 		DisplayName *string `json:"display_name"`
 		Pinned      *bool   `json:"pinned"`
 	}
@@ -89,6 +90,14 @@ func (h *TasksHandler) updateSidebarWorkspace(c *gin.Context) {
 		}
 		input.DisplayName = &name
 	}
+	if input.CreateOnly {
+		directory, err := normalizeExistingDirectory(input.WorkDir)
+		if err != nil {
+			i18n.LocalServerError(c, 400, err)
+			return
+		}
+		input.WorkDir = directory
+	}
 	var name any
 	var pinned any
 	if input.DisplayName != nil {
@@ -102,7 +111,7 @@ func (h *TasksHandler) updateSidebarWorkspace(c *gin.Context) {
 	}
 	_, err := h.taskDB().ExecContext(c.Request.Context(), `INSERT INTO gt_sidebar_workspaces(directory_key,work_dir,display_name,pinned_at)
  VALUES(?,?,COALESCE(?,''),COALESCE(?,0)) ON CONFLICT(directory_key) DO UPDATE SET
- work_dir=excluded.work_dir,display_name=COALESCE(?,display_name),pinned_at=COALESCE(?,pinned_at)`, key, strings.TrimSpace(input.WorkDir), name, pinned, name, pinned)
+ work_dir=excluded.work_dir,display_name=COALESCE(?,display_name),pinned_at=COALESCE(?,pinned_at) WHERE ?=0`, key, strings.TrimSpace(input.WorkDir), name, pinned, name, pinned, input.CreateOnly)
 	if err != nil {
 		i18n.LocalServerError(c, 500, err)
 		return
@@ -166,8 +175,9 @@ func (h *TasksHandler) previewWorkspaceDeletion(c *gin.Context) {
 		return
 	}
 	// 从任务表查完整范围，不受通知、搜索、归档或附加目录影响。
+	scopeSQL, scopeArgs := taskScopeSQL(h.taskCloudClient(), "t")
 	rows, err := h.taskDB().QueryContext(c.Request.Context(), `SELECT uuid,title,work_dir,
- EXISTS(SELECT 1 FROM gt_task_notifications n WHERE n.task_uuid=t.uuid AND n.is_archived=1) FROM gt_tasks t ORDER BY uuid`)
+ EXISTS(SELECT 1 FROM gt_task_notifications n WHERE n.task_uuid=t.uuid AND n.is_archived=1) FROM gt_tasks t WHERE `+scopeSQL+` ORDER BY uuid`, scopeArgs...)
 	if err != nil {
 		i18n.LocalServerError(c, 500, err)
 		return
@@ -233,13 +243,14 @@ func (h *TasksHandler) deleteWorkspaceTasks(c *gin.Context) {
 	}
 	defer tx.Rollback()
 	tasks := []workspaceDeletionTask{}
+	scopeSQL, scopeArgs := taskScopeSQL(h.taskCloudClient(), "t")
 	for _, id := range input.TaskUUIDs {
 		var item workspaceDeletionTask
 		var workDir string
 		var active int
 		item.UUID = id
 		err := tx.QueryRowContext(c.Request.Context(), `SELECT work_dir,task_dir,
- (SELECT COUNT(*) FROM gt_cli_sessions WHERE task_uuid=t.uuid AND status IN ('created','running','waiting_input','stop_requested')) FROM gt_tasks t WHERE uuid=?`, id).Scan(&workDir, &item.TaskDir, &active)
+ (SELECT COUNT(*) FROM gt_cli_sessions WHERE task_uuid=t.uuid AND status IN ('created','running','waiting_input','stop_requested')) FROM gt_tasks t WHERE uuid=? AND `+scopeSQL, append([]any{id}, scopeArgs...)...).Scan(&workDir, &item.TaskDir, &active)
 		if err == sql.ErrNoRows || (err == nil && workspaceDirectoryKey(workDir) != key) {
 			i18n.Error(c, 409, "localserver_workspace_tasks_changed", "workspace_tasks_changed")
 			return

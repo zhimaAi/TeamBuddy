@@ -85,6 +85,7 @@ func (p loginPayload) toLoginResponse(fallbackUsername string) (*LoginResponse, 
 
 // Login calls the cloud login interface
 func (c *Client) Login(ctx context.Context, username, password string) (*LoginResponse, error) {
+	c = c.WithoutCredentials()
 	body := map[string]string{
 		"username": username,
 		"password": password,
@@ -99,6 +100,7 @@ func (c *Client) Login(ctx context.Context, username, password string) (*LoginRe
 
 // RefreshToken refresh JWT
 func (c *Client) RefreshToken(ctx context.Context, token string) (*LoginResponse, error) {
+	c = c.WithoutCredentials()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/api/user/refreshToken", nil)
 	if err != nil {
 		return nil, fmt.Errorf("创建请求失败: %w", err)

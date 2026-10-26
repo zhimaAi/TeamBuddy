@@ -41,6 +41,12 @@ declare global {
       readonly platform: string
       selectDirectories(options?: { defaultPath?: string; multiple?: boolean }): Promise<string[]>
       openDirectory(directoryPath: string): Promise<{ opened: true }>
+      revealTaskFile?(payload: {
+        taskUuid: string
+        fileRef: string
+        sessionUuid?: string
+        locale?: 'zh-CN' | 'en-US'
+      }): Promise<{ revealed: true }>
       openTerminal(directoryPath: string): Promise<{ opened: true }>
       openVibeCli(payload: {
         tool: string
@@ -48,7 +54,29 @@ declare global {
         directoryPath: string
         prompt: string
         threadId?: string
+        modelName?: string
       }): Promise<{ opened: true }>
+/** 手动模式：可复制的 MCP 配置文本，仅用于展示，不写入用户配置 */
+      getVibeMcpConfig?(tool?: string): Promise<{
+        available: boolean
+        config: string
+        configPath: string
+        command: string
+      }>
+      openQoderIDE?(payload: {
+        directoryPath: string
+        prompt: string
+        threadId?: string
+      }): Promise<{
+        opened: boolean
+        sessionLocated: false
+        promptDelivery: 'clipboard' | 'deeplink' | 'none'
+        promptCopied: boolean
+        requiresManualStart: boolean
+        requiresManualSessionSelection: boolean
+        hooksUpdated: boolean
+        requiresRestart?: boolean
+      }>
       openCodexThread(payload: {
         directoryPath: string
         prompt: string

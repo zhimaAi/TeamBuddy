@@ -61,22 +61,29 @@ func vibeCodingAssignmentProgressUUID(taskUUID string) string {
 	return uuid.NewSHA1(uuid.NameSpaceOID, []byte("vibe-coding-assignment:"+taskUUID)).String()
 }
 
-// isTeamsboardKickoffPrompt reports the launch instruction TeamBuddy sends to the tool.
-// That text is not the user's task input.
-func isTeamsboardKickoffPrompt(text string) bool {
+// isTeambuddyKickoffPrompt reports the launch instruction TeamBuddy sends to the tool.
+// That text is not the user's task input. The legacy "teamsboard" markers are still
+// matched so activity records written before the rename keep resolving to the launch
+// prompt instead of being shown as the user's own words.
+func isTeambuddyKickoffPrompt(text string) bool {
 	text = strings.TrimSpace(text)
-	return strings.Contains(text, "[$teamsboard]") ||
-		strings.Contains(text, "请使用 teamsboard Skill") ||
-		strings.Contains(text, "Use the teamsboard Skill")
+	for _, marker := range []string{"teambuddy", "teamsboard"} {
+		if strings.Contains(text, "[$"+marker+"]") ||
+			strings.Contains(text, "请使用 "+marker+" Skill") ||
+			strings.Contains(text, "Use the "+marker+" Skill") {
+			return true
+		}
+	}
+	return false
 }
 
 // vibeBoardUserText keeps the board card on the user's own words.
 // A tool reply or the skill launch prompt is not shown in that slot.
 func vibeBoardUserText(recordType, kind, prompt, result, userQuestion, snapshot, title string) string {
-	if (recordType == "user_question" || kind == activityKindUserMessage) && !isTeamsboardKickoffPrompt(prompt) {
+	if (recordType == "user_question" || kind == activityKindUserMessage) && !isTeambuddyKickoffPrompt(prompt) {
 		return prompt
 	}
-	if text := strings.TrimSpace(userQuestion); text != "" && !isTeamsboardKickoffPrompt(text) {
+	if text := strings.TrimSpace(userQuestion); text != "" && !isTeambuddyKickoffPrompt(text) {
 		return text
 	}
 	if text := strings.TrimSpace(snapshot); text != "" {

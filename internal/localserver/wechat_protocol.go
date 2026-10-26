@@ -15,6 +15,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 const wechatDefaultBaseURL = "https://ilinkai.weixin.qq.com"
@@ -39,6 +41,27 @@ type wechatAPI struct {
 	client *http.Client
 }
 
+// wechatTransport 封装与 iLink 服务端的所有通讯（二维码/状态/拉取/发送/生命周期/输入指示）。
+// 这是微信通道对外的唯一通讯 seam：后续若替换底层实现（如换用 corespeed-io/wechatbot 等 SDK），
+// 只需提供一个新的 wechatTransport 实现，上层 wechatRemote 的业务逻辑无需改动。
+// 所有方法均走 call() 统一鉴权头与错误处理，新增微信通讯能力时只在这里加方法。
+type wechatTransport interface {
+	getQR(ctx context.Context) (wechatQRResponse, error)
+	qrStatus(ctx context.Context, base, qr, code string) (wechatQRStatus, error)
+	getUpdates(ctx context.Context, base, token, cursor string) (wechatUpdates, error)
+	// sendText 走 /ilink/bot/sendmessage。
+	// client_id 沿用 corespeed-io/wechatbot::BuildTextMessage 的语义：每次发送都即时生成新的 UUID，
+	// 不再复用入站消息的 client_id。iLink 协议里 client_id 仅是发送侧的去重 / 幂等标记，
+	// 强制回传持久化的入站 client_id 反而会因会话窗口不匹配被 iLink 静默丢弃，表现为
+	// "sendmessage 返回 200 + message_id 但微信侧收不到"。
+	sendText(ctx context.Context, base, token, recipient, contextToken, content string) (bool, error)
+	notifyLifecycle(ctx context.Context, base, token string, starting bool) error
+	// getConfig 拉取会话配置（当前仅 typing_ticket，用于"输入中"指示）。
+	getConfig(ctx context.Context, base, token, userID, contextToken string) (string, error)
+	// sendTyping 发送/取消"输入中"指示：status=1 开始，status=2 结束。
+	sendTyping(ctx context.Context, base, token, userID, ticket string, status int) error
+}
+
 type wechatQRResponse struct {
 	QRCode       string `json:"qrcode"`
 	ImageContent string `json:"qrcode_img_content"`
@@ -61,10 +84,14 @@ type wechatTextItem struct {
 }
 
 type wechatMessage struct {
-	Seq          json.Number      `json:"seq"`
-	MessageID    json.Number      `json:"message_id"`
-	FromUserID   string           `json:"from_user_id"`
-	GroupID      string           `json:"group_id"`
+	Seq        json.Number `json:"seq"`
+	MessageID  json.Number `json:"message_id"`
+	FromUserID string      `json:"from_user_id"`
+	GroupID    string      `json:"group_id"`
+	// ClientID 是 iLink 给入站消息分配的每条消息唯一标识；与本次入站消息的会话绑定，
+	// 不可作为发送侧的 client_id 复用——send 路径在 wechatAPI.sendText 中按
+	// corespeed-io/wechatbot::BuildTextMessage 的方式即时生成新 UUID 作为发送方 client_id。
+	ClientID     string           `json:"client_id"`
 	MessageType  int              `json:"message_type"`
 	ContextToken string           `json:"context_token"`
 	Items        []wechatTextItem `json:"item_list"`
@@ -81,7 +108,7 @@ func (m wechatMessage) text() string {
 }
 
 func (m wechatMessage) id() string {
-	if id := m.MessageID.String(); id != "" {
+	if id := m.MessageID.String(); id != "" && id != "0" {
 		return id
 	}
 	if seq := m.Seq.String(); seq != "" {
@@ -159,9 +186,18 @@ func (a *wechatAPI) call(ctx context.Context, method, base, path, token string, 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return &wechatHTTPError{StatusCode: resp.StatusCode}
 	}
-	decoder := json.NewDecoder(io.LimitReader(resp.Body, 2<<20))
-	decoder.UseNumber()
-	if err = decoder.Decode(result); err != nil {
+	// 读取原始响应体用于调试：部分错误信息可能在 ret/errcode 之外的其他字段里。
+	bodyBytes, err := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
+	if err != nil {
+		return err
+	}
+	//applog.Info("iLink HTTP 原始响应",
+	//	"method", method,
+	//	"path", path,
+	//	"status_code", resp.StatusCode,
+	//	"raw_body", string(bodyBytes),
+	//)
+	if err = json.Unmarshal(bodyBytes, result); err != nil {
 		return err
 	}
 	return nil
@@ -204,7 +240,10 @@ func (a *wechatAPI) getUpdates(ctx context.Context, base, token, cursor string) 
 	return result, err
 }
 
-func (a *wechatAPI) sendText(ctx context.Context, base, token, recipient, contextToken, clientID, content string) (bool, error) {
+func (a *wechatAPI) sendText(ctx context.Context, base, token, recipient, contextToken, content string) (bool, error) {
+	// 每次发送即时生成新的 client_id（参考 corespeed-io/wechatbot::BuildTextMessage），
+	// 避免持久化入站 client_id 带来的 iLink 会话窗口不匹配问题。
+	clientID := uuid.NewString()
 	body := map[string]any{"msg": map[string]any{
 		"from_user_id": "", "to_user_id": recipient, "client_id": clientID,
 		"message_type": 2, "message_state": 2, "context_token": contextToken,
@@ -244,6 +283,50 @@ func (a *wechatAPI) notifyLifecycle(ctx context.Context, base, token string, sta
 	}
 	if result.Ret != 0 || result.ErrCode != 0 {
 		return fmt.Errorf("微信通道状态通知失败 ret=%d errcode=%d", result.Ret, result.ErrCode)
+	}
+	return nil
+}
+
+// getConfig 拉取与某用户的会话配置。当前仅消费 typing_ticket，供"输入中"指示使用。
+// 端点与 corespeed-io/wechatbot 的 GetConfig 对齐（/ilink/bot/getconfig）。
+func (a *wechatAPI) getConfig(ctx context.Context, base, token, userID, contextToken string) (string, error) {
+	var result struct {
+		TypingTicket string `json:"typing_ticket,omitempty"`
+		Ret          int    `json:"ret"`
+		ErrCode      int    `json:"errcode"`
+	}
+	if err := a.call(ctx, http.MethodPost, base, "/ilink/bot/getconfig", token,
+		map[string]any{
+			"ilink_user_id": userID,
+			"context_token": contextToken,
+			"base_info":     wechatBaseInfo(),
+		}, &result); err != nil {
+		return "", err
+	}
+	if result.Ret != 0 || result.ErrCode != 0 {
+		return "", fmt.Errorf("微信 getconfig 失败 ret=%d errcode=%d", result.Ret, result.ErrCode)
+	}
+	return result.TypingTicket, nil
+}
+
+// sendTyping 发送或取消"输入中"指示。status=1 表示正在输入，status=2 表示停止。
+// 端点与 corespeed-io/wechatbot 的 SendTyping 对齐（/ilink/bot/sendtyping）。
+func (a *wechatAPI) sendTyping(ctx context.Context, base, token, userID, ticket string, status int) error {
+	var result struct {
+		Ret     int `json:"ret"`
+		ErrCode int `json:"errcode"`
+	}
+	if err := a.call(ctx, http.MethodPost, base, "/ilink/bot/sendtyping", token,
+		map[string]any{
+			"ilink_user_id": userID,
+			"typing_ticket": ticket,
+			"status":        status,
+			"base_info":     wechatBaseInfo(),
+		}, &result); err != nil {
+		return err
+	}
+	if result.Ret != 0 || result.ErrCode != 0 {
+		return fmt.Errorf("微信 sendtyping 失败 ret=%d errcode=%d", result.Ret, result.ErrCode)
 	}
 	return nil
 }

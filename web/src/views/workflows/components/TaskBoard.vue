@@ -36,6 +36,7 @@
               :key="task.uuid"
               :task="task"
               :dragging="draggingUuid === task.uuid"
+              :draggable="task.execution_mode !== 'vibe_coding'"
               @drag-start="onDragStart"
               @open="openTask"
             />
@@ -543,6 +544,7 @@ function onDragOver(event: DragEvent) {
 }
 
 async function changeStatus(task: TaskBoardTask, status: string) {
+  if (task.execution_mode === 'vibe_coding') return
   if (task.status === status) return
   const shouldStart = ['active', 'in_progress', 'developing'].includes(status)
   if (shouldStart && !task.execution_mode) {

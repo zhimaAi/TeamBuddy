@@ -21,6 +21,7 @@ import (
 var (
 	ErrExecutionModeRequired  = fmt.Errorf("任务尚未指定执行方式")
 	ErrExecutionModeUnchanged = fmt.Errorf("请选择与当前配置不同的执行方式")
+	ErrVibeBindingStale       = fmt.Errorf("通用工具绑定或执行代次已变化")
 )
 
 // SwitchExecutionInput contains a fully validated replacement target. Pipeline
@@ -28,6 +29,7 @@ var (
 // stopped, so the destructive transaction only persists prepared data.
 type SwitchExecutionInput struct {
 	Mode                       string
+	RebindExecutionIndex       *int
 	Tool                       string
 	ModelName                  string
 	SelectedPipelineUUID       string
@@ -46,6 +48,7 @@ type currentExecution struct {
 	currentStepUUID      string
 	cliModel             string
 	taskDir              string
+	executionIndex       int
 }
 
 // ValidateExecutionSwitch verifies the replacement target without mutating the
@@ -57,6 +60,11 @@ func (s *Service) ValidateExecutionSwitch(ctx context.Context, taskUUID string, 
 	input.SelectedPipelineUUID = strings.TrimSpace(input.SelectedPipelineUUID)
 	if err := ValidateExecutionTarget(input.Mode, input.Tool, input.SelectedPipelineUUID, expertGroupUUID(input.ExpertGroup)); err != nil {
 		return err
+	}
+	if input.Mode == ExecutionModeVibeCoding {
+		if err := ValidateVibeModel(input.Tool, input.ModelName); err != nil {
+			return err
+		}
 	}
 	if input.Mode == ExecutionModeCLI {
 		if err := ValidateCLITarget(input.Tool, input.ModelName); err != nil {
@@ -80,6 +88,18 @@ func (s *Service) ValidateExecutionSwitch(ctx context.Context, taskUUID string, 
 	}
 	if current.mode == "" {
 		return ErrExecutionModeRequired
+	}
+	return validateReplacementTarget(current, input)
+}
+
+func validateReplacementTarget(current currentExecution, input SwitchExecutionInput) error {
+	if input.RebindExecutionIndex != nil {
+		definition, ok := VibeTool(input.Tool)
+		if !ok || !definition.SupportsRebind || input.Mode != ExecutionModeVibeCoding ||
+			!sameExecutionTarget(current, input) || current.executionIndex != *input.RebindExecutionIndex {
+			return ErrVibeBindingStale
+		}
+		return nil
 	}
 	if sameExecutionTarget(current, input) {
 		return ErrExecutionModeUnchanged
@@ -129,6 +149,9 @@ func (s *Service) SwitchExecution(ctx context.Context, taskUUID string, input Sw
 
 	latest, err := loadCurrentExecutionTx(ctx, tx, taskUUID)
 	if err != nil {
+		return err
+	}
+	if err = validateReplacementTarget(latest, input); err != nil {
 		return err
 	}
 	if !sameCurrentExecution(current, latest) {
@@ -212,14 +235,14 @@ func (s *Service) ResetSwitchedExecutionStart(ctx context.Context, taskUUID stri
 func (s *Service) loadCurrentExecution(ctx context.Context, taskUUID string) (currentExecution, error) {
 	return loadCurrentExecutionRow(s.db.QueryRowContext(ctx, `SELECT execution_mode, execution_tool,
 		selected_pipeline_uuid, pipeline_snapshot_uuid, selected_expert_group_uuid,
-		expert_group_snapshot_uuid, current_step_uuid, task_dir
+		expert_group_snapshot_uuid, current_step_uuid, task_dir, execution_index
 		FROM gt_tasks WHERE uuid=?`, taskUUID), s.db, taskUUID)
 }
 
 func loadCurrentExecutionTx(ctx context.Context, tx *sql.Tx, taskUUID string) (currentExecution, error) {
 	return loadCurrentExecutionRow(tx.QueryRowContext(ctx, `SELECT execution_mode, execution_tool,
 		selected_pipeline_uuid, pipeline_snapshot_uuid, selected_expert_group_uuid,
-		expert_group_snapshot_uuid, current_step_uuid, task_dir
+		expert_group_snapshot_uuid, current_step_uuid, task_dir, execution_index
 		FROM gt_tasks WHERE uuid=?`, taskUUID), tx, taskUUID)
 }
 
@@ -233,7 +256,7 @@ type queryRower interface {
 
 func loadCurrentExecutionRow(row rowScanner, query queryRower, taskUUID string) (current currentExecution, err error) {
 	err = row.Scan(&current.mode, &current.tool, &current.selectedPipelineUUID, &current.pipelineSnapshotUUID,
-		&current.selectedExpertUUID, &current.expertSnapshotUUID, &current.currentStepUUID, &current.taskDir)
+		&current.selectedExpertUUID, &current.expertSnapshotUUID, &current.currentStepUUID, &current.taskDir, &current.executionIndex)
 	if err == sql.ErrNoRows {
 		return current, ErrNotFound
 	}
@@ -269,7 +292,8 @@ func sameCurrentExecution(left, right currentExecution) bool {
 	return left.mode == right.mode && left.tool == right.tool &&
 		left.selectedPipelineUUID == right.selectedPipelineUUID && left.pipelineSnapshotUUID == right.pipelineSnapshotUUID &&
 		left.selectedExpertUUID == right.selectedExpertUUID && left.expertSnapshotUUID == right.expertSnapshotUUID &&
-		left.currentStepUUID == right.currentStepUUID && left.cliModel == right.cliModel
+		left.currentStepUUID == right.currentStepUUID && left.cliModel == right.cliModel &&
+		left.executionIndex == right.executionIndex
 }
 
 func expertGroupUUID(group *expertgroup.Group) string {
@@ -359,16 +383,24 @@ func (prepared preparedSwitchTarget) insert(ctx context.Context, tx *sql.Tx, tas
 			prepared.input.Pipeline.Description, prepared.input.Pipeline.Avatar, hash, now); err != nil {
 			return err
 		}
+		// 仅激活首个输入目标，不生成会话或启动 CLI，用户消息到来后才执行。
+		status = "pending"
 		for index, step := range prepared.input.Pipeline.Steps {
+			stepUUID := uuid.NewString()
+			stepStatus := "pending"
+			if index == 0 {
+				currentStepUUID = stepUUID
+				stepStatus = "active"
+			}
 			stepKey := fmt.Sprintf("step-%02d", index+1)
 			if _, err = tx.ExecContext(ctx, `INSERT INTO gt_task_steps
 				(uuid, task_uuid, task_pipeline_snapshot_uuid, source_type, source_step_id, local_step_uuid, cloud_step_id,
 				 step_key, step_order, name, description, avatar, prompt_snapshot, cli_type, model_name, step_dir,
 				 status, execution_status, execution_mode, created_at, updated_at)
-				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', 'idle', 'pipeline', ?, ?)`,
-				uuid.NewString(), taskUUID, pipelineSnapshotUUID, prepared.input.Pipeline.SourceType, step.SourceStepID,
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'idle', 'pipeline', ?, ?)`,
+				stepUUID, taskUUID, pipelineSnapshotUUID, prepared.input.Pipeline.SourceType, step.SourceStepID,
 				step.LocalStepID, step.CloudStepID, stepKey, index, step.Name, step.Description,
-				step.Avatar, step.Prompt, step.CLIType, step.ModelName, prepared.stepDirs[index], now, now); err != nil {
+				step.Avatar, step.Prompt, step.CLIType, step.ModelName, prepared.stepDirs[index], stepStatus, now, now); err != nil {
 				return err
 			}
 		}
@@ -407,7 +439,7 @@ func (prepared preparedSwitchTarget) insert(ctx context.Context, tx *sql.Tx, tas
 			return err
 		}
 	case ExecutionModeCLI:
-		status = "active"
+		status = "pending"
 		currentStepUUID = uuid.NewString()
 		if _, err := tx.ExecContext(ctx, `INSERT INTO gt_task_steps
 			(uuid, task_uuid, task_pipeline_snapshot_uuid, source_type, step_key, step_order, name, description, avatar,
@@ -422,22 +454,36 @@ func (prepared preparedSwitchTarget) insert(ctx context.Context, tx *sql.Tx, tas
 
 	// execution_index 在清空本地执行投影之前由调用方把当前这一次封存到云端。
 	// 这里只递增序号并重置新一次执行的计数，云端按新序号另存一行，旧运行记录保持不变。
+	vibeModel := ""
+	if prepared.input.Mode == ExecutionModeVibeCoding {
+		vibeModel = prepared.input.ModelName
+	}
 	result, err := tx.ExecContext(ctx, `UPDATE gt_tasks SET
 		selected_pipeline_uuid=?, selected_pipeline_config_json=?, pipeline_snapshot_uuid=?,
 		selected_expert_group_uuid=?, expert_group_snapshot_uuid=?, execution_mode=?, execution_tool=?,
-		vibe_coding_session_json='{}',
+		vibe_coding_session_json='{}', vibe_coding_model=?,
 		status=?, execution_status='idle', current_step_uuid=?, current_step_completed=0,
 		cli_type='', current_step_key='', execution_summary='', cloud_workflow_snapshot_hash='', model_name='',
 		input_tokens=0, output_tokens=0, total_tokens=0, conversation_rounds=0,
 		execution_index=execution_index+1,
 		started_at=0, finished_at=0, updated_at=? WHERE uuid=?`,
 		selectedPipelineUUID, selectedPipelineConfigJSON, pipelineSnapshotUUID, selectedExpertUUID, expertSnapshotUUID,
-		prepared.input.Mode, prepared.input.Tool, status, currentStepUUID, now, taskUUID)
+		prepared.input.Mode, prepared.input.Tool, vibeModel, status, currentStepUUID, now, taskUUID)
 	if err != nil {
 		return err
 	}
 	if rows, _ := result.RowsAffected(); rows != 1 {
 		return ErrNotFound
+	}
+	if prepared.input.Mode != ExecutionModeVibeCoding {
+		// 没有新会话时也保留侧栏入口，否则通知刷新会把用户切到其他任务。
+		_, err = tx.ExecContext(ctx, `INSERT INTO gt_task_notifications
+   (uuid,task_uuid,task_step_uuid,step_order,progress_uuid,session_uuid,terminal_status,title,summary,is_read,is_archived,created_at)
+   SELECT ?,uuid,?,0,'',?,'idle',title,'',1,0,? FROM gt_tasks WHERE uuid=?`,
+			uuid.NewString(), currentStepUUID, uuid.NewString(), now, taskUUID)
+		if err != nil {
+			return err
+		}
 	}
 	return nil
 }

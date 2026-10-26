@@ -1,3 +1,5 @@
+import type { CloudSyncState } from './task-sync'
+
 export type PipelineSource = 'local' | 'cloud'
 export type StepBusinessStatus = 'pending' | 'active' | 'completed'
 export type ExecutionStatus =
@@ -110,6 +112,12 @@ export interface TaskProgress {
   total_tokens?: number
   /** 会话实际执行耗时（毫秒），由后端按 started_at / finished_at 计算 */
   duration_ms?: number
+  /** 该会话沟通记录上报线上（云端）的状态 */
+  cloud_sync_status?: CloudSyncState
+  /** 上报失败原因，仅 failed 时有值 */
+  cloud_sync_error?: string
+  /** 最近一次上报成功的实际时间（毫秒），0 表示从未成功上报 */
+  cloud_synced_at?: number
   created_at: number
   started_at?: number
   finished_at?: number
@@ -152,12 +160,16 @@ export interface CompleteStepResponse {
 
 export interface LocalTask {
   uuid: string
+  created_from_conversation?: boolean
   title: string
   description?: string
   status: string
   execution_status?: ExecutionStatus
   execution_mode?: TaskExecutionMode
   execution_tool?: string
+  execution_tool_name?: string
+  execution_bound?: boolean
+  execution_index?: number
   source_type?: PipelineSource
   work_item_type?: string
   work_item_id?: string | number

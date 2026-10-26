@@ -1,144 +1,57 @@
 <template>
   <NewConversation v-if="isNewConversation" />
   <div v-else class="task-page">
-    <header class="page-titlebar">
-      <div class="page-titlebar-copy">
-        <strong>{{ t('workflows.task.common.conversation') }}</strong>
-        <p>{{ t('workflows.task.notifications.subtitle') }}</p>
-      </div>
-      <div class="page-titlebar-actions">
+    <TaskWorkspaceHeader
+      :task="task"
+      :status="taskStatus"
+      :changing-status="changingStatus"
+      :starting="starting"
+      :deleting="deleting"
+      :opening-terminal="openingTerminal"
+      :original-loading="originalLoading"
+      :has-requirement-update="hasRequirementUpdate"
+      @status="changeStatus"
+      @start="startTask"
+      @original="openOriginalRequirement"
+      @details="openTaskDetails(false)"
+      @terminal="openTaskTerminal"
+      @delete="deleteTask"
+      @renamed="handleTitleRenamed"
+      @changed="handleExecutionAssigned"
+    >
+      <template #actions>
         <a-tooltip
-          :title="
-            pipelineExpanded
-              ? t('workflows.task.notifications.hideOverview')
-              : t('workflows.task.notifications.showOverview')
-          "
+          v-if="selectedTaskUuid"
+          :title="workspaceOpen ? t('workflows.task.workspaceFiles.collapse') : t('workflows.task.workspaceFiles.open')"
           placement="bottomRight"
         >
           <button
             type="button"
             class="overview-toggle-button"
-            :aria-label="
-              pipelineExpanded
-                ? t('workflows.task.notifications.hideOverview')
-                : t('workflows.task.notifications.showOverview')
-            "
-            :aria-expanded="pipelineExpanded"
-            aria-controls="task-overview"
-            @click="togglePipelineExpanded"
+            :class="{ active: workspaceOpen }"
+            :aria-label="workspaceOpen ? t('workflows.task.workspaceFiles.collapse') : t('workflows.task.workspaceFiles.open')"
+            :aria-expanded="workspaceOpen"
+            aria-controls="task-workspace-panel"
+            @click="toggleWorkspace"
           >
-            <img
-              :src="taskOverviewToggleIcon"
-              alt=""
-              aria-hidden="true"
-            />
+            <FolderOpenOutlined />
           </button>
         </a-tooltip>
-        <button
-          v-if="task"
-          type="button"
-          class="overview-toggle-button terminal-button"
-          :disabled="openingTerminal || !(task.work_dir || task.task_dir)"
-          :aria-label="t('workflows.task.progress.openTerminal')"
-          :title="t('workflows.task.progress.openTerminal')"
-          @click="openSelectedTerminal"
-        >
-          <CodeOutlined />
-        </button>
-      </div>
-    </header>
-
-    <section
-      v-if="selectedConversation"
-      v-show="pipelineExpanded"
-      id="task-overview"
-      class="task-overview"
-      :aria-busy="taskLoading"
-    >
-      <template v-if="task">
-        <div class="task-overview-head">
-          <div class="task-overview-title">
-            <h2 :title="task.title">{{ task.title }}</h2>
-            <span
-              class="task-status"
-              :class="`status-${taskStatus}`"
-              >{{ taskStatusText }}</span
-            >
-            <span
-              v-if="taskPriorityText"
-              class="task-priority"
-              >{{ taskPriorityText }}</span
-            >
-          </div>
-        </div>
-        <div class="task-step-region">
-		  <div v-if="isExpertGroup" class="expert-overview"><strong>{{ task.expert_group_name_snapshot }}</strong><span>{{ `${t('expertGroups.leader')}：${sortedSteps.find(step => step.member_role === 'leader')?.name || ''}` }}</span><span>{{ t('expertGroups.members', { count: sortedSteps.filter(step => step.member_role === 'member').length }) }}</span></div>
-          <AgentStepStrip
-			v-else-if="hasPipelineSnapshot"
-            :steps="sortedSteps"
-            :current-step-index="currentStepIndex"
-            :current-step-uuid="effectiveCurrentStepUuid"
-            :selected-step-uuid="selectedStepUuid"
-            @select="selectStep"
-          />
-          <div
-            v-else-if="isVibeCoding"
-            class="direct-execution-summary"
-          >
-            <img
-              class="direct-execution-summary__logo"
-              :src="vibeCodingLogo"
-              alt=""
-              aria-hidden="true"
-            />
-            <span class="direct-execution-summary__label">{{
-              t('workflows.task.assign.vibeCodingMode')
-            }}</span>
-            <strong>{{ vibeCodingToolName }}</strong>
-          </div>
-          <div
-            v-else-if="isCLI"
-            class="direct-execution-summary"
-          >
-            <img
-              class="direct-execution-summary__logo"
-              :src="cliExecutionLogo"
-              alt=""
-              aria-hidden="true"
-            />
-            <span class="direct-execution-summary__label">{{
-              t('workflows.task.common.directExecution')
-            }}</span>
-            <strong>{{ cliRuntimeLabel }}</strong>
-          </div>
-          <div
-            v-else
-            class="step-region-empty"
-          >
-            {{ t('workflows.task.common.unassignedExecution') }}
-          </div>
-        </div>
       </template>
-      <div
-        v-else
-        class="task-overview-skeleton"
-        aria-hidden="true"
-      >
-        <div class="overview-skeleton-head">
-          <span class="overview-skeleton-title" />
-        </div>
-        <div class="overview-skeleton-steps">
-          <span
-            v-for="index in 3"
-            :key="index"
-          />
-        </div>
-      </div>
-    </section>
+    </TaskWorkspaceHeader>
+    <TaskExecutionOverview
+      v-if="task"
+      :task="task"
+      :selected-step-uuid="selectedStepUuid"
+      :current-step-uuid="effectiveCurrentStepUuid"
+      @select="selectStep"
+      @assign="openExecutionModeModal(Boolean(task.execution_mode))"
+    />
 
     <div
       ref="taskLayoutRef"
       class="task-layout"
+      :class="{ 'is-resizing-workspace': workspaceResizing }"
     >
       <main
         class="conversation-main"
@@ -151,7 +64,10 @@
         >
           <div class="archived-banner-text">
             <span class="archived-badge">{{ t('layout.sidebar.archived') || '已归档' }}</span>
-            <span>{{ t('workflows.task.notifications.archivedTip') || '可继续发送消息，发送后自动取消归档。' }}</span>
+            <span>{{
+              t('workflows.task.notifications.archivedTip') ||
+              '可继续发送消息，发送后自动取消归档。'
+            }}</span>
           </div>
           <button
             type="button"
@@ -191,9 +107,11 @@
               <div class="composer-loading-body" />
             </div>
           </div>
-		  <template v-else-if="task && (hasPipelineSnapshot || isVibeCoding || isExpertGroup || isCLI)">
-			<NextStepButton
-			  v-if="!isVibeCoding && !isExpertGroup && !isCLI && showNextStepCard"
+          <template
+            v-else-if="task && (hasPipelineSnapshot || isVibeCoding || isExpertGroup || isCLI)"
+          >
+            <NextStepButton
+              v-if="!isVibeCoding && !isExpertGroup && !isCLI && showNextStepCard"
               :next-step-name="nextStepName"
               :is-last-step="isLastStep"
               :disabled="!canComplete"
@@ -216,52 +134,69 @@
                   size="small"
                 />
               </div>
+              <TaskDescriptionPreview :task="task" @edit="openTaskDetails(true)" @documents="openTaskDocuments" @preview-image="showImagePreview" />
               <TaskExecutionHistory
                 :task-uuid="selectedTaskUuid"
                 :revision="task.updated_at"
+                :file-roots="conversationFileRoots"
               />
+              <TaskActivityHeading v-model:open="cliActivityExpanded" :task="task" :selected-step-name="selectedStep?.name" />
               <StepMessageList
+                v-show="!isCLI || cliActivityExpanded"
 				:items="isVibeCoding ? progress : selectedProgress"
 				:steps="isVibeCoding ? [] : sortedSteps"
                 :highlight-uuid="highlightUuid"
-				:selected-step-name="isVibeCoding ? vibeCodingToolName : selectedStep?.name || ''"
-				:fallback-actor-name="isVibeCoding ? vibeCodingToolName : ''"
-				:fallback-actor-logo="isVibeCoding ? vibeCodingActorLogo : ''"
+                :selected-step-name="isVibeCoding ? vibeCodingToolName : selectedStep?.name || ''"
+                :fallback-actor-name="isVibeCoding ? vibeCodingToolName : ''"
+                :fallback-actor-logo="isVibeCoding ? vibeCodingActorLogo : ''"
                 :task-uuid="selectedTaskUuid"
+                :file-roots="conversationFileRoots"
                 @copy="copyResult"
+                @resync="loadSelectedTask(true)"
               />
             </div>
             <VibeCodingConversationNotice
               v-if="isVibeCoding"
               :tool-name="vibeCodingToolName"
+              :tool-id="task?.execution_tool || ''"
+              :task-uuid="selectedTaskUuid"
               show-open-button
               :open-label="t('workflows.task.detail.openInTool', { tool: vibeCodingToolName })"
               :opening="codexBusy"
               @open="handleOpenVibeTool"
             />
             <ChatComposer
-			  v-else
+              v-else
               ref="composerRef"
               v-model="question"
               :can-ask="canAsk"
-              :submitting="submitting"
+              :submitting="submitting || completing"
               :running="Boolean(activeSelectedProgress)"
               :stopping="stoppingSessionUuid === activeSelectedProgress?.session_uuid"
               :cli-type="composerCliType"
               :model-name="composerModelName"
-              :start-mode="selectedStepAwaitingStart"
+              :start-mode="!isExpertGroup && !isCLI && selectedStepAwaitingStart"
+              :advance-action="composerAdvanceAction"
               :placeholder="composerPlaceholder"
               :context-text="composerContextText"
               :task-uuid="selectedTaskUuid"
+              :draft-key="composerDraftIdentity"
+              :allow-draft="hasPipelineSnapshot"
+              :notice="pipelineConversation.notice.value"
+              :locate-step-uuid="hasPipelineSnapshot && activeTaskProgress?.task_step_uuid !== selectedStepUuid ? activeTaskProgress?.task_step_uuid : undefined"
 			  :current-step="isExpertGroup ? undefined : selectedStep"
 			  :document-step="isExpertGroup ? currentStep : selectedStep"
               :steps="sortedSteps"
 			  :expert-members="isExpertGroup ? sortedSteps : []"
-              :executing-step-uuid="effectiveCurrentStepUuid"
+              :executing-step-uuid="activeTaskProgress?.task_step_uuid || effectiveCurrentStepUuid"
               :hide-agent-prompt="isCLI"
 			  @submit="isExpertGroup ? submitExpertMessage($event) : submitQuestion($event)"
+              @advance="completeStep"
               @stop="stopSelectedConversation"
               @prompt-saved="loadSelectedTask"
+              :execution-task="task"
+              @switch-execution="openExecutionModeModal(Boolean(task.execution_mode))"
+              @select-step="selectStep"
             />
           </template>
           <div
@@ -295,6 +230,29 @@
           <p>{{ t('workflows.task.notifications.emptyDescription') }}</p>
         </div>
       </main>
+      <aside
+        v-if="workspaceOpen && selectedTaskUuid"
+        id="task-workspace-panel"
+        class="workspace-pane"
+        :style="{ width: `${workspaceWidth}px`, flexBasis: `${workspaceWidth}px` }"
+      >
+        <div
+          class="workspace-resize-handle"
+          role="separator"
+          tabindex="0"
+          aria-orientation="vertical"
+          :aria-label="t('workflows.task.workspaceFiles.resize')"
+          :aria-valuemin="260"
+          :aria-valuemax="getWorkspaceMaxWidth()"
+          :aria-valuenow="workspaceWidth"
+          @pointerdown="startWorkspaceResize"
+          @keydown="resizeWorkspaceWithKeyboard"
+        />
+        <WorkspaceFilePanel
+          :task-uuid="selectedTaskUuid"
+          @close="closeWorkspace"
+        />
+      </aside>
     </div>
 
     <div
@@ -349,9 +307,12 @@
       :task="task"
       :status="taskStatus"
       :rendered-description="renderedDescription"
+      :initial-editing="detailInitiallyEditing"
       @preview-image="showImagePreview"
       @saved="handleTaskSaved"
     />
+    <WorkItemDetailModal v-model:open="originalOpen" :item="originalItem" />
+    <TaskExecutionModeDialog v-if="task" v-model:open="assignModalOpen" :task="task" :replace-existing="assignReplaceExisting" @assigned="handleExecutionAssigned" />
     <StopExecutionConfirmModal
       :open="stopConfirmOpen"
       :loading="Boolean(stoppingSessionUuid)"
@@ -362,56 +323,68 @@
       v-model:open="previewImageVisible"
       :image-url="previewImageUrl"
     />
+    <!-- 任务详情标题旁的产出文档入口；Vibe Coding 没有输入框时用独立抽屉承接 -->
+    <TaskDocumentsDrawer
+      v-model:open="standaloneDocumentsOpen"
+      :task-uuid="selectedTaskUuid"
+      :current-step="currentStep"
+      :reference-enabled="false"
+    />
   </div>
 </template>
 
 <script setup lang="ts">
+import { showVibeToolOpenResult } from '@/composables/useVibeToolFeedback'
+import TaskActivityHeading from '@/components/task-progress/TaskActivityHeading.vue'
+import TaskWorkspaceHeader from '@/components/task-progress/TaskWorkspaceHeader.vue'
+import TaskExecutionOverview from '@/components/task-progress/TaskExecutionOverview.vue'
+import TaskDescriptionPreview from '@/components/task-progress/TaskDescriptionPreview.vue'
+import TaskDocumentsDrawer from '@/components/task-progress/TaskDocumentsDrawer.vue'
+import TaskExecutionModeDialog from '@/components/task-progress/TaskExecutionModeDialog.vue'
+import WorkItemDetailModal from '@/views/workflows/components/WorkItemDetailModal.vue'
+import { useTaskWorkspaceControls } from '@/composables/useTaskWorkspaceControls'
+
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, toRaw, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { message } from 'ant-design-vue'
 import NewConversation from './NewConversation.vue'
 import { useConversationStore } from '@/stores/conversation'
-import { readComposerDraft, writeComposerDraft } from '@/composables/useComposerDraft'
+import { useComposerDraft, readComposerDraft, writeComposerDraft } from '@/composables/useComposerDraft'
+import { usePipelineStepConversation } from '@/composables/usePipelineStepConversation'
 import {
   CheckCircleOutlined,
-  CodeOutlined,
+  FolderOpenOutlined,
   FolderOutlined,
   ReloadOutlined,
 } from '@ant-design/icons-vue'
 import MarkdownIt from 'markdown-it'
 import apiClient from '@/api/client'
-import cliExecutionLogo from '@/assets/icons/task-composer-cli.svg'
-import vibeCodingLogo from '@/assets/icons/vibe-coding-logo.svg'
 import contextArchiveIcon from '@/assets/icons/task-context-archive.svg'
 import contextDetailIcon from '@/assets/icons/task-context-detail.svg'
 import contextReadIcon from '@/assets/icons/task-context-read.svg'
-import taskOverviewToggleIcon from '@/assets/icons/task-overview-toggle.svg'
 import { vibeToolLabelKey, vibeToolLogo } from '@/composables/useVibeCoding'
-import AgentStepStrip from '@/components/task-progress/AgentStepStrip.vue'
 import ChatComposer from '@/components/task-progress/ChatComposer.vue'
 import NextStepButton from '@/components/task-progress/NextStepButton.vue'
 import StepMessageList from '@/components/task-progress/StepMessageList.vue'
 import StopExecutionConfirmModal from '@/components/task-progress/StopExecutionConfirmModal.vue'
 import TaskExecutionHistory from '@/components/task-progress/TaskExecutionHistory.vue'
 import VibeCodingConversationNotice from '@/components/task-progress/VibeCodingConversationNotice.vue'
+import WorkspaceFilePanel from '@/components/workspace/WorkspaceFilePanel.vue'
 import { copyText } from '@/utils/clipboard'
+import { taskFileRoots } from '@/utils/localFileLink'
 import { isStopConfirmSuppressed, suppressStopConfirm } from '@/utils/stopConfirm'
-import { openTerminal } from '@/composables/useDesktop'
 import {
-  openTaskInCodex,
-} from '@/composables/useTaskCodex'
+  openTaskVibeTool,
+} from '@/composables/useTaskVibeTool'
 import { useLocalWS, useLocalWSStatus } from '@/composables/useLocalWebSocket'
 import { buildCliKickoffPrompt, pendingCliKickoffUuid } from '@/composables/useCliKickoff'
 import { useAppStore } from '@/stores/app'
-import type {
-  CompleteStepResponse,
-  TaskNotification,
-  TaskProgress,
-} from '@/types/pipeline'
+import type { CompleteStepResponse, TaskNotification, TaskProgress } from '@/types/pipeline'
 import type { ChatComposerSubmission } from '@/types/task-attachments'
 import { isUserMessage, resultText, userMessageText } from '@/components/task-progress/utils'
 import type { TaskWithDetails } from '@/types/task-detail'
 import {
+  taskConversationCacheScope,
   deleteTaskView,
   deleteTaskViewsOutside,
   readTaskConversationCache,
@@ -453,8 +426,12 @@ const notificationsLoading = ref(false)
 const notificationsError = ref('')
 const notifications = ref<TaskNotification[]>([])
 const temporaryNotifications = ref<TaskNotification[]>([])
-watch(() => [...notifications.value, ...temporaryNotifications.value].filter((item) => !item.is_read).length,
-  (count) => appStore.setUnreadTaskNotifications(count))
+watch(
+  () =>
+    [...notifications.value, ...temporaryNotifications.value].filter((item) => !item.is_read)
+      .length,
+  (count) => appStore.setUnreadTaskNotifications(count),
+)
 const pendingReadTasks = new Map<string, { isRead: boolean; notificationUuids: Set<string> }>()
 const selectedTaskUuid = ref('')
 const selectedStepUuid = ref('')
@@ -463,6 +440,27 @@ const selectedProgressUuid = ref('')
 const taskLoading = ref(false)
 const taskError = ref('')
 const task = ref<TaskWithDetails>()
+const conversationFileRoots = computed(() => taskFileRoots(task.value))
+const {
+  changingStatus, starting, deleting, openingTerminal, originalLoading, originalOpen, originalItem,
+  assignModalOpen, assignReplaceExisting, hasRequirementUpdate,
+  changeStatus, startTask, openOriginalRequirement, openTaskTerminal, deleteTask, openExecutionModeModal,
+} = useTaskWorkspaceControls(task, {
+  refresh: async () => { await Promise.all([loadSelectedTask(), loadNotifications(true), conversationStore.loadConversations(true)]) },
+  deleted: async () => {
+    selectedTaskUuid.value = ''
+    task.value = undefined
+    await router.push({ name: 'tasks-new' })
+  },
+})
+function handleTitleRenamed(title: string) {
+  if (task.value) task.value = { ...task.value, title }
+  void Promise.all([loadSelectedTask(), loadNotifications(true)])
+}
+async function handleExecutionAssigned() {
+  await Promise.all([loadSelectedTask(), loadNotifications(true), conversationStore.loadConversations(true)])
+}
+
 const progress = ref<TaskProgress[]>([])
 const taskViewCache = new Map<string, TaskViewCache>()
 const submitting = ref(false)
@@ -470,26 +468,44 @@ const completing = ref(false)
 const stoppingSessionUuid = ref('')
 const stopConfirmOpen = ref(false)
 const stopConfirmSessionUuid = ref('')
-const question = ref('')
-watch(selectedTaskUuid, (next, prev) => {
-  if (prev && prev !== next) writeComposerDraft(prev, question.value)
-  question.value = next ? readComposerDraft(next) : ''
-})
-watch(question, (value) => {
-  if (!selectedTaskUuid.value) return
-  writeComposerDraft(selectedTaskUuid.value, value)
-})
+const pipelineConversation = usePipelineStepConversation(task, progress, selectedStepUuid, selectedTaskUuid)
+const composerDraftIdentity = pipelineConversation.draftKey
+const activeTaskProgress = pipelineConversation.activeTaskProgress
+const question = useComposerDraft(composerDraftIdentity)
 const composerRef = ref<InstanceType<typeof ChatComposer>>()
+// 任务详情标题旁的产出文档入口：没有输入框（Vibe Coding）时用独立抽屉
+const standaloneDocumentsOpen = ref(false)
 const highlightUuid = ref('')
 const pipelineExpanded = ref(true)
-const openingTerminal = ref(false)
+const cliActivityExpanded = ref(true)
 const codexBusy = ref(false)
 const taskLayoutRef = ref<HTMLElement>()
+const workspaceOpen = ref(localStorage.getItem('teambuddy.workspace-panel.open') !== 'false')
+const workspaceWidth = ref(
+  clampWorkspaceWidth(Number(localStorage.getItem('teambuddy.workspace-panel.width')) || 300),
+)
+const workspaceResizing = ref(false)
+let workspaceResizeStartX = 0
+let workspaceResizeStartWidth = 300
 
 const contextTaskUuid = ref('')
 const contextX = ref(0)
 const contextY = ref(0)
 const detailModalOpen = ref(false)
+const detailInitiallyEditing = ref(false)
+function openTaskDetails(edit = false) {
+  detailInitiallyEditing.value = edit
+  detailModalOpen.value = true
+}
+
+/**
+ * 任务详情标题旁的「产出文档」入口：有输入框时用 ChatComposer 的抽屉（保留引用能力），
+ * Vibe Coding 等没有输入框的形态退回页面级独立抽屉。
+ */
+function openTaskDocuments() {
+  if (composerRef.value?.openDocuments()) return
+  standaloneDocumentsOpen.value = true
+}
 const previewImageUrl = ref('')
 const previewImageVisible = ref(false)
 
@@ -497,24 +513,13 @@ let refreshTimer: ReturnType<typeof setTimeout> | undefined
 let highlightTimer: ReturnType<typeof setTimeout> | undefined
 let taskLoadVersion = 0
 let notificationsLoadVersion = 0
+const cacheScope = taskConversationCacheScope()
+let disposed = false
 let persistentCacheAvailable = true
 let notificationsHydrated = false
 let lastNotifiedTaskUuids = new Set<string>()
 
 const wsConnected = useLocalWSStatus()
-
-const taskStatusLabels = computed<Record<string, string>>(() => ({
-  pending: t('workflows.task.status.pending'),
-  in_progress: t('workflows.task.status.inProgress'),
-  blocked: t('workflows.task.status.blocked'),
-  done: t('workflows.task.status.done'),
-}))
-const taskPriorityLabels = computed<Record<string, string>>(() => ({
-  urgent: t('workflows.task.priority.urgent'),
-  high: t('workflows.task.priority.high'),
-  medium: t('workflows.task.priority.medium'),
-  low: t('workflows.task.priority.low'),
-}))
 
 const conversations = computed<TaskConversation[]>(() => {
   const grouped = new Map<string, TaskNotification[]>()
@@ -560,25 +565,18 @@ const sortedSteps = computed(() =>
   [...(task.value?.steps || [])].sort((a, b) => a.sort_order - b.sort_order),
 )
 const hasPipelineSnapshot = computed(() =>
-	Boolean(task.value?.execution_mode === 'pipeline' && (task.value?.pipeline_snapshot_uuid || sortedSteps.value.length)),
+  Boolean(
+    task.value?.execution_mode === 'pipeline' &&
+    (task.value?.pipeline_snapshot_uuid || sortedSteps.value.length),
+  ),
 )
-const isVibeCoding = computed(
-  () => task.value?.execution_mode === 'vibe_coding',
-)
-const vibeCodingToolName = computed(() =>
-  t(vibeToolLabelKey(task.value?.execution_tool || '')),
-)
+const isVibeCoding = computed(() => task.value?.execution_mode === 'vibe_coding')
+const vibeCodingToolName = computed(() => t(vibeToolLabelKey(task.value?.execution_tool || '')))
 const vibeCodingActorLogo = computed(() => vibeToolLogo(task.value?.execution_tool || ''))
 const isExpertGroup = computed(() => task.value?.execution_mode === 'expert_group')
 // 需求 2204：CLI 直接执行没有流水线与多 Agent，对话页也要能展示该任务的动态与输入框。
 // 需求 2202 评论 4：直接执行 CLI 时输入框不展示「Agent 提示词」入口。
 const isCLI = computed(() => task.value?.execution_mode === 'cli')
-// CLI 任务的执行目标固定展示为「CLI · 模型」。
-const cliRuntimeLabel = computed(() => {
-  const tool = task.value?.execution_tool || ''
-  const model = task.value?.execution_model || sortedSteps.value[0]?.model_name || ''
-  return [tool, model].filter(Boolean).join(' · ')
-})
 const effectiveCurrentStepUuid = computed(
   () =>
     task.value?.current_step_uuid ||
@@ -599,7 +597,9 @@ const selectedStepIndex = computed(() =>
   sortedSteps.value.findIndex((step) => step.uuid === selectedStepUuid.value),
 )
 const selectedProgress = computed(() =>
-	isExpertGroup.value ? progress.value : progress.value.filter((item) => item.task_step_uuid === selectedStepUuid.value),
+  isExpertGroup.value
+    ? progress.value
+    : progress.value.filter((item) => item.task_step_uuid === selectedStepUuid.value),
 )
 const latestSelectedAgentProgress = computed(() =>
   [...selectedProgress.value].reverse().find((item) => !isUserMessage(item)),
@@ -624,18 +624,6 @@ const composerModelName = computed(
 const initialTaskLoading = computed(() => taskLoading.value && !task.value)
 const taskRefreshing = computed(() => taskLoading.value && Boolean(task.value))
 const selectedIsCurrent = computed(() => selectedStepUuid.value === effectiveCurrentStepUuid.value)
-const selectedStepReached = computed(() =>
-  Boolean(
-    selectedStep.value &&
-    (selectedIsCurrent.value ||
-      selectedStep.value.status === 'completed' ||
-      (currentStepIndex.value >= 0 &&
-        selectedStepIndex.value >= 0 &&
-        selectedStepIndex.value < currentStepIndex.value) ||
-      selectedProgress.value.length > 0),
-  ),
-)
-const hasRunningSelectedConversation = computed(() => Boolean(activeSelectedProgress.value))
 const currentStepLocked = computed(
   () =>
     !task.value ||
@@ -643,9 +631,9 @@ const currentStepLocked = computed(
     Boolean(task.value.current_step_completed) ||
     currentStep.value?.status === 'completed',
 )
-const canAsk = computed(
-	() => !taskLoading.value && (isExpertGroup.value || selectedStepReached.value) && !hasRunningSelectedConversation.value,
-)
+const canAsk = computed(() => !taskLoading.value && (
+  hasPipelineSnapshot.value ? pipelineConversation.canSend.value : Boolean(selectedStep.value || isExpertGroup.value) && !activeTaskProgress.value
+))
 const selectedStepAwaitingStart = computed(
   () =>
     selectedIsCurrent.value &&
@@ -675,10 +663,21 @@ const nextStepName = computed(() =>
 const showNextStepCard = computed(
   () => selectedIsCurrent.value && !currentStepLocked.value && lastProgressTerminal.value,
 )
+const composerAdvanceAction = computed(() => {
+  if (!hasPipelineSnapshot.value || !showNextStepCard.value) return undefined
+  return {
+    label: t(isLastStep.value ? 'workflows.task.progress.completeTask' : 'workflows.task.progress.enterNext'),
+    disabled: !canComplete.value,
+    loading: completing.value,
+  }
+})
 const composerPlaceholder = computed(() => {
   if (taskLoading.value) return t('workflows.task.feedback.refreshingWait')
-  if (!selectedStepReached.value) return t('workflows.task.detail.stepUnavailable')
-  if (hasRunningSelectedConversation.value) return t('workflows.task.feedback.agentRunning')
+  if (hasPipelineSnapshot.value) {
+    if (pipelineConversation.notice.value) return pipelineConversation.notice.value
+    return t(activeSelectedProgress.value ? 'workflows.task.detail.stepRunning' : 'workflows.task.detail.messagePlaceholder')
+  }
+  if (activeSelectedProgress.value) return t('workflows.task.feedback.agentRunning')
   // CLI 直接执行没有多 Agent，用指令式占位文案。
   if (isCLI.value) return t('workflows.task.detail.cliMessagePlaceholder')
   return t('workflows.task.feedback.mentionPlaceholder')
@@ -690,11 +689,6 @@ const composerContextText = computed(() =>
   }),
 )
 const taskStatus = computed(() => statusValue(task.value?.status))
-const taskStatusText = computed(() => taskStatusLabels.value[taskStatus.value] || taskStatus.value)
-const taskPriorityText = computed(
-  () => taskPriorityLabels.value[String(task.value?.priority || '').toLowerCase()] || '',
-)
-
 // 详情状态可能来自接口、内存缓存或持久化缓存；无论来源如何，都同步给侧栏，
 // 避免任务已经 blocked，但旧的 running 通知仍让侧栏显示 loading。
 watch(
@@ -738,10 +732,15 @@ function routeQueryValue(value: unknown) {
 // watch 源数组会立即求值，不能把本段提前到它们之前（会触发 TDZ 错误）。
 const autoKickoffTaskUuid = ref('')
 const cliKickoffSending = ref(false)
+watch(() => task.value?.awaiting_message, waiting => {
+  if (!waiting) return
+  if (pendingCliKickoffUuid.value === selectedTaskUuid.value) pendingCliKickoffUuid.value = ''
+  if (autoKickoffTaskUuid.value === selectedTaskUuid.value) autoKickoffTaskUuid.value = ''
+})
 
 const cliKickoffPending = computed(() => {
   const target = selectedTaskUuid.value
-  if (!target) return false
+  if (!target || task.value?.awaiting_message) return false
   return autoKickoffTaskUuid.value === target || pendingCliKickoffUuid.value === target
 })
 
@@ -850,7 +849,8 @@ async function selectConversationFromRoute() {
   }
   selectedTaskUuid.value = conversation.task_uuid
   selectedStepUuid.value = nextStepUuid
-  selectedProgressUuid.value = kickoffThisTask || routeStepUuid ? '' : conversation.latest.progress_uuid || ''
+  selectedProgressUuid.value =
+    kickoffThisTask || routeStepUuid ? '' : conversation.latest.progress_uuid || ''
   closeContextMenu()
   void persistViewState()
   await loadSelectedTask()
@@ -973,18 +973,18 @@ function currentNotificationSnapshot() {
 }
 
 async function persistNotificationSnapshot() {
-  if (!persistentCacheAvailable) return
+  if (!persistentCacheAvailable || disposed) return
   try {
-    await saveTaskNotificationSnapshot(currentNotificationSnapshot())
+    await saveTaskNotificationSnapshot(currentNotificationSnapshot(), cacheScope)
   } catch (error) {
     reportCacheFailure('保存通知快照', error)
   }
 }
 
 async function persistViewState() {
-  if (!persistentCacheAvailable) return
+  if (!persistentCacheAvailable || disposed) return
   try {
-    await saveTaskConversationViewState(selectedTaskUuid.value, pipelineExpanded.value)
+    await saveTaskConversationViewState(selectedTaskUuid.value, pipelineExpanded.value, cacheScope)
   } catch (error) {
     reportCacheFailure('保存页面状态', error)
   }
@@ -995,18 +995,18 @@ async function persistTaskView(
   loadedTask: TaskWithDetails,
   loadedProgress: TaskProgress[],
 ) {
-  if (!persistentCacheAvailable) return
+  if (!persistentCacheAvailable || disposed) return
   try {
-    await saveTaskView(taskUuid, loadedTask, loadedProgress)
+    await saveTaskView(taskUuid, loadedTask, loadedProgress, cacheScope)
   } catch (error) {
     reportCacheFailure('保存会话详情', error)
   }
 }
 
 async function removePersistentTaskView(taskUuid: string) {
-  if (!persistentCacheAvailable) return
+  if (!persistentCacheAvailable || disposed) return
   try {
-    await deleteTaskView(taskUuid)
+    await deleteTaskView(taskUuid, cacheScope)
   } catch (error) {
     reportCacheFailure('删除会话详情', error)
   }
@@ -1016,9 +1016,9 @@ async function reconcileTaskViewCache(validTaskUuids: Set<string>) {
   for (const taskUuid of taskViewCache.keys()) {
     if (!validTaskUuids.has(taskUuid)) taskViewCache.delete(taskUuid)
   }
-  if (!persistentCacheAvailable) return
+  if (!persistentCacheAvailable || disposed) return
   try {
-    await deleteTaskViewsOutside(validTaskUuids)
+    await deleteTaskViewsOutside(validTaskUuids, cacheScope)
   } catch (error) {
     reportCacheFailure('清理失效会话', error)
   }
@@ -1026,7 +1026,8 @@ async function reconcileTaskViewCache(validTaskUuids: Set<string>) {
 
 async function restorePersistentTaskConversationCache() {
   try {
-    const cached = await readTaskConversationCache()
+    const cached = await readTaskConversationCache(cacheScope)
+    if (disposed) return false
     notifications.value = cached.notifications
     temporaryNotifications.value = []
     taskViewCache.clear()
@@ -1092,13 +1093,13 @@ async function loadNotifications(preserveSelection = true) {
     const routeTaskUuid = routeQueryValue(route.query.taskUuid)
     const routeStepUuid = routeQueryValue(route.query.stepUuid)
     const routeConversation = conversations.value.find((item) => item.task_uuid === routeTaskUuid)
-	if (routeConversation) {
+    if (routeConversation) {
       selectedTaskUuid.value = routeConversation.task_uuid
       selectedStepUuid.value = routeStepUuid || routeConversation.latest.task_step_uuid
       selectedProgressUuid.value = routeStepUuid ? '' : routeConversation.latest.progress_uuid || ''
     } else if (
-      (!preserveSelection ||
-        !conversations.value.some((item) => item.task_uuid === selectedTaskUuid.value))
+      !preserveSelection ||
+      !conversations.value.some((item) => item.task_uuid === selectedTaskUuid.value)
     ) {
       if (routeTaskUuid) {
         const first = conversations.value[0]
@@ -1211,8 +1212,10 @@ async function loadSelectedTask(silent = false) {
 async function initialize() {
   notificationsLoading.value = true
   const restoredFromCache = await restorePersistentTaskConversationCache()
+  if (disposed) return
   if (selectedTaskUuid.value) void loadSelectedTask()
   await loadNotifications(restoredFromCache)
+  if (disposed) return
   // 直接打开带 taskUuid 的链接（指派 CLI 后的跳转就是这种）时路由 watcher 不会触发，
   // 这里补一次路由选中，避免停在空白态。
   await selectConversationFromRoute()
@@ -1223,7 +1226,9 @@ async function setTaskRead(taskUuid: string, isRead: boolean) {
   if (!conversation || pendingReadTasks.has(taskUuid)) return
   const previous = new Map(conversation.items.map((item) => [item.uuid, item.is_read]))
   pendingReadTasks.set(taskUuid, { isRead, notificationUuids: new Set(previous.keys()) })
-  conversation.items.forEach((item) => { item.is_read = isRead })
+  conversation.items.forEach((item) => {
+    item.is_read = isRead
+  })
   try {
     await conversationStore.setTaskRead(taskUuid, isRead)
   } catch (error) {
@@ -1328,12 +1333,15 @@ async function submitQuestion(submission: ChatComposerSubmission) {
   const text = submission.content.trim()
   const step = selectedStep.value
   if (!text || !step || !canAsk.value || submitting.value) return
-  const startingStep = selectedStepAwaitingStart.value
+  const startingStep = hasPipelineSnapshot.value ? pipelineConversation.firstRun.value : selectedStepAwaitingStart.value
+  const taskUuid = selectedTaskUuid.value
+  const draftKey = composerDraftIdentity.value
+  const draftText = question.value
   submitting.value = true
   try {
     const path = startingStep
-      ? `/tasks/${selectedTaskUuid.value}/steps/${step.uuid}/runs`
-      : `/tasks/${selectedTaskUuid.value}/steps/${step.uuid}/questions`
+      ? `/tasks/${encodeURIComponent(taskUuid)}/steps/${encodeURIComponent(step.uuid)}/runs`
+      : `/tasks/${encodeURIComponent(taskUuid)}/steps/${encodeURIComponent(step.uuid)}/questions`
     await apiClient.post(path, {
       question: text,
       display_question: submission.display_content?.trim() || text,
@@ -1341,16 +1349,16 @@ async function submitQuestion(submission: ChatComposerSubmission) {
       cli_type: submission.config.cli_type,
       model_name: submission.config.model_name,
     })
-    question.value = ''
-    composerRef.value?.resetAfterSubmit()
-    selectedProgressUuid.value = ''
+    if (readComposerDraft(draftKey) === draftText) writeComposerDraft(draftKey, '')
+    composerRef.value?.resetAfterSubmit(draftKey)
+    if (selectedTaskUuid.value === taskUuid && selectedStepUuid.value === step.uuid) selectedProgressUuid.value = ''
     message.success(
       startingStep
         ? t('workflows.task.feedback.agentStarted')
         : t('workflows.task.feedback.messageSent'),
     )
-    await unarchiveConversationIfNeeded(selectedTaskUuid.value)
-    await setTaskRead(selectedTaskUuid.value, true)
+    await unarchiveConversationIfNeeded(taskUuid)
+    await setTaskRead(taskUuid, true)
     await Promise.all([loadNotifications(true), loadSelectedTask()])
   } catch (error) {
     message.error(
@@ -1411,16 +1419,55 @@ function closeContextMenu() {
   contextTaskUuid.value = ''
 }
 
-function togglePipelineExpanded() {
-  pipelineExpanded.value = !pipelineExpanded.value
-  void persistViewState()
+function getWorkspaceMaxWidth() {
+  const availableWidth = taskLayoutRef.value?.clientWidth || window.innerWidth
+  return Math.max(260, Math.floor(availableWidth / 2))
 }
 
-async function openSelectedTerminal() {
-  const workDir = task.value?.work_dir || task.value?.task_dir || ''
-  if (!workDir || openingTerminal.value) return
-  openingTerminal.value = true
-  try { await openTerminal(workDir) } catch (error) { message.error(error instanceof Error ? error.message : t('workflows.task.progress.openTerminalFailed')) } finally { openingTerminal.value = false }
+function clampWorkspaceWidth(width: number) {
+  return Math.min(getWorkspaceMaxWidth(), Math.max(260, Math.round(width)))
+}
+
+function toggleWorkspace() {
+  workspaceOpen.value = !workspaceOpen.value
+  localStorage.setItem('teambuddy.workspace-panel.open', String(workspaceOpen.value))
+}
+
+function closeWorkspace() {
+  workspaceOpen.value = false
+  localStorage.setItem('teambuddy.workspace-panel.open', 'false')
+}
+
+function startWorkspaceResize(event: PointerEvent) {
+  if (event.button !== 0 || window.matchMedia('(max-width: 1000px)').matches) return
+  event.preventDefault()
+  workspaceResizing.value = true
+  workspaceResizeStartX = event.clientX
+  workspaceResizeStartWidth = workspaceWidth.value
+  window.addEventListener('pointermove', moveWorkspaceResize)
+  window.addEventListener('pointerup', finishWorkspaceResize, { once: true })
+}
+
+function moveWorkspaceResize(event: PointerEvent) {
+  if (!workspaceResizing.value) return
+  workspaceWidth.value = clampWorkspaceWidth(
+    workspaceResizeStartWidth + workspaceResizeStartX - event.clientX,
+  )
+}
+
+function finishWorkspaceResize() {
+  if (!workspaceResizing.value) return
+  workspaceResizing.value = false
+  window.removeEventListener('pointermove', moveWorkspaceResize)
+  localStorage.setItem('teambuddy.workspace-panel.width', String(workspaceWidth.value))
+}
+
+function resizeWorkspaceWithKeyboard(event: KeyboardEvent) {
+  if (!['ArrowLeft', 'ArrowRight'].includes(event.key)) return
+  event.preventDefault()
+  const delta = event.key === 'ArrowLeft' ? 16 : -16
+  workspaceWidth.value = clampWorkspaceWidth(workspaceWidth.value + delta)
+  localStorage.setItem('teambuddy.workspace-panel.width', String(workspaceWidth.value))
 }
 
 async function handleOpenVibeTool() {
@@ -1429,18 +1476,14 @@ async function handleOpenVibeTool() {
   codexBusy.value = true
   try {
     await unarchiveConversationIfNeeded(selectedTaskUuid.value)
-    const openResult = await openTaskInCodex(selectedTaskUuid.value)
-    if (openResult.opened) {
-      message.success(t('workflows.task.detail.toolOpened', { tool: toolName }))
-    } else if (openResult.copied) {
-      message.warning(t('workflows.task.detail.toolCopiedFallback', { tool: toolName }))
-    } else if (openResult.error) {
-      message.error(openResult.error.message)
-    } else {
-      message.warning(t('workflows.task.detail.toolUnavailable', { tool: toolName }))
-    }
+    const openResult = await openTaskVibeTool(selectedTaskUuid.value)
+    showVibeToolOpenResult(openResult, toolName)
   } catch (error) {
-    message.error(error instanceof Error ? error.message : t('workflows.task.detail.toolOpenFailed', { tool: toolName }))
+    message.error(
+      error instanceof Error
+        ? error.message
+        : t('workflows.task.detail.toolOpenFailed', { tool: toolName }),
+    )
   } finally {
     codexBusy.value = false
   }
@@ -1455,7 +1498,7 @@ async function openConversationDetail() {
     closeContextMenu()
     if (task.value?.uuid !== conversation.task_uuid) await loadSelectedTask()
   }
-  if (task.value?.uuid === conversation.task_uuid) detailModalOpen.value = true
+  if (task.value?.uuid === conversation.task_uuid) openTaskDetails(false)
 }
 
 async function toggleRead() {
@@ -1466,9 +1509,10 @@ async function toggleRead() {
 }
 
 async function unarchiveConversationIfNeeded(taskUuid: string) {
-  const isArchived = selectedConversation.value?.task_uuid === taskUuid
-    ? selectedConversation.value.is_archived
-    : conversationStore.allConversations.find((item) => item.task_uuid === taskUuid)?.is_archived
+  const isArchived =
+    selectedConversation.value?.task_uuid === taskUuid
+      ? selectedConversation.value.is_archived
+      : conversationStore.allConversations.find((item) => item.task_uuid === taskUuid)?.is_archived
   if (!isArchived) return
   await conversationStore.archiveTask(taskUuid, false)
   for (const item of [...notifications.value, ...temporaryNotifications.value]) {
@@ -1481,7 +1525,11 @@ async function unarchiveCurrentTask() {
   try {
     await unarchiveConversationIfNeeded(selectedTaskUuid.value)
     message.success(t('layout.sidebar.unarchive') || '已取消归档')
-    await Promise.all([conversationStore.loadConversations(true), loadNotifications(true), loadSelectedTask()])
+    await Promise.all([
+      conversationStore.loadConversations(true),
+      loadNotifications(true),
+      loadSelectedTask(),
+    ])
   } catch (err) {
     message.error(err instanceof Error ? err.message : '操作失败')
   }
@@ -1528,10 +1576,17 @@ async function submitExpertMessage(submission: ChatComposerSubmission) {
       request_id: crypto.randomUUID(),
     })
     await unarchiveConversationIfNeeded(selectedTaskUuid.value)
-    question.value = ''; composerRef.value?.resetAfterSubmit(); message.success(t('workflows.task.feedback.messageSent'))
+    question.value = ''
+    composerRef.value?.resetAfterSubmit()
+    message.success(t('workflows.task.feedback.messageSent'))
     await Promise.all([loadNotifications(true), loadSelectedTask()])
-  } catch (error) { message.error(error instanceof Error ? error.message : t('workflows.task.feedback.messageFailed')) }
-  finally { submitting.value = false }
+  } catch (error) {
+    message.error(
+      error instanceof Error ? error.message : t('workflows.task.feedback.messageFailed'),
+    )
+  } finally {
+    submitting.value = false
+  }
 }
 
 function showImagePreview(url: string) {
@@ -1550,7 +1605,9 @@ useLocalWS('task.changed', (data: { task_uuid?: string; deleted?: boolean }) => 
     const taskUuid = data.task_uuid
     notificationsLoadVersion += 1
     notifications.value = notifications.value.filter((item) => item.task_uuid !== taskUuid)
-    temporaryNotifications.value = temporaryNotifications.value.filter((item) => item.task_uuid !== taskUuid)
+    temporaryNotifications.value = temporaryNotifications.value.filter(
+      (item) => item.task_uuid !== taskUuid,
+    )
     taskViewCache.delete(taskUuid)
     void removePersistentTaskView(taskUuid)
     if (selectedTaskUuid.value === taskUuid) {
@@ -1595,6 +1652,9 @@ onMounted(() => {
 })
 
 onBeforeUnmount(() => {
+  disposed = true
+  finishWorkspaceResize()
+  window.removeEventListener('pointerup', finishWorkspaceResize)
   taskLoadVersion += 1
   notificationsLoadVersion += 1
   clearRefreshTimer()
@@ -1678,8 +1738,10 @@ onBeforeUnmount(() => {
   background: #e4e6eb;
 }
 
-.overview-toggle-button:active {
-  background: #d9dce2;
+.overview-toggle-button:active,
+.overview-toggle-button.active {
+  color: #3157e2;
+  background: #eaf0ff;
 }
 
 .overview-toggle-button:focus-visible {
@@ -1806,9 +1868,20 @@ onBeforeUnmount(() => {
   color: #262626;
   font-weight: 500;
 }
-.expert-overview { display:flex; align-items:center; gap:16px; min-height:44px; padding:0 24px; color:#595959; }
-.expert-overview strong { color:#262626; }
-.expert-overview span { font-size:12px; }
+.expert-overview {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  min-height: 44px;
+  padding: 0 24px;
+  color: #595959;
+}
+.expert-overview strong {
+  color: #262626;
+}
+.expert-overview span {
+  font-size: 12px;
+}
 
 .task-overview-skeleton {
   min-height: 60px;
@@ -1851,9 +1924,74 @@ onBeforeUnmount(() => {
 }
 
 .task-layout {
+  position: relative;
   display: flex;
   min-height: 0;
   flex: 1;
+  container-name: task-layout;
+  container-type: inline-size;
+}
+
+.task-layout.is-resizing-workspace {
+  cursor: col-resize;
+  user-select: none;
+}
+
+.workspace-pane {
+  position: relative;
+  min-width: 260px;
+  max-width: 50%;
+  min-height: 0;
+  flex: 0 0 300px;
+  background: #fff;
+}
+
+.workspace-resize-handle {
+  position: absolute;
+  z-index: 2;
+  top: 0;
+  bottom: 0;
+  left: -6px;
+  width: 12px;
+  cursor: col-resize;
+  touch-action: none;
+}
+
+.workspace-resize-handle::after {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  width: 1px;
+  background: transparent;
+  content: '';
+  transform: translateX(-50%);
+}
+
+.workspace-resize-handle:hover::after,
+.workspace-resize-handle:focus-visible::after {
+  background: #3157e2;
+}
+
+.workspace-resize-handle:focus-visible {
+  outline: none;
+}
+
+@container task-layout (max-width: 760px) {
+  .workspace-pane {
+    position: absolute;
+    z-index: 20;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    width: min(380px, 88cqw) !important;
+    max-width: 88cqw;
+    box-shadow: -12px 0 32px rgba(15, 23, 42, 0.14);
+  }
+
+  .workspace-resize-handle {
+    display: none;
+  }
 }
 
 .task-layout.is-resizing-sidebar {
@@ -2301,7 +2439,7 @@ onBeforeUnmount(() => {
   min-height: 0;
   flex: 1;
   overflow-y: auto;
-  padding: 16px 32px 24px;
+  padding: 0 24px 24px;
 }
 
 .message-loading-skeleton {

@@ -3,7 +3,7 @@
     <button type="button" class="branch-picker" :disabled="disabled || switching"
       :title="t('workflows.task.progress.chooseBranch')" :aria-label="t('workflows.task.progress.chooseBranch')"
       aria-haspopup="menu" :aria-expanded="open">
-      <LoadingOutlined v-if="loading || switching" spin /><BranchesOutlined v-else />
+      <LoadingOutlined v-if="loading || switching" spin /><img v-else class="branch-icon" :src="branchIcon" alt="" aria-hidden="true" />
       <span>{{ branchLabel }}</span>
       <DownOutlined />
     </button>
@@ -40,7 +40,8 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { message } from 'ant-design-vue'
-import { BranchesOutlined, DownOutlined, LoadingOutlined } from '@ant-design/icons-vue'
+import { DownOutlined, LoadingOutlined } from '@ant-design/icons-vue'
+import branchIcon from '@/assets/icons/task-composer-git-branch.svg'
 import apiClient from '@/api/client'
 import { useAppI18n } from '@/i18n'
 
@@ -132,17 +133,19 @@ onBeforeUnmount(() => {
 .branch-picker {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
+  gap: 4px;
   max-width: 180px;
-  min-height: 28px;
+  min-height: 24px;
   border: 0;
   border-radius: 6px;
-  padding: 3px 6px;
+  padding: 1px 6px;
   color: #595959;
   background: transparent;
   cursor: pointer;
   font-size: 12px;
+  line-height: 20px;
 }
+.branch-icon { width: 14px; height: 14px; flex: 0 0 auto; }
 .branch-picker:not(:disabled):hover { background: #f2f4f7; color: #262626; }
 .branch-picker:focus-visible { outline: 2px solid #3157e2; outline-offset: 2px; }
 .branch-picker:disabled { opacity: 0.5; cursor: not-allowed; }

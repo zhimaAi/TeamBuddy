@@ -30,6 +30,9 @@
     "empty": "暂无 Markdown 内容",
     "attachmentLoadFailed": "附件加载失败",
     "attachmentDownloadFailed": "附件下载失败",
+    "revealInFolder": "在文件夹中显示",
+    "revealFailed": "无法在文件夹中显示该文件",
+    "revealUseDesktop": "已复制文件路径。当前环境不能打开本地文件夹，请使用 TeamBuddy 桌面客户端",
     "uploadUnavailable": "当前编辑器未启用图片粘贴",
     "uploadFailed": "图片粘贴失败",
     "placeholder": "添加描述…",
@@ -80,7 +83,10 @@
     "delete": "删除",
     "deleteBlockTitle": "删除当前段落？",
     "deleteBlockDescription": "该操作会从文档中移除当前段落。",
-    "blockOperationFailed": "无法定位当前段落，请重新选择后重试"
+    "blockOperationFailed": "无法定位当前段落，请重新选择后重试",
+    "customColor": "自定义颜色",
+    "colorHex": "颜色值（HEX）",
+    "resetTextColor": "默认"
   },
   "placeholder": {
     "developing": "{title}功能开发中"

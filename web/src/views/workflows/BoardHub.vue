@@ -34,8 +34,7 @@ const preferenceKey = computed(() => {
 function readPreferences() {
   const defaults = {
     tab: 'local' as BoardTab,
-    local: 'board' as BoardLayoutMode,
-    team: 'board' as BoardLayoutMode,
+    layout: 'board' as BoardLayoutMode,
     localStatus: 'active',
     teamStatus: 'active',
   }
@@ -44,15 +43,16 @@ function readPreferences() {
     if (!raw) {
       // 只迁移旧版有限枚举偏好，后续按账号独立保存。
       defaults.tab = window.localStorage.getItem(BOARD_TAB_STORAGE_KEY) === 'team' ? 'team' : 'local'
-      defaults.local = window.localStorage.getItem(LEGACY_LAYOUT_KEYS.local) === 'list' ? 'list' : 'board'
-      defaults.team = window.localStorage.getItem(LEGACY_LAYOUT_KEYS.team) === 'list' ? 'list' : 'board'
+      defaults.layout = window.localStorage.getItem(LEGACY_LAYOUT_KEYS[defaults.tab]) === 'list' ? 'list' : 'board'
       return defaults
     }
     const saved: Record<string, unknown> = JSON.parse(raw)
+    const tab = saved.tab === 'team' ? 'team' as const : 'local' as const
+    // 旧版分别保存两处布局，合并时沿用上次所在页签的选择。
+    const layout = saved.layout === 'board' || saved.layout === 'list' ? saved.layout : saved[tab]
     return {
-      tab: saved.tab === 'team' ? 'team' as const : 'local' as const,
-      local: saved.local === 'list' ? 'list' as const : 'board' as const,
-      team: saved.team === 'list' ? 'list' as const : 'board' as const,
+      tab,
+      layout: layout === 'list' ? 'list' as const : 'board' as const,
       localStatus: typeof saved.localStatus === 'string' && saved.localStatus ? saved.localStatus : 'active',
       teamStatus: typeof saved.teamStatus === 'string' && saved.teamStatus ? saved.teamStatus : 'active',
     }
@@ -71,7 +71,8 @@ function savePreferences() {
 }
 watch(preferenceKey, (_key, previousKey) => {
   preferences.value = readPreferences()
-  if (previousKey !== 'goteams.workflows.board.v1:local' && route.query.tab !== undefined) {
+  // 退出后保留团队登录深链；已登录账号切换时仍清除旧账号的页面偏好。
+  if (authStore.cloudLoggedIn && previousKey !== 'goteams.workflows.board.v1:local' && route.query.tab !== undefined) {
     const query = { ...route.query }
     delete query.tab
     void router.replace({ query })
@@ -98,9 +99,9 @@ const activeSearchKeyword = computed({
   },
 })
 const activeLayoutMode = computed<BoardLayoutMode>({
-  get: () => preferences.value[activeTab.value],
+  get: () => preferences.value.layout,
   set: (mode) => {
-    preferences.value[activeTab.value] = mode
+    preferences.value.layout = mode
     savePreferences()
   },
 })
@@ -144,7 +145,7 @@ const showLoginGuide = computed(() => activeTab.value === 'team' && !authStore.c
             :aria-label="t('workflows.board.searchTasks')"
             allow-clear
           >
-            <template #prefix><SearchOutlined aria-hidden="true" /></template>
+            <template #suffix><SearchOutlined aria-hidden="true" /></template>
           </a-input>
           <nav class="layout-switch" :aria-label="t('workflows.board.layoutSwitch')">
             <a-tooltip :title="t('workflows.board.boardView')">
@@ -191,7 +192,7 @@ const showLoginGuide = computed(() => activeTab.value === 'team' && !authStore.c
       </template>
       <TeamBoard
         v-else
-        :key="preferenceKey"
+        :key="authStore.cloudUser?.sessionGeneration || preferenceKey"
         :status-filter="preferences.teamStatus"
         :view-mode="activeLayoutMode"
         :search-keyword="activeSearchKeyword"
@@ -216,7 +217,8 @@ const showLoginGuide = computed(() => activeTab.value === 'team' && !authStore.c
 .layout-switch button.active { color: #262626; background: #fff; box-shadow: 0 1px 2px rgba(0,0,0,.08); font-weight: 600; }
 .board-source-switch button.active img[src$="team-view.svg"] { filter: brightness(.43); opacity: 1; }
 .board-action-end { display: flex; align-items: center; gap: 10px; }
-.task-search { width: 240px; border-radius: 12px; }
+.task-search { width: 240px; height: 32px; padding: 4px 11px; border-color: #dadde2; border-radius: 6px; box-shadow: none; font-size: 14px; }
+.task-search :deep(.ant-input-suffix) { color: #555a61; font-size: 16px; }
 .layout-switch button { display: inline-flex; width: 30px; height: 30px; align-items: center; justify-content: center; padding: 0; border: 0; border-radius: 50%; color: #595959; background: transparent; cursor: pointer; font-size: 16px; }
 .board-source-switch button:focus-visible,
 .layout-switch button:focus-visible { outline: 2px solid #3157e2; outline-offset: 2px; }

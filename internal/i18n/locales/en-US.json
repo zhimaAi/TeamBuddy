@@ -752,14 +752,20 @@
   "localserver_cloud_session_expired": {
     "other": "Cloud login has expired. Please sign in again."
   },
+  "localserver_cloud_user_missing": {
+    "other": "Cloud account information is incomplete. Sign in again before creating a cloud-linked task."
+  },
+  "localserver_cloud_source_missing": {
+    "other": "The cloud address for this task is unknown. Sign in to the cloud account first."
+  },
   "localserver_cloud_work_item_not_found": {
     "other": "Cloud work item not found"
   },
   "localserver_codex_skill_install_failed": {
-    "other": "The built-in teamsboard Skill could not be installed. Codex features are unavailable; restart the app or check the logs."
+    "other": "The built-in teambuddy Skill could not be installed. Codex features are unavailable; restart the app or check the logs."
   },
   "localserver_codex_skill_not_managed": {
-    "other": "A teamsboard Skill with the same name is not managed by TeamBuddy. Codex features are disabled to avoid overwriting it."
+    "other": "A teambuddy Skill with the same name is not managed by TeamBuddy. Codex features are disabled to avoid overwriting it."
   },
   "localserver_json_utf8_required": {
     "other": "The request body must be valid UTF-8 JSON"
@@ -770,28 +776,58 @@
   "localserver_skill_event_id_invalid": {
     "other": "The activity ID must be a valid UUID"
   },
+  "localserver_generic_skill_install_failed": {
+    "other": "The bundled teambuddy Skill could not be installed. Generic tools are unavailable; restart the app or check the logs."
+  },
+  "localserver_generic_skill_not_managed": {
+    "other": "The generic tool teambuddy Skill directory is unmanaged or modified. Generic tools are disabled to avoid overwriting it."
+  },
+  "localserver_generic_task_prompt": {
+    "description": "SkillPath, TaskUUID, Tool and ExecutionIndex identify a generic tool execution.",
+    "other": "Use the TeamBuddy Skill [$teambuddy]({{.SkillPath}}) for this local task. Read the Skill file first, or load it through the native Skill mechanism if supported.\n\nTask UUID: {{.TaskUUID}}\nTool type: {{.Tool}}\nExecution index (execution_index): {{.ExecutionIndex}}\n回传通道：script\n\n{{.OutputDirSection}}\n\nCopy the task UUID above verbatim; command arguments must match character by character. Do not retype it from visual memory or substitute similar characters. If the script reports a UUID argument validation failure, compare the actual command with the original prompt first. Only when a transcription error is confirmed, correct it using the original UUID and retry once; never guess a new UUID. Argument validation fails before any HTTP request and does not indicate network permission issues, a missing task, a binding conflict or an expired execution index.\n\nThis tool uses a generic execution binding and does not require a native session ID. Read the task and all history, verify the execution index, then follow the Skill’s generic tool binding procedure to obtain a report ID issued by the client. Never invent thread_id or read another conversation’s binding files.\n\nAfter binding, report user messages, final answers and task status on subsequent turns. Use work directories returned by the task API. If local file access, script execution or access to the local client is unavailable, explain that binding and reporting are unavailable; do not claim success.\n\nBefore connecting, check this tool’s documented local execution capabilities and network permissions. If access is restricted and the current policy permits a native permission request, use its actual parameters to request only the minimum access to the runtime address; retry the original request once after approval. If no permitted request is available, approval is denied, or the retry fails, pause binding and reporting and state the failed stage, address and actual error. Do not bypass the restriction with curl, another execution entry point or sandbox configuration changes. Switching execution methods or refreshing the execution index cannot resolve network permission restrictions; do not recommend either as a connection fix."
+  },
   "localserver_task_cleanup_failed": {
     "other": "The task was deleted, but its dedicated directory could not be cleaned up. Please check for remaining files manually."
   },
   "localserver_task_title_invalid": {
     "other": "Enter a single-line task name with 1–200 characters"
   },
+  "localserver_vibe_aibridge_inject_failed": {
+    "other": "Failed to send the prompt through AiBridge. Copy it into your editor manually."
+  },
+  "localserver_vibe_aibridge_unavailable": {
+    "other": "The local AiBridge extension was not detected. Copy the prompt into your editor manually."
+  },
   "localserver_vibe_cli_not_found": {
     "other": "The CLI was not found. Install it and add it to PATH."
   },
+  "localserver_vibe_output_dir": {
+    "description": "Output directory clause for Vibe Coding prompts. TaskDir is the absolute task output directory (task_dir); the client only syncs files inside it. An empty section means the task has no output directory.",
+    "other": "Output document directory (task_dir): {{.TaskDir}}\n\nIf the request does not specify where an output document (design doc, plan, report, analysis, notes, etc.) should go, write it into that directory; you may create topic or step subdirectories inside it. Follow the request when it does specify a location. Do not write them into the project working directory or anywhere else: the client only syncs files inside that directory, so output written elsewhere is never reported and never shows up in the client."
+  },
   "localserver_codex_task_prompt": {
     "description": "SkillPath, TaskUUID, Tool and ExecutionIndex identify the managed TeamBuddy task execution.",
-    "other": "Use the current tool's native Skill loading mechanism with [$teamsboard]({{.SkillPath}}) to handle the TeamBuddy local task.\n\nTask UUID: {{.TaskUUID}}\n\nTool: {{.Tool}}\n\nExecution generation (execution_index): {{.ExecutionIndex}}\n\nFirst verify that the task's execution generation matches the value above, then read the task and its history, then follow the Skill instructions to obtain and bind the current real session ID. If no ID can be obtained, pause reporting and prompt to upgrade the tool or rebind. The binding request type must equal the tool. For Codex, thread_id is read only from the CODEX_THREAD_ID environment variable (on Windows, $env:CODEX_THREAD_ID); this is the thread ID provided by the current session, do not guess or scan old sessions. Claude Code, CodeBuddy and Qoder use the current session ID; Pi reads PI_SESSION_ID from the current native shell. If no real session ID can be obtained, pause binding, status changes, and reporting, and prompt to upgrade the tool or rebind; continue handling the business request.\n\nThis session stays bound to the task; subsequent turns sync user messages, final reply, and task status according to the Skill rules until the conversation ends."
+    "other": "Use the current tool's native Skill loading mechanism with [$teambuddy]({{.SkillPath}}) to handle the TeamBuddy local task.\n\nTask UUID: {{.TaskUUID}}\n\nTool: {{.Tool}}\n\nExecution generation (execution_index): {{.ExecutionIndex}}\n\n{{.OutputDirSection}}\n\nFirst verify that the task's execution generation matches the value above, then read the task and its history, then follow the Skill instructions to obtain and bind the current real session ID. If no ID can be obtained, do not bind, omit thread_id, and still report user messages, the final answer, and status; do not invent an ID. The binding request type must equal the tool. For Codex, thread_id is read only from the CODEX_THREAD_ID environment variable (on Windows, $env:CODEX_THREAD_ID); this is the thread ID provided by the current session, do not guess or scan old sessions. Claude Code, CodeBuddy and Qoder use the current session ID; Pi reads PI_SESSION_ID from the current native shell. If no real session ID can be obtained, do not bind, omit thread_id, and still report user messages, the final answer, and status; continue handling the business request.\n\nThis session stays bound to the task; subsequent turns sync user messages, final reply, and task status according to the Skill rules until the conversation ends."
+  },
+  "localserver_codex_task_prompt_manual": {
+    "description": "Launch prompt for manual mode. SkillPath is the local Skill file; ThreadID is the session identifier issued by the client that the Skill must pass back unchanged. The report channel and session ID keys stay in Chinese so both UI languages match the same Skill instructions.",
+    "other": "First read the local Skill file [$teambuddy]({{.SkillPath}}) in full, then follow it to handle this TeamBuddy local task.\n\n任务 UUID：{{.TaskUUID}}\n\n工具类型：{{.Tool}}\n\n执行代次（execution_index）：{{.ExecutionIndex}}\n\n回传通道：mcp\n\n会话 ID：{{.ThreadID}}\n\n{{.OutputDirSection}}\n\n要求 / Requirements:\n1. Call teambuddy_get_task to read the task and its full history, and confirm the returned execution_index matches the value above.\n2. Call teambuddy_bind_session to bind this session: type must be {{.Tool}} and thread_id must be the session ID given above. That is the only session ID allowed for this run — do not read environment variables, scan past sessions, or invent another UUID.\n3. Call teambuddy_update_status with in_progress when the real work starts, and done only after it is finished and verified.\n4. For every new user message, first report the original text with teambuddy_report_activity using type=question; before sending each final reply, report the full text using type=result. Use a distinct event_id per activity.\n5. If the MCP tools are missing, the call is rejected, or the result is teambuddy_unavailable, forbidden, task_not_found, conflict, or bind_rejected, stop binding and reporting immediately and explain why. Do not work around it through another channel, and do not claim the activity was reported.\n\nThis session stays bound to the task; keep syncing user messages, final replies and task status every round."
   },
   "localserver_cli_skill_prompt": {
-    "description": "CLI prompt for WeChat channel fallback tasks. SkillPath is a markdown local link to the teamsboard-im-bot-cli Skill; when missing, the Skill is referenced by name only.",
-    "other": "[$teamsboard-im-bot-cli]({{.SkillPath}})\n\nUse the teamsboard-im-bot-cli Skill to handle this TeamBuddy WeChat channel fallback task: when a WeChat message is not recognized as a known command, TeamBuddy creates a dedicated task and forwards it to the local CLI.\n\nBound task UUID: {{.TaskUUID}}\nTask title: {{.TaskTitle}}\nTask status: {{.TaskStatus}}\nUser message: {{.Message}}\n\nFollow the flow described by the teamsboard-im-bot-cli Skill. When finished, post the result back to WeChat via /api/local/cli-skill/chat-reply. Use /api/local/cli-skill/messages or /api/local/cli-skill/activities to report intermediate progress or failures to TeamBuddy while processing.\n\nThis session is bound to the WeChat task for as long as it runs. TeamBuddy will notify the user automatically if the CLI exits or is cancelled."
+    "description": "CLI prompt for remote channel fallback tasks. SkillPath is a markdown local link to the teambuddy-im-bot-cli Skill; when missing, the Skill is referenced by name only. ChannelType is the current channel type (wechat/wecom/feishu/dingtalk); include it in chat-reply to route the result back to the correct channel.",
+    "other": "[$teambuddy-im-bot-cli]({{.SkillPath}})\n\nUse the teambuddy-im-bot-cli Skill to handle this TeamBuddy {{.ChannelType}} channel fallback task: when a {{.ChannelType}} message is not recognized as a known command, TeamBuddy creates a dedicated task and forwards it to the local CLI.\n\nBound task UUID: {{.TaskUUID}}\nTask title: {{.TaskTitle}}\nTask status: {{.TaskStatus}}\nUser message: {{.Message}}\n\nFollow the flow described by the teambuddy-im-bot-cli Skill. When finished, post the result back to the {{.ChannelType}} channel via /api/local/cli-skill/chat-reply (the request body MUST include channel_type=\"{{.ChannelType}}\" so the result is routed to the correct channel). Use /api/local/cli-skill/messages or /api/local/cli-skill/activities to report intermediate progress or failures to TeamBuddy while processing.\n\nThis session is bound to the {{.ChannelType}} task for as long as it runs. TeamBuddy will notify the user automatically if the CLI exits or is cancelled."
+  },
+  "localserver_conversation_request_conflict": {
+    "other": "This request ID was used for another message. Refresh and try again"
   },
   "localserver_current_session_unavailable": {
     "other": "The current agent has no CLI session to continue"
   },
   "localserver_database_not_ready": {
     "other": "The local task database is not ready"
+  },
+  "localserver_document_upload_disabled": {
+    "other": "Output document reporting is disabled"
   },
   "localserver_execution_history_not_found": {
     "other": "Execution history not found"
@@ -867,6 +903,21 @@
   },
   "localserver_file_path_symlink": {
     "other": "The file path cannot contain a symbolic link"
+  },
+  "localserver_output_file_ambiguous": {
+    "other": "More than one matching output file was found"
+  },
+  "localserver_output_file_invalid": {
+    "other": "The file link is invalid"
+  },
+  "localserver_output_file_not_file": {
+    "other": "Only a file can be shown in its folder"
+  },
+  "localserver_output_file_not_found": {
+    "other": "The output file could not be found"
+  },
+  "localserver_output_file_outside": {
+    "other": "The file is outside the current task, project, and configured workspace directories"
   },
   "localserver_icon_not_found": {
     "other": "Icon not found"
@@ -948,6 +999,9 @@
   "localserver_pipeline_step_execution_required": {
     "other": "Configure a CLI and model for each pipeline agent before starting"
   },
+  "localserver_pipeline_task_reopen": {
+    "other": "Reopen the task before starting a step that has not run yet"
+  },
   "localserver_pipeline_upload_local_only": {
     "other": "Only local pipelines support icon uploads"
   },
@@ -979,8 +1033,14 @@
   "localserver_reference_write_failed": {
     "other": "Failed to save the referenced content; check disk space and permissions"
   },
+  "localserver_reupload_limit": {
+    "other": "At most {{.Max}} files can be re-reported at once"
+  },
   "localserver_request_invalid": {
     "other": "Invalid request"
+  },
+  "localserver_qoder_ide_task_prompt": {
+    "other": "Qoder IDE: first open the task workspace {{.WorkDir}}. TeamBuddy Hooks report user messages and final replies; the Skill must not report question/result again. Read the task and update business status according to the Skill. Use only TEAMBUDDY_QODER_SESSION_ID injected by the Hook as the native session ID. If absent, pause binding and status updates and ask to restart the IDE and resend. A completed reply does not mean the task is done."
   },
   "localserver_skill_activity_content_invalid": {
     "other": "Activity content must contain 1 to 65,536 characters"
@@ -1024,6 +1084,15 @@
   "localserver_task_not_found": {
     "other": "Task not found"
   },
+  "localserver_task_session_busy": {
+    "other": "A conversation in this task is still running. Wait for it to finish or stop it first"
+  },
+  "localserver_task_sync_push_failed": {
+    "other": "Upload failed, please retry later"
+  },
+  "localserver_task_sync_unavailable": {
+    "other": "This task is not linked to the cloud and cannot be reported"
+  },
   "localserver_task_not_vibe_coding": {
     "other": "The task is not assigned to Vibe Coding"
   },
@@ -1039,6 +1108,9 @@
   "localserver_vibe_coding_assigned_activity": {
     "other": "Assigned to Vibe Coding"
   },
+  "localserver_vibe_model_invalid": {
+    "other": "The selected tool does not support this model configuration, or the model ID is invalid"
+  },
   "localserver_vibe_session_stale": {
     "other": "This session is not bound or its binding has changed. Upgrade the tool or rebind it in the client before reporting."
   },
@@ -1050,6 +1122,9 @@
   },
   "localserver_vibe_session_type_mismatch": {
     "other": "The session type does not match the task's Vibe Coding tool"
+  },
+  "localserver_vibe_status_readonly": {
+    "other": "Waiting for the tool to report a status update"
   },
   "localserver_title_required": {
     "other": "title is required"
@@ -1079,7 +1154,7 @@
     "other": "The task workspace directory is unavailable"
   },
   "remote_wechat_busy": {
-    "other": "An execution is in progress for {{.Task}}. Wait for it to finish before sending another message."
+    "other": "An execution is in progress for 【{{.Task}}】. Wait for it to finish before sending another message."
   },
   "remote_wechat_codex_empty": {
     "other": "Codex finished this turn without a text result."
@@ -1154,7 +1229,7 @@
     "other": "Use /task -a for all tasks, /task -r (or /task) for running tasks, /task -f for completed tasks, or /task -e for blocked tasks. \n\nSend @ followed by a task ID to select it. \n\nSend /help for all commands."
   },
   "remote_wechat_help_full": {
-    "other": "📋 TeamsBoard WeChat channel commands:\n\n[Tasks]\n\n• /task or /task -r: list active tasks\n\n• /task -a: list all tasks\n\n• /task -f: list done tasks\n\n• /task -e: list blocked tasks\n\n• @: list all tasks\n\n[Task actions]\n\n• @<task-id>: switch to that task\n\n• @<task-id> <message>: send a message to that task\n\n• /ti or /task-info -id=<task>: show task details (friendly id = short id or list index)\n\n• /ct or /create-task -t=<title> [-d=<desc>] [-w=<dir>] [-pid=<project index>] [-plid=<pipeline index>] [-egid=<expert group index>] [-em=<mode>] [-et=<cli>] [-emdl=<model>]: create a local task (many parameters, mainly used by the CLI fallback)\n\n• /ctt or /create-team-task -tid=<local task short id> -ttid=<my-work ttid> [-t=<title>]: create a team work that inherits the local task's config (project / pipeline / sub-projects / work dirs / per-step CLI & model). This is the most common way to create a task; copy the <ttid> number from /tt output for -ttid.\n\n• /n -id=<task>: advance to the next step. On the last step, replies \"this is already the last step\" without completing the task.\n\n[Direct messages]\n\n• Just send a message: routed to the currently bound task\n\n[Session control]\n\n• /exit or /q or 退出: leave the current task\n\n• /c or /cancel or 取消: cancel the current task (two-step confirm, -f to skip)\n\n• /r or /resume or 继续: resume the current task (two-step confirm, -f to skip)\n\n• /d or /done or 完成: mark the current task done and leave (two-step confirm, -f to skip)\n\n[Operate the local client]\n\n• /tt or /teamstask: list my work (cloud)\n\n• /pro or /projects: list local projects\n\n• /pls or /pipelines: list pipelines (local + cached cloud)\n\n• /egs or /expert-groups: list expert groups (local + cached cloud)\n\n• /clis or /cli-discovery: list installed CLIs\n\n• /clim or /cli-models -cid=<N>: list models for the given CLI\n\n• /vcl or /vibecodinglist or /codex-capability: list Vibe Coding tools\n\n• /swm or /switch-model -id=<task> [-cid=<N>] (-mid=<N> | -emdl=<model name>): switch CLI / model (with -mid alone the task's current CLI is kept; the session is not stopped)\n\n• /swcli or /switch-cli -id=<task> -cid=<N> (-mid=<N> | -emdl=<model name>): switch CLI / model\n\n• /swr or /switch-run -t=<cli|pls|egs|vcl> -id=<task> [-plid=<N>] [-egid=<N>] [-vid=<N>]: switch execution mode (archive + rebuild)\n\n[Misc]\n\n• /help or /h: show this help"
+    "other": "📋 TeamBuddy WeChat channel commands:\n\n[Tasks]\n\n• /task or /task -r: list active tasks\n\n• /task -a: list all tasks\n\n• /task -f: list done tasks\n\n• /task -e: list blocked tasks\n\n• @: list all tasks\n\n[Task actions]\n\n• @<task-id>: switch to that task\n\n• @<task-id> <message>: send a message to that task\n\n• /ti or /task-info -id=<task>: show task details (friendly id = short id or list index)\n\n• /ct or /create-task -t=<title> [-d=<desc>] [-w=<dir>] [-pid=<project index>] [-plid=<pipeline index>] [-egid=<expert group index>] [-em=<mode>] [-et=<cli>] [-emdl=<model>]: create a local task (many parameters, mainly used by the CLI fallback)\n\n• /ctt or /create-team-task -tid=<local task short id> -ttid=<my-work ttid> [-t=<title>]: create a team work that inherits the local task's config (project / pipeline / sub-projects / work dirs / per-step CLI & model). This is the most common way to create a task; copy the <ttid> number from /tt output for -ttid.\n\n• /n -id=<task>: advance to the next step. On the last step, replies \"this is already the last step\" without completing the task.\n\n[Direct messages]\n\n• Just send a message: routed to the currently bound task\n\n[Session control]\n\n• /exit or /q or 退出: leave the current task\n\n• /c or /cancel or 取消: cancel the current task (two-step confirm, -f to skip)\n\n• /r or /resume or 继续: resume the current task (two-step confirm, -f to skip)\n\n• /d or /done or 完成: mark the current task done and leave (two-step confirm, -f to skip)\n\n[Operate the local client]\n\n• /tt or /teamstask: list my work (cloud)\n\n• /pro or /projects: list local projects\n\n• /pls or /pipelines: list pipelines (local + cached cloud)\n\n• /egs or /expert-groups: list expert groups (local + cached cloud)\n\n• /clis or /cli-discovery: list installed CLIs\n\n• /clim or /cli-models -cid=<N>: list models for the given CLI\n\n• /vcl or /vibecodinglist or /codex-capability: list Vibe Coding tools\n\n• /swm or /switch-model -id=<task> [-cid=<N>] (-mid=<N> | -emdl=<model name>): switch CLI / model (with -mid alone the task's current CLI is kept; the session is not stopped)\n\n• /swcli or /switch-cli -id=<task> -cid=<N> (-mid=<N> | -emdl=<model name>): switch CLI / model\n\n• /swr or /switch-run -t=<cli|pls|egs|vcl> -id=<task> [-plid=<N>] [-egid=<N>] [-vid=<N>]: switch execution mode (archive + rebuild)\n\n[Misc]\n\n• /help or /h: show this help"
   },
   "remote_wechat_id_invalid": {
     "other": "Invalid task ID.\n\n{{.Help}}"
@@ -1191,7 +1266,7 @@
     "other": "Could not render the WeChat login QR code"
   },
   "remote_wechat_result": {
-    "other": "@{{.ID}} {{.Task}} result for this run:\n\n{{.Result}}\n\nSend @{{.ID}} to select this task and continue."
+    "other": "@{{.ID}} 【{{.Task}}】 result for this run:\n\n{{.Result}}\n\nSend @{{.ID}} to select this task and continue."
   },
   "remote_wechat_result_unavailable": {
     "other": "Could not retrieve the result for this run. Check the task execution history in the client."
@@ -1200,7 +1275,7 @@
     "other": "Could not remove the WeChat credential. Try again."
   },
   "remote_wechat_send_ack": {
-    "other": "Switched to {{.Task}} and sent: {{.Message}}\n\nI will send the final result when it is ready. You cannot send another message to this task while it is running. Send @ followed by a task ID to switch tasks."
+    "other": "Switched to 【{{.Task}}】 and sent: {{.Message}}\n\nI will send the final result when it is ready. You cannot send another message to this task while it is running. Send @ followed by a task ID to switch tasks."
   },
   "remote_wechat_cli_fallback_ack": {
     "other": "Instruction received. A dedicated task @{{.ID}} has been created and will be handled by {{.CLI}}.\n\nYou cannot send another message to this task while it is running. I will notify you when it finishes or fails. Track progress under \"All Tasks\" in the client."
@@ -1224,7 +1299,7 @@
     "other": "not completed"
   },
   "remote_wechat_switch": {
-    "other": "Switched to {{.Task}}. Its most recent final result is:\n\n{{.Result}}\n\nYou can now send messages directly to this task. Send @ followed by a task ID to switch tasks."
+    "other": "Switched to 【{{.Task}}】. Its most recent final result is:\n\n{{.Result}}\n\nYou can now send messages directly to this task. Send @ followed by a task ID to switch tasks."
   },
   "remote_wechat_task_deleted_title": {
     "other": "Deleted task"
@@ -1248,28 +1323,278 @@
     "other": "Enter the verification code shown in WeChat"
   },
   "remote_wechat_task_exited": {
-    "other": "Exited task: {{.Task}}\n\n{{.Tasks}}"
+    "other": "Exited task: 【{{.Task}}】\n\n{{.Tasks}}"
   },
   "remote_wechat_task_resumed": {
-    "other": "Resumed execution of task {{.Task}}."
+    "other": "Resumed execution of task 【{{.Task}}】."
   },
   "remote_wechat_task_completed": {
-    "other": "Completed task: {{.Task}}\n\n{{.Tasks}}"
+    "other": "Completed task: 【{{.Task}}】\n\n{{.Tasks}}"
   },
   "remote_wechat_no_task_bound": {
     "other": "You are not inside a task. Current running tasks:\n\n{{.Tasks}}"
   },
   "remote_wechat_cancel_confirm": {
-    "other": "Cancel execution of task {{.Task}}?\n\nReply yes / y / 是 / 对 / 取消 to confirm, or send anything else to ignore this prompt.\n\nTo skip confirmation, send /c -f instead."
+    "other": "Cancel execution of task 【{{.Task}}】?\n\nReply yes / y / 是 / 对 / 取消 to confirm, or send anything else to ignore this prompt.\n\nTo skip confirmation, send /c -f instead."
   },
   "remote_wechat_resume_confirm": {
-    "other": "Resume execution of task {{.Task}}?\n\nReply yes / y / 是 / 对 to confirm, or send anything else to ignore this prompt.\n\nTo skip confirmation, send /r -f instead."
+    "other": "Resume execution of task 【{{.Task}}】?\n\nReply yes / y / 是 / 对 to confirm, or send anything else to ignore this prompt.\n\nTo skip confirmation, send /r -f instead."
   },
   "remote_wechat_done_confirm": {
-    "other": "Mark task {{.Task}} as done and leave it?\n\nReply yes / y / 是 / 对 to confirm, or send anything else to ignore this prompt.\n\nTo skip confirmation, send /d -f instead."
+    "other": "Mark task 【{{.Task}}】 as done and leave it?\n\nReply yes / y / 是 / 对 to confirm, or send anything else to ignore this prompt.\n\nTo skip confirmation, send /d -f instead."
   },
   "remote_wechat_cancel_done": {
     "other": "Task execution cancelled.\n\nEnter /q, /exit or 退出 to leave the task.\n\n{{.Tasks}}"
+  },
+  "remote_channel_credential_required": {
+    "other": "Please provide BotID / App ID / Client ID and the corresponding Secret"
+  },
+  "remote_channel_not_implemented": {
+    "other": "This channel is not yet implemented; please wait for a future release"
+  },
+  "remote_channel_cli_config_invalid": {
+    "other": "Invalid CLI config parameters"
+  },
+  "remote_channel_credential_invalid": {
+    "other": "Credential verification failed. Check BotID and Secret."
+  },
+  "remote_channel_connect_failed": {
+    "other": "Connection failed. Check the credentials for stray spaces and try again later."
+  },
+  "remote_channel_credential_save_failed": {
+    "other": "Could not save credentials"
+  },
+  "remote_channel_state_save_failed": {
+    "other": "Could not save channel state"
+  },
+  "remote_channel_state_error": {
+    "other": "Could not read channel state"
+  },
+  "remote_channel_disable_failed": {
+    "other": "Could not disable channel"
+  },
+  "remote_channel_cli_config_save_failed": {
+    "other": "Could not save CLI configuration"
+  },
+  "remote_channel_upstream_error": {
+    "other": "The upstream channel is unreachable or returned an error. Try again later."
+  },
+  "remote_channel_connected": {
+    "other": "Channel connected"
+  },
+  "remote_channel_ai_online_notification": {
+    "other": "AI employee is online"
+  },
+  "remote_channel_ai_offline_notification": {
+    "other": "AI employee is offline"
+  },
+  "remote_channel_task_usage": {
+    "other": "Usage: /task @<taskID> <message> or /task @<taskID> to view details"
+  },
+  "remote_channel_task_not_found": {
+    "other": "Task #{{.ID}} not found"
+  },
+  "remote_channel_bind_usage": {
+    "other": "Usage: /bind @<taskID> or /bind <taskID>"
+  },
+  "remote_channel_bind_success": {
+    "other": "Bound to task 【{{.Task}}】"
+  },
+  "remote_channel_unbind_success": {
+    "other": "Unbound from current task"
+  },
+  "remote_channel_help": {
+    "other": "Use /task -a for all tasks, /task -r (or /task) for running tasks, /task -f for completed tasks, or /task -e for blocked tasks. \n\nSend @ followed by a task ID to select it. \n\nSend /help for all commands."
+  },
+  "remote_channel_unknown_command": {
+    "other": "Unknown command: {{.Command}}"
+  },
+  "remote_channel_unknown_input": {
+    "other": "Could not recognize your input"
+  },
+  "remote_channel_no_bound_task": {
+    "other": "Please /bind @<taskID> first"
+  },
+  "remote_channel_cancel_ack": {
+    "other": "Requested cancellation of task 【{{.Task}}】"
+  },
+  "remote_channel_resume_ack": {
+    "other": "Requested resume of task 【{{.Task}}】"
+  },
+  "remote_channel_done_ack": {
+    "other": "Requested completion of task 【{{.Task}}】"
+  },
+  "remote_channel_next_ack": {
+    "other": "Requested advancing to the next step"
+  },
+  "remote_channel_exit_ack": {
+    "other": "Exited task"
+  },
+  "remote_channel_tt_empty": {
+    "other": "No active tasks"
+  },
+  "remote_channel_processing_failed": {
+    "other": "Could not process the instruction: {{.Detail}}\n\nCheck the client-side CLI configuration (cli_type / cli_model) and that the CLI executable is reachable before retrying.\n\n{{.Help}}"
+  },
+  "remote_channel_busy": {
+    "other": "An execution is in progress for 【{{.Task}}】. Wait for it to finish before sending another message."
+  },
+  "remote_channel_uncertain_blocked": {
+    "other": "This task has a remote instruction with an uncertain outcome. Review and acknowledge it on the Remote channels page in the client before sending another instruction."
+  },
+  "remote_channel_send_ack": {
+    "other": "Switched to 【{{.Task}}】 and sent: {{.Message}}\n\nI will send the final result when it is ready. You cannot send another message to this task while it is running. Send @ followed by a task ID to switch tasks."
+  },
+  "remote_channel_cli_fallback_ack": {
+    "other": "Instruction received. A dedicated task @{{.ID}} has been created and will be handled by {{.CLI}}.\n\nYou cannot send another message to this task while it is running. I will notify you when it finishes or fails. Track progress under \"All Tasks\" in the client."
+  },
+  "remote_channel_cli_unconfigured_for_dispatch": {
+    "other": "You can configure a CLI to handle instructions with AI assistance.\n\n{{.Help}}"
+  },
+  "remote_channel_cli_disabled_for_dispatch": {
+    "other": "The CLI fallback is disabled. To enable it, turn on the master switch in Configure CLI on the client Remote Channels page.\n\n{{.Help}}"
+  },
+  "remote_channel_task_missing": {
+    "other": "The task was not found or has been deleted.\n\n{{.Help}}"
+  },
+  "remote_channel_list_failed": {
+    "other": "Failed to load task list"
+  },
+  "remote_channel_dispatch_failed": {
+    "other": "Dispatch failed: {{.Detail}}"
+  },
+  "remote_channel_fallback_title": {
+    "other": "Channel command processing"
+  },
+  "remote_channel_switched": {
+    "other": "Switched to task"
+  },
+  "remote_channel_paused": {
+    "other": "Task paused"
+  },
+  "remote_channel_resumed": {
+    "other": "Task resumed"
+  },
+  "remote_channel_stopped": {
+    "other": "Task stopped"
+  },
+  "remote_channel_completed": {
+    "other": "Task completed"
+  },
+  "remote_channel_exited": {
+    "other": "Exited task: 【{{.Task}}】\n\n{{.Tasks}}"
+  },
+  "remote_channel_skill_call_failed": {
+    "other": "Command failed: {{.Detail}}"
+  },
+  "remote_channel_welcome": {
+    "other": "Welcome to {{.ChannelName}} channel"
+  },
+  "remote_channel_msg_too_long": {
+    "other": "The message is too long. Shorten it and try again."
+  },
+  "remote_channel_final_empty": {
+    "other": "(no more content)"
+  },
+  "remote_channel_help_full": {
+    "other": "📋 TeamBuddy remote channel commands:\n\n[Tasks]\n\n• /task or /task -r: list active tasks\n\n• /task -a: list all tasks\n\n• /task -f: list done tasks\n\n• /task -e: list blocked tasks\n\n• @: list all tasks\n\n[Task actions]\n\n• @<task-id>: switch to that task\n\n• @<task-id> <message>: send a message to that task\n\n• /ti or /task-info -id=<task>: show task details (friendly id = short id or list index)\n\n• /ct or /create-task -t=<title> [-d=<desc>] [-w=<dir>] [-pid=<project index>] [-plid=<pipeline index>] [-egid=<expert group index>] [-em=<mode>] [-et=<cli>] [-emdl=<model>]: create a local task (many parameters, mainly used by the CLI fallback)\n\n• /ctt or /create-team-task -tid=<local task short id> -ttid=<my-work ttid> [-t=<title>]: create a team work that inherits the local task's config (project / pipeline / sub-projects / work dirs / per-step CLI & model). This is the most common way to create a task; copy the <ttid> number from /tt output for -ttid.\n\n• /n -id=<task>: advance to the next step. On the last step, replies \"this is already the last step\" without completing the task.\n\n[Direct messages]\n\n• Just send a message: routed to the currently bound task\n\n[Session control]\n\n• /exit or /q or 退出: leave the current task\n\n• /c or /cancel or 取消: cancel the current task (two-step confirm, -f to skip)\n\n• /r or /resume or 继续: resume the current task (two-step confirm, -f to skip)\n\n• /d or /done or 完成: mark the current task done and leave (two-step confirm, -f to skip)\n\n[Operate the local client]\n\n• /tt or /teamstask: list my work (cloud)\n\n• /pro or /projects: list local projects\n\n• /pls or /pipelines: list pipelines (local + cached cloud)\n\n• /egs or /expert-groups: list expert groups (local + cached cloud)\n\n• /clis or /cli-discovery: list installed CLIs\n\n• /clim or /cli-models -cid=<N>: list models for the given CLI\n\n• /vcl or /vibecodinglist or /codex-capability: list Vibe Coding tools\n\n• /swm or /switch-model -id=<task> [-cid=<N>] (-mid=<N> | -emdl=<model name>): switch CLI / model (with -mid alone the task's current CLI is kept; the session is not stopped)\n\n• /swcli or /switch-cli -id=<task> -cid=<N> (-mid=<N> | -emdl=<model name>): switch CLI / model\n\n• /swr or /switch-run -t=<cli|pls|egs|vcl> -id=<task> [-plid=<N>] [-egid=<N>] [-vid=<N>]: switch execution mode (archive + rebuild)\n\n[Misc]\n\n• /help or /h: show this help"
+  },
+  "remote_channel_id_invalid": {
+    "other": "Invalid task ID.\n\n{{.Help}}"
+  },
+  "remote_channel_switch": {
+    "other": "Switched to 【{{.Task}}】. Its most recent final result is:\n\n{{.Result}}\n\nYou can now send messages directly to this task. Send @ followed by a task ID to switch tasks."
+  },
+  "remote_channel_result": {
+    "other": "@{{.ID}} 【{{.Task}}】 result for this run:\n\n{{.Result}}\n\nSend @{{.ID}} to select this task and continue."
+  },
+  "remote_channel_result_unavailable": {
+    "other": "Could not retrieve the result for this run. Check the task execution history in the client."
+  },
+  "remote_channel_task_deleted_title": {
+    "other": "Deleted task"
+  },
+  "remote_channel_no_binding": {
+    "other": "Which task would you like to use?\n\n{{.Help}}"
+  },
+  "remote_channel_no_task_bound": {
+    "other": "You are not inside a task. Current running tasks:\n\n{{.Tasks}}"
+  },
+  "remote_channel_last_none": {
+    "other": "No final result yet"
+  },
+  "remote_channel_params_invalid": {
+    "other": "Unsupported /task option.\n\n{{.Help}}"
+  },
+  "remote_channel_skill_missing_cli_index": {
+    "other": "Pass -cid=<CLI index>. Use /clis to see the list."
+  },
+  "remote_channel_skill_missing_model_index": {
+    "other": "Pass -mid=<model index> (or -emdl=<model name>). Use /clim -cid=N to see models for that CLI."
+  },
+  "remote_channel_skill_missing_mode": {
+    "other": "Pass -t=<execution mode>: cli / pls / egs / vcl."
+  },
+  "remote_channel_skill_missing_task_ref": {
+    "other": "Pass -id=<short id or list index>. Use /task -a to see the list."
+  },
+  "remote_channel_skill_missing_team_work_index": {
+    "other": "Pass -ttid=<my-work index>. Use /tt to see the list."
+  },
+  "remote_channel_skill_missing_template_ref": {
+    "other": "Pass -tid=<local task short id or list index>. Use /task -a to see the list."
+  },
+  "remote_channel_skill_missing_title": {
+    "other": "Pass -t=<task title>."
+  },
+  "remote_channel_cancel_confirm": {
+    "other": "Cancel execution of task 【{{.Task}}】?\n\nReply yes / y / 是 / 对 / 取消 to confirm, or send anything else to ignore this prompt.\n\nTo skip confirmation, send /c -f instead."
+  },
+  "remote_channel_resume_confirm": {
+    "other": "Resume execution of task 【{{.Task}}】?\n\nReply yes / y / 是 / 对 to confirm, or send anything else to ignore this prompt.\n\nTo skip confirmation, send /r -f instead."
+  },
+  "remote_channel_done_confirm": {
+    "other": "Mark task 【{{.Task}}】 as done and leave it?\n\nReply yes / y / 是 / 对 to confirm, or send anything else to ignore this prompt.\n\nTo skip confirmation, send /d -f instead."
+  },
+  "remote_channel_dispatch_uncertain": {
+    "other": "Codex may have started this instruction, but the client did not receive a run ID. Check the session in the client before sending it again."
+  },
+  "remote_channel_empty_tasks": {
+    "other": "There are no {{.Status}} tasks.\n\n{{.Help}}"
+  },
+  "remote_channel_list": {
+    "one": "You have {{.Count}} {{.Status}} task:\n\n{{.Tasks}}\n\n{{.Help}}",
+    "other": "You have {{.Count}} {{.Status}} tasks:\n\n{{.Tasks}}\n\n{{.Help}}"
+  },
+  "remote_channel_status_all": {
+    "other": "all"
+  },
+  "remote_channel_status_blocked": {
+    "other": "blocked"
+  },
+  "remote_channel_status_done": {
+    "other": "completed"
+  },
+  "remote_channel_status_running": {
+    "other": "running"
+  },
+  "remote_channel_status_not_done": {
+    "other": "not completed"
+  },
+  "remote_channel_task_exited": {
+    "other": "Exited task: 【{{.Task}}】\n\n{{.Tasks}}"
+  },
+  "remote_channel_task_resumed": {
+    "other": "Resumed execution of task 【{{.Task}}】."
+  },
+  "remote_channel_task_completed": {
+    "other": "Completed task: 【{{.Task}}】\n\n{{.Tasks}}"
+  },
+  "remote_channel_cancel_done": {
+    "other": "Task execution cancelled.\n\nEnter /q, /exit or 退出 to leave the task.\n\n{{.Tasks}}"
+  },
+  "remote_channel_uncertain_action_required": {
+    "other": "The task result is still uncertain. Please confirm it in the client first, or wait a moment and try again."
   },
   "taskgit_branch_invalid": {
     "other": "The Git branch is invalid or does not exist"

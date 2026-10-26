@@ -14,6 +14,7 @@ import (
 
 	"goteams-client/internal/applog"
 	"goteams-client/internal/cloud"
+	"goteams-client/internal/cloudscope"
 	"goteams-client/internal/i18n"
 	"goteams-client/internal/pipeline"
 )
@@ -78,7 +79,7 @@ func syncCloudPipelines(ctx context.Context, svc *pipeline.Service, client *clou
 		}
 		items = append(items, item)
 	}
-	return svc.SyncCloud(ctx, pipeline.CloudSourceKey(client.BaseURL()), items)
+	return svc.SyncCloud(cloudscope.With(ctx, client.SessionScope()), pipeline.CloudSourceKey(client.BaseURL()), items)
 }
 
 func (s *Server) triggerCloudPipelineSync() {

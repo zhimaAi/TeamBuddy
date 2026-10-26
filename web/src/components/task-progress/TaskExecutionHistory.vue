@@ -109,17 +109,18 @@
           </div>
           <StepMessageList
             v-else-if="detailFor(item.uuid)"
-            :items="detailFor(item.uuid)?.progress || []"
+            :items="historyItems(detailFor(item.uuid))"
             :steps="historySteps(detailFor(item.uuid))"
             :selected-step-name="fallbackActorName(item)"
             :fallback-actor-name="fallbackActorName(item)"
             :fallback-actor-logo="fallbackActorLogo(item)"
             :task-uuid="taskUuid"
+            :file-roots="fileRoots"
             :session-events="detailFor(item.uuid)?.session_events || {}"
             embedded
-            default-collapsed
             read-only
             @copy="copyProgress"
+            @resync="refreshDetail(item)"
           />
         </div>
       </article>
@@ -141,6 +142,7 @@ import apiClient from '@/api/client'
 import cliExecutionLogo from '@/assets/icons/task-composer-cli.svg'
 import codexLogo from '@/assets/icons/codex-logo.svg'
 import vibeCodingLogo from '@/assets/icons/vibe-coding-logo.svg'
+import { isVibeCodingTool, vibeToolLabelKey } from '@/composables/useVibeCoding'
 import { copyText } from '@/utils/clipboard'
 import type { PipelineStep, TaskProgress } from '@/types/pipeline'
 import type {
@@ -156,9 +158,13 @@ const props = withDefaults(
   defineProps<{
     taskUuid: string
     revision?: number | string
+    fileRoots?: string[]
   }>(),
-  { revision: 0 },
+  { revision: 0, fileRoots: () => [] },
 )
+
+/** 历史执行里重报成功后通知页面：重报会把整条任务队列里未投递的执行一起推上去 */
+const emit = defineEmits<{ resync: [] }>()
 
 const { t } = useAppI18n()
 const { locale } = useLocale()
@@ -296,17 +302,20 @@ function executionTitle(item: TaskExecutionHistorySummary) {
       ? t('workflows.task.executionHistory.cliTitle', { cli, model: item.model_name })
       : t('workflows.task.executionHistory.directTitle', { tool: cli })
   }
-  const tool = item.target_name || item.execution_tool || t('workflows.task.create.vibeCodingMode')
+  const toolKey = item.execution_tool || ''
+  const tool = item.target_name
+    || (isVibeCodingTool(toolKey) ? t(vibeToolLabelKey(toolKey)) : toolKey)
+    || t('workflows.task.create.vibeCodingMode')
   return t('workflows.task.executionHistory.directTitle', {
-    tool: tool.toLowerCase() === 'codex' ? 'Codex' : tool,
+    tool: [tool.toLowerCase() === 'codex' ? 'Codex' : tool, item.model_name].filter(Boolean).join(' · '),
   })
 }
 
 function fallbackActorName(item: TaskExecutionHistorySummary) {
   if (item.execution_mode === 'cli') return cliDisplayName(item.execution_tool || item.target_name)
   if (item.execution_mode === 'vibe_coding') {
-    const tool = item.target_name || item.execution_tool
-    return tool.toLowerCase() === 'codex' ? 'Codex' : tool
+    const toolKey = item.execution_tool || ''
+    return item.target_name || (isVibeCodingTool(toolKey) ? t(vibeToolLabelKey(toolKey)) : toolKey)
   }
   return item.target_name
 }
@@ -323,6 +332,27 @@ function historySteps(detail?: TaskExecutionHistoryDetail): PipelineStep[] {
   if (!detail || detail.execution_mode === 'cli' || detail.execution_mode === 'vibe_coding')
     return []
   return detail.steps || []
+}
+
+/**
+ * 归档快照里的消息没有逐条上报字段：一次执行就是一次整体上报，
+ * 用执行级状态给每条消息渲染「上报状态 + 上报时间」。
+ */
+function historyItems(detail?: TaskExecutionHistoryDetail): TaskProgress[] {
+  const progress = detail?.progress || []
+  if (!detail?.cloud_sync_status) return progress
+  return progress.map((item) => ({
+    ...item,
+    cloud_sync_status: detail.cloud_sync_status,
+    cloud_sync_error: detail.cloud_sync_error,
+    cloud_synced_at: detail.cloud_synced_at,
+  }))
+}
+
+/** 历史执行里点「重新上报」后，重新拉一次快照详情，拿到最新上报状态 */
+async function refreshDetail(item: TaskExecutionHistorySummary) {
+  await loadDetail(item)
+  emit('resync')
 }
 
 function formatDateTime(timestamp: number) {

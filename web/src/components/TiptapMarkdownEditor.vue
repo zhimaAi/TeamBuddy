@@ -121,6 +121,7 @@
             class="floating-popover text-color-menu"
             role="menu"
             :aria-label="t('components.markdown.textColor')"
+            :class="{ 'has-custom-colors': customColors }"
             @pointerdown.stop
           >
             <button
@@ -144,6 +145,26 @@
                 {{ TEXT_COLOR_ICON }}
               </span>
             </button>
+            <div v-if="customColors" class="custom-color-controls" role="group" :aria-label="t('components.markdown.customColor')">
+              <input
+                :value="customColor"
+                class="custom-color-picker"
+                type="color"
+                :aria-label="t('components.markdown.customColor')"
+                @input="updateCustomColor"
+              />
+              <input
+                :value="customColor"
+                class="custom-color-hex"
+                type="text"
+                maxlength="7"
+                :aria-label="t('components.markdown.colorHex')"
+                @input="updateCustomColor"
+              />
+              <button type="button" @click="applyCustomColor(true)">
+                {{ t('components.markdown.resetTextColor') }}
+              </button>
+            </div>
           </div>
         </div>
 
@@ -197,6 +218,7 @@ import { Markdown } from '@tiptap/markdown'
 import Highlight from '@tiptap/extension-highlight'
 import { TaskItem, TaskList } from '@tiptap/extension-list'
 import Placeholder from '@tiptap/extension-placeholder'
+import Paragraph from '@tiptap/extension-paragraph'
 import { TableKit } from '@tiptap/extension-table'
 import { Color, TextStyle } from '@tiptap/extension-text-style'
 import StarterKit from '@tiptap/starter-kit'
@@ -230,6 +252,10 @@ const props = withDefaults(
     ensureTitleHeading?: boolean
     variant?: 'document' | 'compact'
     onUploadImages?: (files: File[]) => Promise<string[]>
+    /** 仅解析图片展示地址，原始引用仍用于 Markdown 保存。 */
+    resolveImageSrc?: (src: string) => Promise<string>
+    customColors?: boolean
+    defaultTextColor?: string
   }>(),
   {
     modelValue: '',
@@ -239,6 +265,8 @@ const props = withDefaults(
     ensureTitleHeading: false,
     variant: 'document',
     onUploadImages: undefined,
+    customColors: false,
+    defaultTextColor: '#262626',
   },
 )
 
@@ -369,7 +397,7 @@ const MarkdownTextStyle = TextStyle.extend({
   renderMarkdown: (node, helpers) => {
     const content = helpers.renderChildren(node.content || [])
     const color = typeof node.attrs?.color === 'string' ? node.attrs.color.toLowerCase() : ''
-    if (!TEXT_COLOR_ITEMS.some((item) => item.value === color)) return content
+    if (!/^#[0-9a-f]{6}$/i.test(color)) return content
     return `<span style="color: ${color}" data-goteams-color="${color}">${content}</span>`
   },
 })
@@ -383,7 +411,10 @@ const MarkdownImage = Node.create({
 
   addAttributes() {
     return {
-      src: { default: null },
+      src: {
+        default: null,
+        parseHTML: (element) => element.getAttribute('data-goteams-image-src') || element.getAttribute('src'),
+      },
       alt: { default: null },
       title: { default: null },
     }
@@ -395,6 +426,54 @@ const MarkdownImage = Node.create({
 
   renderHTML({ HTMLAttributes }) {
     return ['img', mergeAttributes(HTMLAttributes)]
+  },
+
+  addNodeView() {
+    const resolveImageSrc = props.resolveImageSrc
+    if (!resolveImageSrc) return null
+    return ({ node }) => {
+      const image = document.createElement('img')
+      let currentNode = node
+      let version = 0
+      let destroyed = false
+      image.onerror = () => {
+        image.title = t('components.markdown.attachmentLoadFailed')
+      }
+      const updateImage = () => {
+        const src = String(currentNode.attrs.src || '')
+        const requestVersion = ++version
+        image.alt = String(currentNode.attrs.alt || '')
+        image.title = String(currentNode.attrs.title || '')
+        image.setAttribute('data-goteams-image-src', src)
+        image.removeAttribute('src')
+        // NodeView 不修改节点属性，避免签名刷新或本地图片加载触发脏状态、写入临时地址。
+        void resolveImageSrc(src).then((resolved) => {
+          if (!destroyed && requestVersion === version) image.src = resolved
+        }).catch(() => {
+          if (!destroyed && requestVersion === version) {
+            image.title = t('components.markdown.attachmentLoadFailed')
+          }
+        })
+      }
+      updateImage()
+      return {
+        dom: image,
+        update(nextNode) {
+          if (nextNode.type !== currentNode.type) return false
+          const previous = currentNode.attrs
+          currentNode = nextNode
+          if (previous.src !== nextNode.attrs.src || previous.alt !== nextNode.attrs.alt || previous.title !== nextNode.attrs.title) {
+            updateImage()
+          }
+          return true
+        },
+        destroy() {
+          destroyed = true
+          version += 1
+          image.onerror = null
+        },
+      }
+    }
   },
 
   markdownTokenName: 'image',
@@ -418,6 +497,17 @@ const MarkdownImage = Node.create({
   },
 })
 
+const MarkdownParagraph = Paragraph.extend({
+  parseMarkdown(token, helpers) {
+    const tokens = token.tokens || []
+    // 默认段落解析把独占一行的图片提升为块节点；项目图片是行内节点，必须保留段落。
+    if (tokens.length === 1 && tokens[0].type === 'image') {
+      return helpers.createNode('paragraph', undefined, helpers.parseInline(tokens))
+    }
+    return this.parent?.(token, helpers) ?? helpers.createNode('paragraph', undefined, helpers.parseInline(tokens))
+  },
+})
+
 function ensureRequiredTitleHeading(instance: TiptapEditor) {
   if (!props.ensureTitleHeading || props.disabled) return false
   const firstNode = instance.state.doc.firstChild
@@ -434,9 +524,11 @@ const editor = useEditor({
   contentType: 'markdown',
   extensions: [
     StarterKit.configure({
+      paragraph: false,
       heading: { levels: [...HEADING_LEVELS] },
       link: { openOnClick: false },
     }),
+    MarkdownParagraph,
     TaskList,
     TaskItem.configure({ nested: true }),
     TableKit.configure({ table: { resizable: false } }),
@@ -538,7 +630,7 @@ const currentBlockTypeItem = computed(
 const selectedTextColor = computed(() => {
   void editorRevision.value
   const color = editor.value?.getAttributes('textStyle').color
-  return TEXT_COLOR_ITEMS.some((item) => item.value === color) ? color : TEXT_COLOR_ITEMS[0].value
+  return typeof color === 'string' && /^#[0-9a-f]{6}$/i.test(color) ? color : props.defaultTextColor
 })
 
 function shouldShowBubbleMenu({
@@ -559,7 +651,13 @@ function toggleTypeMenu() {
   linkEditorOpen.value = false
 }
 
+const customColor = ref('#262626')
+const colorSelection = ref<{ from: number; to: number }>()
+
 function toggleColorMenu() {
+  const selection = editor.value?.state.selection
+  if (selection) colorSelection.value = { from: selection.from, to: selection.to }
+  customColor.value = selectedTextColor.value
   colorMenuOpen.value = !colorMenuOpen.value
   typeMenuOpen.value = false
   linkEditorOpen.value = false
@@ -611,6 +709,22 @@ function applyFloatingTool(key: FloatingToolKey) {
 function applyTextColor(item: TextColorItem) {
   editor.value?.chain().focus().setColor(item.value).run()
   colorMenuOpen.value = false
+}
+
+function updateCustomColor(event: Event) {
+  if (!(event.target instanceof HTMLInputElement)) return
+  customColor.value = event.target.value
+  applyCustomColor()
+}
+
+function applyCustomColor(reset = false) {
+  const instance = editor.value
+  if (!instance || (!reset && !/^#[0-9a-f]{6}$/i.test(customColor.value))) return
+  const chain = instance.chain()
+  if (colorSelection.value) chain.setTextSelection(colorSelection.value)
+  if (reset) chain.focus().unsetColor().run()
+  else chain.setColor(customColor.value.toLowerCase()).run()
+  if (reset) colorMenuOpen.value = false
 }
 
 function toggleLinkEditor() {
@@ -702,6 +816,12 @@ defineExpose({
 </script>
 
 <style scoped>
+.text-color-menu.has-custom-colors { flex-wrap: wrap; width: 192px; }
+.custom-color-controls { display: flex; align-items: center; gap: 8px; width: 100%; font-size: 12px; }
+.custom-color-picker { flex-shrink: 0; width: 32px; height: 26px; padding: 0; border: 0; background: transparent; cursor: pointer; }
+.custom-color-hex { flex: 1; min-width: 0; width: 82px; padding: 4px; border: 1px solid #d9d9d9; border-radius: 4px; }
+.custom-color-controls button { flex-shrink: 0; min-height: 24px; padding: 2px 8px; border: 1px solid #d9d9d9; border-radius: 4px; color: #262626; background: #fff; cursor: pointer; }
+
 .tiptap-markdown-editor {
   min-height: 0;
   flex: 1;

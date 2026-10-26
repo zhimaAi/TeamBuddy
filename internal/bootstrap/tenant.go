@@ -108,6 +108,17 @@ func loadCloudConfig(configDir string) (*config.CloudConfig, error) {
 	)
 	cfg.SetConfigSource(sourcePath)
 
+	// 产出文档上报为旁路通道，配置缺失时沿用默认值（开启、5s、20MB、300 个、100MB），
+	// 老配置文件不需要同步升级即可运行；关闭后客户端完全不上报。
+	cfg.DocumentUpload = config.DefaultDocumentUploadConfig().WithOverrides(
+		value("document-upload", "enabled"),
+		value("document-upload", "interval_seconds"),
+		value("document-upload", "max_file_mb"),
+		value("document-upload", "max_files_per_task"),
+		value("document-upload", "max_batch_mb"),
+		value("document-upload", "excluded_extensions"),
+	)
+
 	// Electron 总会为 Go sidecar 注入 GOTEAMS_LISTEN_ADDR；独立运行（无桌面宿主）时
 	// 监听随机 loopback 端口，实际地址由 runtime.json 记录。
 	cfg.ListenAddr = strings.TrimSpace(os.Getenv("GOTEAMS_LISTEN_ADDR"))

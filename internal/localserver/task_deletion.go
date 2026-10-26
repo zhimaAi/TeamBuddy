@@ -30,6 +30,8 @@ func deleteTaskRows(ctx context.Context, tx *sql.Tx, taskUUID string) ([]string,
 		`DELETE FROM gt_task_work_dirs WHERE task_uuid = ?`,
 		`DELETE FROM gt_task_pipeline_snapshots WHERE task_uuid = ?`,
 		`DELETE FROM gt_task_expert_group_snapshots WHERE task_uuid = ?`,
+		// 产出文档上报状态随任务级联清理；线上文档由云端任务级清理负责
+		`DELETE FROM gt_task_document_uploads WHERE task_uuid = ?`,
 	} {
 		if _, err := tx.ExecContext(ctx, statement, taskUUID); err != nil {
 			return nil, err

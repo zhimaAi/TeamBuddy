@@ -12,6 +12,8 @@ import (
 	"goteams-client/internal/applog"
 	"goteams-client/internal/bootstrap"
 	"goteams-client/internal/mcpbridge"
+	"goteams-client/internal/qoderhook"
+	"goteams-client/internal/skillcall"
 )
 
 // Injected by tools/build through -ldflags -X during build; Version comes from desktop/package.json.
@@ -22,13 +24,26 @@ var (
 )
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "qoder-hook" {
+		if len(os.Args) != 2 {
+			os.Exit(1)
+		}
+		if err := qoderhook.Run(context.Background(), os.Stdin, os.Stdout); err != nil {
+			fmt.Fprintf(os.Stderr, "TeamBuddy Qoder callback: %v\n", err)
+			os.Exit(qoderhook.ExitCode(err))
+		}
+		return
+	}
+	if len(os.Args) > 1 && os.Args[1] == "skill-call" {
+		os.Exit(skillcall.Run(context.Background(), os.Args[2:]))
+	}
 	if len(os.Args) > 1 && os.Args[1] == "mcp" {
 		if len(os.Args) != 2 {
-			fmt.Fprintf(os.Stderr, "teamsboard mcp: unexpected arguments\n")
+			fmt.Fprintf(os.Stderr, "teambuddy mcp: unexpected arguments\n")
 			os.Exit(2)
 		}
 		if err := mcpbridge.Run(context.Background(), Version); err != nil {
-			fmt.Fprintf(os.Stderr, "teamsboard mcp: %v\n", err)
+			fmt.Fprintf(os.Stderr, "teambuddy mcp: %v\n", err)
 			os.Exit(1)
 		}
 		return

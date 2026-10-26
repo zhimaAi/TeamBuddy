@@ -67,7 +67,7 @@ func startCodexRPC(ctx context.Context) (*codexRPC, error) {
 	scanner := bufio.NewScanner(out)
 	scanner.Buffer(make([]byte, 4096), 4<<20)
 	rpc := &codexRPC{cmd: cmd, in: in, lines: scanner}
-	if _, err = rpc.request(1, "initialize", map[string]any{"clientInfo": map[string]string{"name": "teamsboard-wechat", "version": "0.1.5"}}); err != nil {
+	if _, err = rpc.request(1, "initialize", map[string]any{"clientInfo": map[string]string{"name": "teambuddy-wechat", "version": "0.1.5"}}); err != nil {
 		rpc.close()
 		return nil, err
 	}
@@ -182,7 +182,7 @@ func (w *wechatRemote) dispatchCodex(ctx context.Context, task wechatTask, messa
 		return "", wechatConfigFailure("codex_binding", "remote_wechat_config_codex_binding")
 	}
 	marked, err := w.db.ExecContext(ctx, `UPDATE gt_remote_wechat_inbox SET task_uuid=?, updated_at=?
-		WHERE message_id=? AND status='processing'`, task.UUID, time.Now().UnixMilli(), messageID)
+		WHERE message_id=? AND channel_type='wechat' AND status='processing'`, task.UUID, time.Now().UnixMilli(), messageID)
 	if err != nil {
 		return "", err
 	}
@@ -353,7 +353,7 @@ func (w *wechatRemote) monitorCodex(rpc *codexRPC, messageID string, task wechat
 	defer cancel()
 	for i := 0; i < 20; i++ {
 		var inboxStatus string
-		err := w.db.QueryRowContext(ctx, `SELECT status FROM gt_remote_wechat_inbox WHERE message_id=?`, messageID).Scan(&inboxStatus)
+		err := w.db.QueryRowContext(ctx, `SELECT status FROM gt_remote_wechat_inbox WHERE message_id=? AND channel_type='wechat'`, messageID).Scan(&inboxStatus)
 		if err == nil && inboxStatus == "dispatched" {
 			break
 		}
@@ -385,7 +385,7 @@ func (w *wechatRemote) finishCodexMessage(ctx context.Context, messageID string,
 
 func (w *wechatRemote) recoverCodexResults(ctx context.Context) error {
 	rows, err := w.db.QueryContext(ctx, `SELECT message_id,task_uuid,session_uuid FROM gt_remote_wechat_inbox
-		WHERE status='dispatched' AND session_uuid LIKE 'codex:%' AND received_at<? AND next_recovery_at<=?
+		WHERE channel_type='wechat' AND status='dispatched' AND session_uuid LIKE 'codex:%' AND received_at<? AND next_recovery_at<=?
 		ORDER BY next_recovery_at, received_at LIMIT 8`, time.Now().Add(-time.Minute).UnixMilli(), time.Now().UnixMilli())
 	if err != nil {
 		return err
@@ -479,7 +479,7 @@ func (w *wechatRemote) deferCodexRecovery(ctx context.Context, messageID, taskUU
 	defer tx.Rollback()
 	var failures int
 	if err = tx.QueryRowContext(ctx, `SELECT recovery_attempts FROM gt_remote_wechat_inbox
-		WHERE message_id=? AND status='dispatched'`, messageID).Scan(&failures); errors.Is(err, sql.ErrNoRows) {
+		WHERE message_id=? AND channel_type='wechat' AND status='dispatched'`, messageID).Scan(&failures); errors.Is(err, sql.ErrNoRows) {
 		return nil
 	} else if err != nil {
 		return err
@@ -489,7 +489,7 @@ func (w *wechatRemote) deferCodexRecovery(ctx context.Context, messageID, taskUU
 	}
 	if countFailure && failures >= wechatCodexRecoveryMaxFailures {
 		result, updateErr := tx.ExecContext(ctx, `UPDATE gt_remote_wechat_inbox
-			SET status='uncertain', recovery_attempts=?, updated_at=? WHERE message_id=? AND status='dispatched'`,
+			SET status='uncertain', recovery_attempts=?, updated_at=? WHERE message_id=? AND channel_type='wechat' AND status='dispatched'`,
 			failures, time.Now().UnixMilli(), messageID)
 		if updateErr != nil {
 			return updateErr
@@ -499,12 +499,12 @@ func (w *wechatRemote) deferCodexRecovery(ctx context.Context, messageID, taskUU
 		} else if updated == 0 {
 			return nil
 		}
-		if err = w.enqueueTx(ctx, tx, "uncertain:"+messageID, taskUUID, notice); err != nil {
+		if err = w.enqueueTx(ctx, tx, ChannelTypeWechat, "uncertain:"+messageID, taskUUID, notice); err != nil {
 			return err
 		}
 	} else {
 		if _, err = tx.ExecContext(ctx, `UPDATE gt_remote_wechat_inbox
-			SET next_recovery_at=?, recovery_attempts=?, updated_at=? WHERE message_id=? AND status='dispatched'`,
+			SET next_recovery_at=?, recovery_attempts=?, updated_at=? WHERE message_id=? AND channel_type='wechat' AND status='dispatched'`,
 			time.Now().Add(2*time.Minute).UnixMilli(), failures, time.Now().UnixMilli(), messageID); err != nil {
 			return err
 		}
