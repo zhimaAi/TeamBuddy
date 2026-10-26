@@ -10,6 +10,9 @@ import {
   useTaskImageAttachments,
 } from '@/composables/useTaskImageAttachments'
 import { cliDisplayName, sanitizeUserMessageText } from '@/components/task-progress/utils'
+import { revealTaskOutputFile } from '@/composables/useDesktop'
+import { t } from '@/i18n'
+import { allowLocalFileLinks, LOCAL_FILE_LINK_ATTRIBUTE, LOCAL_FILE_SESSION_ATTRIBUTE, localFileTarget, renderInlineFileCode } from '@/utils/localFileLink'
 import StopExecutionConfirmModal from '@/components/task-progress/StopExecutionConfirmModal.vue'
 import { isStopConfirmSuppressed, suppressStopConfirm } from '@/utils/stopConfirm'
 
@@ -91,6 +94,21 @@ const emit = defineEmits<{
 }>()
 
 const markdown = new MarkdownIt({ breaks: true, linkify: true })
+allowLocalFileLinks(markdown)
+const originalLinkOpenRenderer = markdown.renderer.rules.link_open
+markdown.renderer.rules.link_open = (tokens, index, options, env, self) => {
+  const token = tokens[index]
+  const href = token.attrGet('href') || ''
+  if (env.taskUuid && localFileTarget(href, env.fileRoots || [])) {
+    token.attrSet('href', '#')
+    token.attrSet(LOCAL_FILE_LINK_ATTRIBUTE, href)
+    if (env.sessionUuid) token.attrSet(LOCAL_FILE_SESSION_ATTRIBUTE, env.sessionUuid)
+    token.attrSet('title', t('components.markdown.revealInFolder'))
+  }
+  return originalLinkOpenRenderer
+    ? originalLinkOpenRenderer(tokens, index, options, env, self)
+    : self.renderToken(tokens, index, options)
+}
 const sessions = ref<Session[]>([])
 const sessionsLoading = ref(false)
 const selectedStepKey = ref('')
@@ -283,8 +301,39 @@ function formatDuration(duration: number) {
   return `${Math.floor(duration / 60_000)}m ${Math.round((duration % 60_000) / 1000)}s`
 }
 
-function renderMarkdown(content = '') {
-  return markdown.render(content)
+const originalCodeRenderer = markdown.renderer.rules.code_inline
+markdown.renderer.rules.code_inline = (tokens, index, options, env, self) => {
+  const html = renderInlineFileCode(
+    markdown,
+    tokens[index].content,
+    env.fileRoots || [],
+    t('components.markdown.revealInFolder'),
+    env.sessionUuid || '',
+  )
+  if (env.taskUuid && html) return html
+  return originalCodeRenderer
+    ? originalCodeRenderer(tokens, index, options, env, self)
+    : self.renderToken(tokens, index, options)
+}
+
+function renderMarkdown(content = '', sessionUuid = '') {
+  return markdown.render(content, { taskUuid: props.taskUuid, sessionUuid, fileRoots: [] })
+}
+
+async function handleFileLinkClick(event: MouseEvent) {
+  const target = event.target
+  if (!(target instanceof Element)) return
+  const anchor = target.closest<HTMLAnchorElement>(`a[${LOCAL_FILE_LINK_ATTRIBUTE}]`)
+  const fileRef = anchor?.getAttribute(LOCAL_FILE_LINK_ATTRIBUTE)
+  const sessionUuid = anchor?.getAttribute(LOCAL_FILE_SESSION_ATTRIBUTE) || ''
+  if (!anchor || !fileRef || !props.taskUuid) return
+  event.preventDefault()
+  try {
+    const result = await revealTaskOutputFile(props.taskUuid, fileRef, sessionUuid)
+    if (result === 'copied') message.info(t('components.markdown.revealUseDesktop'))
+  } catch (error) {
+    message.error(error instanceof Error && error.message ? error.message : t('components.markdown.revealFailed'))
+  }
 }
 
 function permissionEventKey(event: TimelineEvent, sessionUuid = selectedSessionUuid.value) {
@@ -879,6 +928,7 @@ onBeforeUnmount(closeSocket)
         <div
           ref="messagePanel"
           class="message-panel"
+          @click="handleFileLinkClick"
           @scroll="onMessageScroll"
         >
           <a-empty
@@ -929,7 +979,7 @@ onBeforeUnmount(closeSocket)
                     </div>
                     <div
                       class="bubble assistant-bubble markdown-body"
-                      v-html="renderMarkdown(event.content)"
+                      v-html="renderMarkdown(event.content, conversationSession.uuid)"
                     />
                   </div>
                 </div>
@@ -1360,6 +1410,16 @@ onBeforeUnmount(closeSocket)
 .assistant-bubble {
   color: #273044;
   background: #f1f3f7;
+}
+
+.markdown-body :deep(a) {
+  color: #3a7a3a;
+  cursor: pointer;
+  text-decoration: none;
+}
+
+.markdown-body :deep(a:hover) {
+  text-decoration: underline;
 }
 
 .markdown-body :deep(p:first-child) {

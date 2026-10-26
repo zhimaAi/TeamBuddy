@@ -2,7 +2,7 @@
   "login": {
     "title": "团队工作",
     "subtitle": "登录 goteams，与团队一起协作",
-    "description": "连接后，可与团队共享需求、任务与 AI Agent 开发能力，团队任务会实时同步到客户端",
+    "description": "连接后，可共享团队需求与 AI Agent 开发能力，执行记录会同步到当前团队服务",
     "featureSync": "任务同步",
     "featureCollaborate": "团队协作",
     "featureAgent": "Agent 协同",
@@ -74,7 +74,15 @@
   },
   "configure": {
     "title": "配置团队需求",
-    "hint": "来自{name}的团队需求，配置下方信息后即可开始处理",
+    "hint": "来自{name}的团队需求，标题和需求的修改仅用于本地执行",
+    "taskTitle": "任务标题",
+    "taskDescription": "执行需求",
+    "startImmediately": "立即执行",
+    "startImmediatelyHint": "勾选该选项，确认后会按照需求内容立即开始执行任务",
+    "syncAgentOutput": "同步agent产出",
+    "syncAgentOutputHint": "默认自动同步任务产出到线上；取消勾选后需在文件抽屉里手动上报",
+    "executionModeRequired": "立即执行前请选择执行方式",
+    "startFailed": "本地任务已创建，但启动失败：{error}。可在任务中重试启动",
     "unknownCreator": "团队成员",
     "project": "所属项目",
     "workDir": "选择工作目录",
@@ -97,5 +105,13 @@
     "item2": "删除后，该团队任务会回到待配置状态，可以重新分配流水线执行",
     "confirm": "确认删除",
     "failed": "删除团队任务失败"
+  },
+  "connection": {
+    "addressRequired": "请输入服务器地址",
+    "addressInvalid": "请输入不含账号、查询参数和片段的 HTTP 或 HTTPS 服务地址",
+    "customAction": "点击登录绑定开源版本账号",
+    "openSourceAddress": "开源版本地址",
+    "openSourceAddressPlaceholder": "请输入开源地址",
+    "authorize": "点击授权"
   }
 }

@@ -12,9 +12,10 @@ export interface TaskRelatedProject {
 }
 
 export type TaskWithDetails = LocalTask & {
+  awaiting_message?: boolean
   execution_mode?: import('@/types/pipeline').TaskExecutionMode
   execution_tool?: string
-  // CLI 直接执行：模型记录在隐式步骤上，由 getTask 展开为 execution_model。
+  // CLI 直接执行来自隐式步骤；Vibe Coding 来自独立保存的启动模型配置。
   execution_model?: string
   selected_pipeline_uuid?: string
   pipeline_avatar_snapshot?: string

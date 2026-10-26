@@ -42,7 +42,7 @@ import (
 	"goteams-client/internal/workflow"
 )
 
-// wechatEnqueuer 是 SkillSurface 对微信通道的最小依赖：只需能把一条消息投递进发送队列。
+// wechatEnqueuer 保留旧 5 参数接口以兼容尚未改造的调用点；新代码直接使用 remoteEnqueuer。
 //
 // 为什么不用 *wechatRemote：wechatRemote 需要 SkillSurface 的格式化能力，SkillSurface 需要
 // wechatRemote 的 enqueue —— 这是真实的双向依赖，直接注入具体类型会让「谁先构造」变成隐式契约
@@ -50,6 +50,13 @@ import (
 // SkillSurface 只认该接口。
 type wechatEnqueuer interface {
 	enqueue(ctx context.Context, sourceID, taskUUID, content string) error
+}
+
+// remoteEnqueuer 是通道无关的消息投递接口，支持 channelType 参数。
+// SkillSurface 通过该接口把消息投递到任意通道；当前阶段 CLI skill 调用仍固定传 ChannelTypeWechat，
+// 后续 chat-reply/messages 接入 channel_type 请求字段后可直接透传。
+type remoteEnqueuer interface {
+	Enqueue(ctx context.Context, channelType, sourceID, taskUUID, content string) error
 }
 
 // i18nGinContextLocaleKey 是 i18n 包内部 `contextLocaleKey` 常量的镜像。
@@ -66,8 +73,10 @@ type SkillSurface struct {
 	db              *sql.DB
 	taskCloudClient func() *cloud.Client
 	tasks           *TasksHandler
-	// enqueuer：微信消息投递窄接口（由 wechatRemote 实现）。
-	enqueuer           wechatEnqueuer
+	// enqueuer：通道无关消息投递窄接口（由 wechatRemote/wecomChannel 等实现）。
+	// CLI skill 当前所有调用都默认走 ChannelTypeWechat；后续 chat-reply/messages 接入 channel_type 请求
+	// 字段后会切换到读请求中的 channel_type（见 Phase C-3）。
+	enqueuer           remoteEnqueuer
 	orchestratorGetter func() *workflow.Orchestrator
 	vibeSkills         map[string]VibeSkillStatus
 	skillsRoot         string
@@ -77,6 +86,8 @@ type SkillSurface struct {
 	// 完全一致的回退口径注入）。取代原先无人写入的 wechatSessionKey —— 它导致
 	// sessionFromCtx 恒 false、微信 /tt 恒提示未登录。
 	accountSession func() *browserSession
+	// channelStateStore: 通道状态存储（用于 channelType 支持）
+	channelStateStore *channelStateStore
 }
 
 // NewSkillSurface 装配共享层。
@@ -84,17 +95,19 @@ type SkillSurface struct {
 //     避免 handler 内部隐式读取全局配置。
 //   - enqueuer 是窄接口而非 *wechatRemote：装配顺序不再是正确性前提。
 //   - accountSession 由 server.go 以 currentSession() + sessionMatchesConfig() 注入。
+//   - channelStateStore 用于通道状态读写（支持多渠道）。
 func NewSkillSurface(
 	db *sql.DB,
 	taskCloudClient func() *cloud.Client,
 	tasks *TasksHandler,
-	enqueuer wechatEnqueuer,
+	enqueuer remoteEnqueuer,
 	orchestratorGetter func() *workflow.Orchestrator,
 	vibeSkillStatuses []VibeSkillStatus,
 	skillsRoot string,
 	codexSkillReady bool,
 	codexSkillReason string,
 	accountSession func() *browserSession,
+	channelStateStore *channelStateStore,
 ) *SkillSurface {
 	indexed := make(map[string]VibeSkillStatus, len(vibeSkillStatuses))
 	for _, status := range vibeSkillStatuses {
@@ -105,7 +118,8 @@ func NewSkillSurface(
 		enqueuer: enqueuer, orchestratorGetter: orchestratorGetter,
 		vibeSkills: indexed, skillsRoot: skillsRoot,
 		codexSkillReady: codexSkillReady, codexSkillReason: codexSkillReason,
-		accountSession: accountSession,
+		accountSession:    accountSession,
+		channelStateStore: channelStateStore,
 	}
 }
 
@@ -202,15 +216,16 @@ func (s *SkillSurface) resolveTaskRef(ctx context.Context, ref string) (string, 
 	var uuid string
 	scanErr := s.db.QueryRowContext(ctx, `SELECT task_uuid FROM gt_remote_task_aliases WHERE short_id=?`, n).Scan(&uuid)
 	if scanErr == nil {
-		return uuid, nil
+		return uuid, s.checkTaskScope(ctx, uuid)
 	}
 	if !errors.Is(scanErr, sql.ErrNoRows) {
 		return "", scanErr
 	}
 	// 未命中 short_id 时按列表序号解析：与列表 R8 输出（ORDER BY short_id）保持一致。
+	scopeSQL, args := taskScopeSQL(s.currentTaskCloudClient(), "t")
 	scanErr = s.db.QueryRowContext(ctx, `SELECT t.uuid FROM gt_tasks t
 		JOIN gt_remote_task_aliases a ON a.task_uuid = t.uuid
-		ORDER BY a.short_id ASC LIMIT 1 OFFSET ?`, n-1).Scan(&uuid)
+		WHERE `+scopeSQL+` ORDER BY a.short_id ASC LIMIT 1 OFFSET ?`, append(args, n-1)...).Scan(&uuid)
 	if scanErr != nil {
 		if errors.Is(scanErr, sql.ErrNoRows) {
 			return "", newSkillBadRequest("localserver_skill_task_ref_invalid")
@@ -530,9 +545,12 @@ func (s *SkillSurface) lookupVibeTools(c *gin.Context) {
 		payload := gin.H{
 			"tool": tool, "ready": ready, "reason_code": reason, "installed": true,
 		}
-		if tool != taskruntime.ExecutionToolCodex {
+		if vibeLaunchKind(tool) == "terminal" {
 			execPath, err := executor.ResolveVibeCodingExecutable(tool)
 			payload["installed"] = err == nil && execPath != ""
+		}
+		if tool == taskruntime.ExecutionToolQoderIDE {
+			delete(payload, "installed")
 		}
 		items = append(items, indexItem(idx+1, payload))
 	}
@@ -543,8 +561,8 @@ func (s *SkillSurface) lookupTasks(c *gin.Context) {
 	q := c.Request.URL.Query()
 	sourceType := q.Get("source_type")
 	status := q.Get("status")
-	conditions := []string{}
-	args := []any{}
+	scopeSQL, args := taskScopeSQL(s.currentTaskCloudClient(), "t")
+	conditions := []string{scopeSQL}
 	if status != "" {
 		conditions = append(conditions, "t.status=?")
 		args = append(args, status)
@@ -1438,6 +1456,13 @@ func (s *SkillSurface) cliChat(c *gin.Context) {
 		i18n.Error(c, http.StatusBadRequest, "common_request_invalid", "request_invalid")
 		return
 	}
+	if body.BoundTaskUUID != "" {
+		if err := s.checkTaskScope(c.Request.Context(), body.BoundTaskUUID); err != nil {
+			s.writeSkillError(c, err)
+			return
+		}
+	}
+
 	body.Message = strings.TrimSpace(body.Message)
 	if body.Message == "" {
 		i18n.Error(c, http.StatusBadRequest, "localserver_skill_activity_content_invalid", "skill_activity_content_invalid")
@@ -1471,11 +1496,19 @@ func (s *SkillSurface) cliChatReply(c *gin.Context) {
 		TaskUUID    string `json:"task_uuid"`
 		ReplyType   string `json:"reply_type"`
 		SessionUUID string `json:"session_uuid"`
+		ChannelType string `json:"channel_type"`
 	}
 	if err := c.ShouldBindJSON(&body); err != nil {
 		i18n.Error(c, http.StatusBadRequest, "common_request_invalid", "request_invalid")
 		return
 	}
+	if body.TaskUUID != "" {
+		if err := s.checkTaskScope(c.Request.Context(), body.TaskUUID); err != nil {
+			s.writeSkillError(c, err)
+			return
+		}
+	}
+
 	body.Content = strings.TrimSpace(body.Content)
 	if body.Content == "" {
 		i18n.Error(c, http.StatusBadRequest, "localserver_skill_activity_content_invalid", "skill_activity_content_invalid")
@@ -1485,6 +1518,7 @@ func (s *SkillSurface) cliChatReply(c *gin.Context) {
 	if replyType == "" {
 		replyType = "direct_message"
 	}
+	channelType := NormalizeChannelType(body.ChannelType)
 	var finalContent string
 	switch replyType {
 	case "task_result":
@@ -1493,7 +1527,7 @@ func (s *SkillSurface) cliChatReply(c *gin.Context) {
 			_ = s.db.QueryRowContext(c.Request.Context(),
 				`SELECT short_id FROM gt_remote_task_aliases WHERE task_uuid=?`, body.TaskUUID).Scan(&shortID)
 		}
-		finalContent = i18n.Format(c, "remote_wechat_result",
+		finalContent = i18n.Format(c, "remote_channel_result",
 			i18n.Params{"ID": shortID, "Task": "", "Result": body.Content})
 	default:
 		finalContent = body.Content
@@ -1504,37 +1538,46 @@ func (s *SkillSurface) cliChatReply(c *gin.Context) {
 	} else {
 		sourceID += "no-task"
 	}
-	if err := s.enqueuer.enqueue(c.Request.Context(), sourceID, body.TaskUUID, finalContent); err != nil {
+	if err := s.enqueuer.Enqueue(c.Request.Context(), channelType, sourceID, body.TaskUUID, finalContent); err != nil {
 		i18n.LocalServerError(c, http.StatusInternalServerError, err)
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"status": "ok"})
+	c.JSON(http.StatusOK, gin.H{"status": "ok", "channel_type": channelType})
 }
 
 func (s *SkillSurface) sendMessage(c *gin.Context) {
 	var body struct {
-		Content  string `json:"content"`
-		TaskUUID string `json:"task_uuid"`
+		Content     string `json:"content"`
+		TaskUUID    string `json:"task_uuid"`
+		ChannelType string `json:"channel_type"`
 	}
 	if err := c.ShouldBindJSON(&body); err != nil {
 		i18n.Error(c, http.StatusBadRequest, "common_request_invalid", "request_invalid")
 		return
 	}
+	if body.TaskUUID != "" {
+		if err := s.checkTaskScope(c.Request.Context(), body.TaskUUID); err != nil {
+			s.writeSkillError(c, err)
+			return
+		}
+	}
+
 	body.Content = strings.TrimSpace(body.Content)
 	if body.Content == "" {
 		i18n.Error(c, http.StatusBadRequest, "localserver_skill_activity_content_invalid", "skill_activity_content_invalid")
 		return
 	}
 	taskUUID := strings.TrimSpace(body.TaskUUID)
+	channelType := NormalizeChannelType(body.ChannelType)
 	sourceID := "cli-skill:message"
 	if taskUUID != "" {
 		sourceID = "cli-skill:" + taskUUID
 	}
-	if err := s.enqueuer.enqueue(c.Request.Context(), sourceID, taskUUID, body.Content); err != nil {
+	if err := s.enqueuer.Enqueue(c.Request.Context(), channelType, sourceID, taskUUID, body.Content); err != nil {
 		i18n.LocalServerError(c, http.StatusInternalServerError, err)
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"status": "ok"})
+	c.JSON(http.StatusOK, gin.H{"status": "ok", "channel_type": channelType})
 }
 
 func (s *SkillSurface) reportActivity(c *gin.Context) {
@@ -1543,11 +1586,17 @@ func (s *SkillSurface) reportActivity(c *gin.Context) {
 		i18n.Error(c, http.StatusBadRequest, "localserver_task_uuid_invalid", "task_uuid_invalid")
 		return
 	}
+
+	if err := s.checkTaskScope(c.Request.Context(), taskUUID); err != nil {
+		s.writeSkillError(c, err)
+		return
+	}
 	var body struct {
-		Type     string `json:"type"`
-		Content  string `json:"content"`
-		Tool     string `json:"tool"`
-		ThreadID string `json:"thread_id"`
+		Type        string `json:"type"`
+		Content     string `json:"content"`
+		Tool        string `json:"tool"`
+		ThreadID    string `json:"thread_id"`
+		ChannelType string `json:"channel_type"`
 	}
 	if err := c.ShouldBindJSON(&body); err != nil {
 		i18n.Error(c, http.StatusBadRequest, "common_request_invalid", "request_invalid")
@@ -1613,9 +1662,10 @@ func (s *SkillSurface) reportActivity(c *gin.Context) {
 		var shortID int64
 		_ = s.db.QueryRowContext(c.Request.Context(),
 			`SELECT short_id FROM gt_remote_task_aliases WHERE task_uuid=?`, taskUUID).Scan(&shortID)
-		messageBody := i18n.Format(c, "remote_wechat_result",
+		messageBody := i18n.Format(c, "remote_channel_result",
 			i18n.Params{"ID": shortID, "Task": title, "Result": body.Content})
-		_ = s.enqueuer.enqueue(c.Request.Context(), "cli-skill:"+taskUUID, taskUUID, messageBody)
+		channelType := NormalizeChannelType(body.ChannelType)
+		_ = s.enqueuer.Enqueue(c.Request.Context(), channelType, "cli-skill:"+taskUUID, taskUUID, messageBody)
 	}
 	c.JSON(http.StatusCreated, gin.H{
 		"uuid":       progressUUID,
@@ -1633,6 +1683,11 @@ func (s *SkillSurface) skillGetTask(c *gin.Context) {
 		i18n.Error(c, http.StatusBadRequest, "localserver_task_uuid_invalid", "task_uuid_invalid")
 		return
 	}
+
+	if err := s.checkTaskScope(c.Request.Context(), taskUUID); err != nil {
+		s.writeSkillError(c, err)
+		return
+	}
 	detail, err := s.tasks.loadTaskDetail(c.Request.Context(), taskUUID)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -1646,6 +1701,11 @@ func (s *SkillSurface) skillGetTask(c *gin.Context) {
 }
 
 func (s *SkillSurface) writeSkillError(c *gin.Context, err error) {
+	var statusErr *coreStatusError
+	if errors.As(err, &statusErr) {
+		s.writeCoreError(c, err)
+		return
+	}
 	var badRequest *errSkillBadRequest
 	if errors.As(err, &badRequest) {
 		i18n.Error(c, http.StatusBadRequest, badRequest.key, "skill_request_invalid")
@@ -2182,11 +2242,12 @@ func (s *SkillSurface) wechatListTasksText(ctx context.Context, status string) (
 		return "", err
 	}
 	query := `SELECT a.short_id, t.title FROM gt_remote_task_aliases a JOIN gt_tasks t ON t.uuid=a.task_uuid`
-	args := []any{}
+	scopeSQL, args := taskScopeSQL(s.currentTaskCloudClient(), "t")
+	query += ` WHERE ` + scopeSQL
 	if status == "not_done" {
-		query += ` WHERE t.status != 'done'`
+		query += ` AND t.status != 'done'`
 	} else if status != "" {
-		query += ` WHERE t.status=?`
+		query += ` AND t.status=?`
 		args = append(args, status)
 	}
 	query += ` ORDER BY a.short_id`
@@ -2208,22 +2269,22 @@ func (s *SkillSurface) wechatListTasksText(ctx context.Context, status string) (
 		return "", err
 	}
 	labelKey := map[string]string{
-		"active":   "remote_wechat_status_running",
-		"done":     "remote_wechat_status_done",
-		"blocked":  "remote_wechat_status_blocked",
-		"not_done": "remote_wechat_status_not_done",
-		"":         "remote_wechat_status_all",
+		"active":   "remote_channel_status_running",
+		"done":     "remote_channel_status_done",
+		"blocked":  "remote_channel_status_blocked",
+		"not_done": "remote_channel_status_not_done",
+		"":         "remote_channel_status_all",
 	}[status]
 	params := i18n.Params{
 		"Count":  len(lines),
 		"Status": s.trFromCtx(ctx, labelKey, nil),
 		"Tasks":  strings.Join(lines, "\n\n"),
-		"Help":   s.trFromCtx(ctx, "remote_wechat_help", nil),
+		"Help":   s.trFromCtx(ctx, "remote_channel_help", nil),
 	}
 	if len(lines) == 0 {
-		return s.trFromCtx(ctx, "remote_wechat_empty_tasks", params), nil
+		return s.trFromCtx(ctx, "remote_channel_empty_tasks", params), nil
 	}
-	return s.trFromCtx(ctx, "remote_wechat_list", params), nil
+	return s.trFromCtx(ctx, "remote_channel_list", params), nil
 }
 
 // WechatListTasks 微信快路径 /task /t /T 的入口。
@@ -2238,6 +2299,9 @@ func (s *SkillSurface) WechatListTasks(ctx context.Context, status string) (stri
 //
 // 失败时返回 (text, err)：text 已经是本地化文案，可直接展示给微信用户。
 func (s *SkillSurface) WechatCancelTask(ctx context.Context, taskUUID string) (string, error) {
+	if err := s.checkTaskScope(ctx, taskUUID); err != nil {
+		return s.wechatErrorFromErr(ctx, err), err
+	}
 	var title string
 	_ = s.db.QueryRowContext(ctx, `SELECT title FROM gt_tasks WHERE uuid=?`, taskUUID).Scan(&title)
 	if s.orchestratorGetter != nil {
@@ -2256,12 +2320,15 @@ func (s *SkillSurface) WechatCancelTask(ctx context.Context, taskUUID string) (s
 	if listErr != nil {
 		return "", listErr
 	}
-	return s.trFromCtx(ctx, "remote_wechat_cancel_done", i18n.Params{"Task": title, "Tasks": listText}), nil
+	return s.trFromCtx(ctx, "remote_channel_cancel_done", i18n.Params{"Task": title, "Tasks": listText}), nil
 }
 
 // WechatResumeTask 恢复执行指定任务（gin-free）。
 // blocked / done 状态下改回 active；其他状态保持不变（与现状一致）。
 func (s *SkillSurface) WechatResumeTask(ctx context.Context, taskUUID string) (string, error) {
+	if err := s.checkTaskScope(ctx, taskUUID); err != nil {
+		return s.wechatErrorFromErr(ctx, err), err
+	}
 	var title, currentStatus string
 	if err := s.db.QueryRowContext(ctx, `SELECT title, status FROM gt_tasks WHERE uuid=?`, taskUUID).Scan(&title, &currentStatus); err != nil {
 		return "", err
@@ -2272,11 +2339,14 @@ func (s *SkillSurface) WechatResumeTask(ctx context.Context, taskUUID string) (s
 			return "", err
 		}
 	}
-	return s.trFromCtx(ctx, "remote_wechat_task_resumed", i18n.Params{"Task": title}), nil
+	return s.trFromCtx(ctx, "remote_channel_task_resumed", i18n.Params{"Task": title}), nil
 }
 
 // WechatCompleteTask 标记任务完成（gin-free）。
 func (s *SkillSurface) WechatCompleteTask(ctx context.Context, taskUUID string) (string, error) {
+	if err := s.checkTaskScope(ctx, taskUUID); err != nil {
+		return s.wechatErrorFromErr(ctx, err), err
+	}
 	var title string
 	_ = s.db.QueryRowContext(ctx, `SELECT title FROM gt_tasks WHERE uuid=?`, taskUUID).Scan(&title)
 	now := time.Now().UnixMilli()
@@ -2287,7 +2357,7 @@ func (s *SkillSurface) WechatCompleteTask(ctx context.Context, taskUUID string) 
 	if listErr != nil {
 		return "", listErr
 	}
-	return s.trFromCtx(ctx, "remote_wechat_task_completed", i18n.Params{"Task": title, "Tasks": listText}), nil
+	return s.trFromCtx(ctx, "remote_channel_task_completed", i18n.Params{"Task": title, "Tasks": listText}), nil
 }
 
 // WechatExitTaskText 退出当前任务时给用户的回执文案（gin-free）。
@@ -2297,7 +2367,7 @@ func (s *SkillSurface) WechatExitTaskText(ctx context.Context, boundTaskTitle st
 	if err != nil {
 		return "", err
 	}
-	return s.trFromCtx(ctx, "remote_wechat_task_exited", i18n.Params{"Task": boundTaskTitle, "Tasks": listText}), nil
+	return s.trFromCtx(ctx, "remote_channel_task_exited", i18n.Params{"Task": boundTaskTitle, "Tasks": listText}), nil
 }
 
 // ensureRemoteAliases 等价于 wechatRemote.ensureAliases：

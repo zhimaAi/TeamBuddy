@@ -1,8 +1,8 @@
 <template>
-  <span class="workspace-actions" @click.stop>
-    <a-dropdown :trigger="['click']">
-      <button type="button" class="workspace-menu" :disabled="pending || confirmationOpen" :aria-label="t('layout.sidebar.workspaceActions', { name: group.displayName })">
-        <EllipsisOutlined />
+  <span class="workspace-actions" :class="{ 'is-open': menuOpen }" @click.stop>
+    <a-dropdown v-model:open="menuOpen" :trigger="['click']">
+      <button type="button" class="workspace-menu" :disabled="pending || confirmationOpen" :aria-expanded="menuOpen" aria-haspopup="menu" :aria-label="t('layout.sidebar.workspaceActions', { name: group.displayName })">
+        <SidebarMenuIcon name="conversationMore" :dark="dark" />
       </button>
       <template #overlay>
         <a-menu>
@@ -48,17 +48,19 @@
 import { ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { message, Modal } from 'ant-design-vue'
-import { EllipsisOutlined, FolderOpenOutlined, EditOutlined, PushpinOutlined, DeleteOutlined } from '@ant-design/icons-vue'
+import { FolderOpenOutlined, EditOutlined, PushpinOutlined, DeleteOutlined } from '@ant-design/icons-vue'
+import SidebarMenuIcon from './SidebarMenuIcon.vue'
 import { useAppI18n } from '@/i18n'
 import { useConversationStore, type ConversationGroup } from '@/stores/conversation'
 import { isDesktopRuntime, openDirectory } from '@/composables/useDesktop'
 
-const props = defineProps<{ group: ConversationGroup }>()
+const props = defineProps<{ group: ConversationGroup; dark?: boolean }>()
 const store = useConversationStore()
 const { t } = useAppI18n()
 const route = useRoute()
 const router = useRouter()
 const pending = ref(false)
+const menuOpen = ref(false)
 const confirmationOpen = ref(false)
 const renaming = ref(false)
 const name = ref('')

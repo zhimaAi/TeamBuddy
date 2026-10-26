@@ -1,6 +1,7 @@
 package pipeline
 
 import (
+	"context"
 	"fmt"
 	"sort"
 	"strings"
@@ -16,6 +17,7 @@ import (
 // database and are merged at read time by Service.List/Get.
 type MemStore struct {
 	mu          sync.RWMutex
+	activeScope string
 	byUUID      map[string]*Pipeline
 	bySource    map[string][]string // cloudSourceKey → ordered pipeline UUIDs
 	sourceOrder []string            // first-seen order of cloudSourceKey
@@ -50,13 +52,16 @@ func (m *MemStore) Reset() {
 // its original CreatedAt, mirroring the former DB upsert semantics. All inputs
 // are validated before any cache mutation, so a failed sync leaves the cache
 // untouched (the former DB implementation relied on a transaction for that).
-func (m *MemStore) ReplaceAll(sourceKey string, items []CloudPipeline) ([]Pipeline, error) {
+func (m *MemStore) ReplaceAll(sourceKey string, items []CloudPipeline, scope ...string) ([]Pipeline, error) {
 	sourceKey = strings.TrimSpace(sourceKey)
 	if sourceKey == "" {
 		return nil, fmt.Errorf("云端来源标识不能为空")
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if len(scope) > 0 && scope[0] != m.activeScope {
+		return nil, context.Canceled
+	}
 	now := time.Now().UnixMilli()
 	built := make([]*Pipeline, 0, len(items))
 	builtByUUID := make(map[string]*Pipeline, len(items))
@@ -282,4 +287,14 @@ func containsString(values []string, target string) bool {
 		}
 	}
 	return false
+}
+
+// Activate drops only transient cloud resources. Local data and frozen task snapshots remain intact.
+func (m *MemStore) Activate(scope string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.activeScope = scope
+	m.byUUID = make(map[string]*Pipeline)
+	m.bySource = make(map[string][]string)
+	m.sourceOrder = nil
 }

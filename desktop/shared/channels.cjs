@@ -3,9 +3,12 @@
 module.exports = Object.freeze({
   SELECT_DIRECTORIES: 'desktop:select-directories',
   OPEN_DIRECTORY: 'desktop:open-directory',
+  REVEAL_TASK_FILE: 'desktop:reveal-task-file',
   OPEN_TERMINAL: 'desktop:open-terminal',
   OPEN_CODEX_THREAD: 'desktop:open-codex-thread',
+  OPEN_QODER_IDE: 'desktop:open-qoder-ide',
   OPEN_VIBE_CLI: 'desktop:open-vibe-cli',
+  GET_VIBE_MCP_CONFIG: 'desktop:get-vibe-mcp-config',
   GET_API_TOKEN: 'desktop:get-api-token',
   GET_CLOSE_BEHAVIOR: 'desktop:get-close-behavior',
   SET_CLOSE_BEHAVIOR: 'desktop:set-close-behavior',

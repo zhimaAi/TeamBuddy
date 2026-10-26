@@ -129,27 +129,28 @@
           <span>{{ t('workflows.task.create.vibeCodingMode') }}</span>
         </div>
         <div class="mode-items-list">
-          <button
+          <div
             v-for="tool in VIBE_CODING_TOOLS"
             :key="tool.id"
-            type="button"
             class="mode-item"
             :class="{ 'is-selected': modelValue?.mode === 'vibe_coding' && modelValue?.executionTool === tool.id }"
-            :disabled="vibeToolDisabled(tool.id)"
             :title="vibeToolDisabledReason(tool.id)"
-            @click="selectVibeTool(tool.id)"
           >
-            <img
-              :src="vibeToolLogo(tool.id)"
-              alt=""
-              class="mode-item__avatar"
+            <button type="button" class="vibe-tool-button" :disabled="vibeToolDisabled(tool.id)" @click="selectVibeTool(tool.id)">
+              <img :src="vibeToolLogo(tool.id)" alt="" class="mode-item__avatar" />
+              <span class="mode-item__name">{{ t(vibeToolLabelKey(tool.id)) }}</span>
+            </button>
+            <VibeModelPicker
+              v-if="supportsVibeModel(tool.id)"
+              :tool="tool.id"
+              :model-value="vibeModels[tool.id] || ''"
+              :selected="modelValue?.mode === 'vibe_coding' && modelValue.executionTool === tool.id"
+              :disabled="vibeToolDisabled(tool.id)"
+              @update:model-value="selectVibeTool(tool.id, $event)"
+              @resolved="setVibeModel(tool.id, $event)"
             />
-            <span class="mode-item__name">{{ t(vibeToolLabelKey(tool.id)) }}</span>
-            <CheckOutlined
-              v-if="modelValue?.mode === 'vibe_coding' && modelValue?.executionTool === tool.id"
-              class="check-icon"
-            />
-          </button>
+            <CheckOutlined v-if="modelValue?.mode === 'vibe_coding' && modelValue.executionTool === tool.id" class="check-icon" />
+          </div>
         </div>
 
         <!-- 直接执行 (CLI) -->
@@ -196,6 +197,9 @@
 
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
+import VibeModelPicker from '@/components/VibeModelPicker.vue'
+import { message } from 'ant-design-vue'
+import { useVibeModelPreferences } from '@/composables/useVibeModelPreferences'
 import {
   BranchesOutlined,
   TeamOutlined,
@@ -207,9 +211,11 @@ import cliExecutionLogo from '@/assets/icons/task-composer-cli.svg'
 import { usePipelineStore } from '@/stores/pipeline'
 import { useExpertGroupStore } from '@/stores/expert-group'
 import { useCliModelOptions } from '@/composables/useCliModelOptions'
-import { loadCodexCapability, type CodexCapability } from '@/composables/useTaskCodex'
+import { loadVibeToolsCapability, type VibeToolsCapability } from '@/composables/useTaskVibeTool'
 import {
   VIBE_CODING_TOOLS,
+  isManualVibeTool,
+  supportsVibeModel,
   isVibeCodingTool,
   vibeToolLabelKey,
   vibeToolLogo,
@@ -260,7 +266,13 @@ const {
 } = useCliModelOptions()
 
 const isOpen = ref(false)
-const codexCapability = ref<CodexCapability>({ available: true })
+const { vibeModels, resetVibeModels, setVibeModel, resolveVibeModel } = useVibeModelPreferences()
+let vibeSelectionRequest = 0
+watch(isOpen, open => {
+  vibeSelectionRequest++
+  if (open) resetVibeModels(props.modelValue?.mode === 'vibe_coding' ? props.modelValue.executionTool || '' : '', props.modelValue?.modelName || '')
+})
+const codexCapability = ref<VibeToolsCapability>({ available: true })
 
 const selectedCliType = ref('')
 const selectedCliModel = ref('')
@@ -331,6 +343,8 @@ function vibeToolDisabled(tool: string) {
   const capability = vibeCapability(tool)
   if (!capability) return tool !== 'codex' || !codexCapability.value.available
   if (!capability.available) return true
+  // 手动模式不启动本机进程，没有可执行文件可探测，只要能力可用就允许选择。
+  if (isManualVibeTool(tool)) return false
   return tool !== 'codex' && capability.installed === false
 }
 
@@ -339,14 +353,28 @@ function vibeToolDisabledReason(tool: string) {
   return vibeCapability(tool)?.message || codexCapability.value.message || t('workflows.task.codex.capabilityUnavailable')
 }
 
-function selectVibeTool(tool: VibeCodingToolId) {
+async function selectVibeTool(tool: VibeCodingToolId, model?: string) {
   if (vibeToolDisabled(tool)) return
-  writeRecentVibeTool(tool)
   const toolName = t(vibeToolLabelKey(tool))
+  const request = ++vibeSelectionRequest
+  if (model !== undefined) setVibeModel(tool, model)
+  else if (props.modelValue?.mode === 'vibe_coding' && props.modelValue.executionTool === tool) {
+    vibeModels.value[tool] = props.modelValue.modelName || ''
+  }
+  let modelName = ''
+  try {
+    modelName = await resolveVibeModel(tool)
+  } catch (error) {
+    message.error(error instanceof Error ? error.message : t('workflows.task.assign.vibeModelLoadFailed'))
+    return
+  }
+  if (request !== vibeSelectionRequest || !isOpen.value) return
+  writeRecentVibeTool(tool)
   const selection: ExecutionModeSelection = {
     mode: 'vibe_coding',
     executionTool: tool,
-    displayName: `${t('workflows.task.create.vibeCodingMode')} · ${toolName}`,
+    modelName,
+    displayName: [`${t('workflows.task.create.vibeCodingMode')} · ${toolName}`, modelName].filter(Boolean).join(' · '),
   }
   emit('update:modelValue', selection)
   emit('select', selection)
@@ -386,7 +414,7 @@ async function handleOpenChange(open: boolean) {
     void loadCliOptions()
     void ensureCliNamesLoaded()
     try {
-      codexCapability.value = await loadCodexCapability()
+      codexCapability.value = await loadVibeToolsCapability()
     } catch {
       // ignore
     }
@@ -402,6 +430,9 @@ onMounted(() => {
 </script>
 
 <style scoped>
+.vibe-tool-button { display: flex; align-items: center; gap: 8px; min-width: 0; flex: 1; padding: 0; border: 0; background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.vibe-tool-button:disabled { color: #bfbfbf; cursor: not-allowed; }
+.vibe-tool-button:focus-visible { outline: 2px solid #3157e2; outline-offset: 2px; }
 .exec-mode-default-trigger {
   display: inline-flex;
   align-items: center;

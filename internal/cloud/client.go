@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"mime/multipart"
 	"net/http"
 	"net/url"
 	"strings"
@@ -16,13 +17,15 @@ import (
 	"goteams-client/internal/secrets"
 )
 
-// Client cloud HTTP client
+// Cloud Client cloud HTTP client
 type Client struct {
-	baseURL     string
-	httpClient  *http.Client
-	secretStore secrets.Store
-	cloudCfg    *config.CloudConfig
-	userID      string // immutable owner of an authenticated account client
+	baseURL      string
+	httpClient   *http.Client
+	transfer     *http.Client // 大文件上传专用（超时更长），与 httpClient 共用 Transport
+	secretStore  secrets.Store
+	cloudCfg     *config.CloudConfig
+	sessionScope string
+	userID       string // immutable owner of an authenticated account client
 }
 
 // NewClient creates a cloud HTTP client
@@ -46,6 +49,11 @@ func NewClient(cfg *config.CloudConfig, store secrets.Store) *Client {
 		baseURL: strings.TrimRight(cfg.APIBaseURL, "/"),
 		httpClient: &http.Client{
 			Timeout:   30 * time.Second,
+			Transport: transport,
+		},
+		// 20MB 单文件在慢速上行下会超过 30s；产出文档上传单独给 90s 预算。
+		transfer: &http.Client{
+			Timeout:   90 * time.Second,
 			Transport: transport,
 		},
 		secretStore: store,
@@ -233,6 +241,45 @@ func (c *Client) doRaw(ctx context.Context, method, path string, body interface{
 	c.injectAuthHeaders(req)
 
 	return c.httpClient.Do(req)
+}
+
+// doMultipart 以 multipart/form-data 发送一个文件加上若干文本字段。
+// Content-Length 可预期（内存一次组装），不走 chunked：部分网关对 chunked 上传有额外限制。
+// 使用独立的 transfer 客户端（90s），避免 20MB 文件被 30s 通用超时截断。
+func (c *Client) doMultipart(ctx context.Context, path string, fields map[string]string, fileField, fileName string, content []byte) (*http.Response, error) {
+	if !c.IsConfigured() {
+		return nil, fmt.Errorf("云端 API 地址未配置")
+	}
+	body := &bytes.Buffer{}
+	writer := multipart.NewWriter(body)
+	for key, value := range fields {
+		if err := writer.WriteField(key, value); err != nil {
+			return nil, fmt.Errorf("组装上传字段失败: %w", err)
+		}
+	}
+	part, err := writer.CreateFormFile(fileField, fileName)
+	if err != nil {
+		return nil, fmt.Errorf("组装上传文件失败: %w", err)
+	}
+	if _, err = part.Write(content); err != nil {
+		return nil, fmt.Errorf("写入上传内容失败: %w", err)
+	}
+	if err = writer.Close(); err != nil {
+		return nil, fmt.Errorf("结束上传组装失败: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+path, body)
+	if err != nil {
+		return nil, fmt.Errorf("创建请求失败: %w", err)
+	}
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	c.injectAuthHeaders(req)
+
+	client := c.transfer
+	if client == nil {
+		client = c.httpClient
+	}
+	return client.Do(req)
 }
 
 // injectAuthHeaders inject authentication request headers

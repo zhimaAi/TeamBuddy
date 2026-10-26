@@ -1,4 +1,6 @@
-import { t } from '@/i18n'
+import { t, getCurrentLocale } from '@/i18n'
+import apiClient from '@/api/client'
+import { copyText } from '@/utils/clipboard'
 
 export function isDesktopRuntime(): boolean {
   return typeof window !== 'undefined' && Boolean(window.goteamsDesktop)
@@ -64,6 +66,29 @@ export async function openDirectory(directoryPath: string): Promise<void> {
   await bridge.openDirectory(directoryPath)
 }
 
+export async function revealTaskOutputFile(
+  taskUuid: string,
+  fileRef: string,
+  sessionUuid = '',
+): Promise<'revealed' | 'copied'> {
+  const bridge = window.goteamsDesktop
+  if (bridge?.revealTaskFile) {
+    await bridge.revealTaskFile({
+      taskUuid,
+      fileRef,
+      sessionUuid,
+      locale: getCurrentLocale(),
+    })
+    return 'revealed'
+  }
+  const located = await apiClient.post<{ path: string }>(
+    `/tasks/${encodeURIComponent(taskUuid)}/files/locate`,
+    { path: fileRef, session_uuid: sessionUuid },
+  )
+  await copyText(located.path)
+  return 'copied'
+}
+
 export async function openTerminal(directoryPath: string): Promise<void> {
   const bridge = window.goteamsDesktop
   if (!bridge?.openTerminal) throw new Error(t('workflows.task.progress.terminalUnsupported'))
@@ -76,12 +101,43 @@ export async function openVibeCli(payload: {
   directoryPath: string
   prompt: string
   threadId?: string
+  modelName?: string
 }): Promise<void> {
   const bridge = window.goteamsDesktop
   if (!bridge?.openVibeCli) {
     throw new Error(t('components.errors.openVibeToolUnsupported'))
   }
   await bridge.openVibeCli(payload)
+}
+
+export interface VibeMcpConfig {
+  available: boolean
+  config: string
+  configPath: string
+  command: string
+}
+
+/**
+ * 读取手动模式的 MCP 配置文本，供用户复制到外部工具的 mcp.json。
+ * 客户端只展示、不写入任何用户配置；非桌面运行时返回 available:false。
+ * tool 决定推荐写入路径（cursor / workbuddy / dsh），未知工具由调用方兜底展示。
+ */
+export async function loadVibeMcpConfig(tool?: string): Promise<VibeMcpConfig> {
+  const bridge = window.goteamsDesktop
+  if (!bridge?.getVibeMcpConfig) {
+    return { available: false, config: '', configPath: '', command: '' }
+  }
+  return bridge.getVibeMcpConfig(tool)
+}
+
+export async function openQoderIDE(payload: {
+  directoryPath: string
+  prompt: string
+  threadId?: string
+}) {
+  const bridge = window.goteamsDesktop
+  if (!bridge?.openQoderIDE) throw new Error(t('components.errors.openVibeToolUnsupported'))
+  return bridge.openQoderIDE(payload)
 }
 
 export async function openCodexThread(

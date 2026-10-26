@@ -3,17 +3,11 @@
 package mcpbridge
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
-	"io"
-	"net"
 	"net/http"
 	"os"
 	"os/signal"
-	"path/filepath"
-	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -22,25 +16,19 @@ import (
 	"github.com/google/uuid"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"goteams-client/internal/workspace"
+	"goteams-client/internal/taskskillclient"
 )
 
 const (
-	skillClientHeader = "X-GoTeams-Skill-Client"
-	skillClientValue  = "teamsboard-v1"
-	maxBodyBytes      = 2 << 20
-	maxContentRunes   = 64 * 1024
-	maxThreadRunes    = 256
-	connectTimeout    = 5 * time.Second
-	requestTimeout    = 15 * time.Second
+	maxContentRunes = taskskillclient.MaxActivityContentRunes
+	maxThreadRunes  = taskskillclient.MaxNativeThreadRunes
+	requestTimeout  = 15 * time.Second
 )
 
 // Bridge forwards MCP tool calls to the local task-skill HTTP API.
 type Bridge struct {
-	version     string
-	runtimePath func() string
-	client      *http.Client
-	process     context.Context
+	version string
+	client  *taskskillclient.Client
 }
 
 // New returns a bridge that reads the stable runtime.json used by the skill scripts.
@@ -49,27 +37,8 @@ func New(version string) *Bridge {
 		version = "dev"
 	}
 	return &Bridge{
-		version:     version,
-		runtimePath: defaultRuntimePath,
-		client:      newHTTPClient(requestTimeout),
-	}
-}
-
-func defaultRuntimePath() string {
-	return filepath.Join(workspace.DefaultDataRoot(), "runtime", "runtime.json")
-}
-
-func newHTTPClient(timeout time.Duration) *http.Client {
-	dialer := &net.Dialer{Timeout: connectTimeout}
-	return &http.Client{
-		Timeout: timeout,
-		Transport: &http.Transport{
-			Proxy:       nil,
-			DialContext: dialer.DialContext,
-		},
-		CheckRedirect: func(*http.Request, []*http.Request) error {
-			return http.ErrUseLastResponse
-		},
+		version: version,
+		client:  taskskillclient.New(requestTimeout),
 	}
 }
 
@@ -92,49 +61,40 @@ func Run(ctx context.Context, version string) error {
 		os.Exit(1)
 	}()
 	bridge := New(version)
-	bridge.process = ctx
+	bridge.client.Process = ctx
 	return bridge.serve(ctx, &mcp.StdioTransport{})
 }
 
-func requestContext(handler, process context.Context) (context.Context, func()) {
-	ctx, cancel := context.WithCancel(handler)
-	if process == nil {
-		return ctx, cancel
-	}
-	stop := context.AfterFunc(process, cancel)
-	return ctx, func() {
-		stop()
-		cancel()
-	}
-}
 func (b *Bridge) serve(ctx context.Context, transport mcp.Transport) error {
-	server := mcp.NewServer(&mcp.Implementation{Name: "teamsboard", Version: b.version}, nil)
-	mcp.AddTool(server, &mcp.Tool{
-		Name:        "teamsboard_get_task",
-		Description: "Read one local TeamsBoard Vibe Coding task and its history.",
-	}, b.getTask)
-	mcp.AddTool(server, &mcp.Tool{
-		Name:        "teamsboard_bind_session",
-		Description: "Bind the current native session to one local TeamsBoard Vibe Coding task.",
-	}, b.bindSession)
-	mcp.AddTool(server, &mcp.Tool{
-		Name:        "teamsboard_update_status",
-		Description: "Update the status of one local TeamsBoard Vibe Coding task.",
-	}, b.updateStatus)
-	mcp.AddTool(server, &mcp.Tool{
-		Name:        "teamsboard_report_activity",
-		Description: "Report one user message or final reply to a local TeamsBoard Vibe Coding task.",
-	}, b.reportActivity)
+	server := mcp.NewServer(&mcp.Implementation{Name: "teambuddy", Version: b.version}, nil)
+	// Input schemas are still inferred from the handler argument structs, but
+	// toolSchema rewrites them for portability; see splitMultiType.
+	mcp.AddTool(server, toolSchema[getInput](&mcp.Tool{
+		Name:        "teambuddy_get_task",
+		Description: "Read one local TeamBuddy Vibe Coding task and its history.",
+	}), b.getTask)
+	mcp.AddTool(server, toolSchema[bindInput](&mcp.Tool{
+		Name:        "teambuddy_bind_session",
+		Description: "Bind the current native session to one local TeamBuddy Vibe Coding task.",
+	}), b.bindSession)
+	mcp.AddTool(server, toolSchema[statusInput](&mcp.Tool{
+		Name:        "teambuddy_update_status",
+		Description: "Update the status of one local TeamBuddy Vibe Coding task.",
+	}), b.updateStatus)
+	mcp.AddTool(server, toolSchema[activityInput](&mcp.Tool{
+		Name:        "teambuddy_report_activity",
+		Description: "Report one user message or final reply to a local TeamBuddy Vibe Coding task.",
+	}), b.reportActivity)
 	return server.Run(ctx, transport)
 }
 
 type getInput struct {
-	TaskUUID string `json:"task_uuid" jsonschema:"TeamsBoard task UUID"`
+	TaskUUID string `json:"task_uuid" jsonschema:"TeamBuddy task UUID"`
 	Language string `json:"language,omitempty" jsonschema:"optional zh-CN or en-US"`
 }
 
 type bindInput struct {
-	TaskUUID       string `json:"task_uuid" jsonschema:"TeamsBoard task UUID"`
+	TaskUUID       string `json:"task_uuid" jsonschema:"TeamBuddy task UUID"`
 	ExecutionIndex *int   `json:"execution_index" jsonschema:"execution index from the launch prompt"`
 	Type           string `json:"type" jsonschema:"tool type from the launch prompt"`
 	ThreadID       string `json:"thread_id" jsonschema:"current native session ID"`
@@ -142,7 +102,7 @@ type bindInput struct {
 }
 
 type statusInput struct {
-	TaskUUID       string `json:"task_uuid" jsonschema:"TeamsBoard task UUID"`
+	TaskUUID       string `json:"task_uuid" jsonschema:"TeamBuddy task UUID"`
 	ExecutionIndex *int   `json:"execution_index" jsonschema:"execution index from the launch prompt"`
 	Status         string `json:"status" jsonschema:"pending, in_progress, blocked, or done"`
 	Tool           string `json:"tool" jsonschema:"tool type from the launch prompt"`
@@ -151,7 +111,7 @@ type statusInput struct {
 }
 
 type activityInput struct {
-	TaskUUID       string `json:"task_uuid" jsonschema:"TeamsBoard task UUID"`
+	TaskUUID       string `json:"task_uuid" jsonschema:"TeamBuddy task UUID"`
 	ExecutionIndex *int   `json:"execution_index" jsonschema:"execution index from the launch prompt"`
 	EventID        string `json:"event_id" jsonschema:"UUID for this activity; reuse it when retrying"`
 	Type           string `json:"type" jsonschema:"question or result"`
@@ -162,7 +122,7 @@ type activityInput struct {
 }
 
 func (b *Bridge) getTask(ctx context.Context, _ *mcp.CallToolRequest, in getInput) (*mcp.CallToolResult, any, error) {
-	id, err := taskID(in.TaskUUID)
+	id, err := taskskillclient.NormalizeTaskID(in.TaskUUID)
 	if err != nil {
 		return toolError("invalid_argument", err.Error())
 	}
@@ -173,7 +133,7 @@ func (b *Bridge) getTask(ctx context.Context, _ *mcp.CallToolRequest, in getInpu
 }
 
 func (b *Bridge) bindSession(ctx context.Context, _ *mcp.CallToolRequest, in bindInput) (*mcp.CallToolResult, any, error) {
-	id, err := taskID(in.TaskUUID)
+	id, err := taskskillclient.NormalizeTaskID(in.TaskUUID)
 	if err != nil {
 		return toolError("invalid_argument", err.Error())
 	}
@@ -190,7 +150,7 @@ func (b *Bridge) bindSession(ctx context.Context, _ *mcp.CallToolRequest, in bin
 }
 
 func (b *Bridge) updateStatus(ctx context.Context, _ *mcp.CallToolRequest, in statusInput) (*mcp.CallToolResult, any, error) {
-	id, err := taskID(in.TaskUUID)
+	id, err := taskskillclient.NormalizeTaskID(in.TaskUUID)
 	if err != nil {
 		return toolError("invalid_argument", err.Error())
 	}
@@ -215,7 +175,7 @@ func (b *Bridge) updateStatus(ctx context.Context, _ *mcp.CallToolRequest, in st
 }
 
 func (b *Bridge) reportActivity(ctx context.Context, _ *mcp.CallToolRequest, in activityInput) (*mcp.CallToolResult, any, error) {
-	id, err := taskID(in.TaskUUID)
+	id, err := taskskillclient.NormalizeTaskID(in.TaskUUID)
 	if err != nil {
 		return toolError("invalid_argument", err.Error())
 	}
@@ -246,82 +206,15 @@ func (b *Bridge) reportActivity(ctx context.Context, _ *mcp.CallToolRequest, in 
 }
 
 func (b *Bridge) forward(ctx context.Context, method, taskID, suffix, language string, body any) (*mcp.CallToolResult, any, error) {
-	address, err := readAddress(b.runtimePath())
+	data, err := b.client.Do(ctx, method, taskID, suffix, language, body)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "teamsboard mcp: runtime address unavailable\n")
-		return toolError("teamsboard_unavailable", "local TeamsBoard address is unavailable")
+		return nil, nil, err
 	}
-	var payload io.Reader
-	if body != nil {
-		raw, err := json.Marshal(body)
-		if err != nil {
-			return toolError("invalid_argument", "request body is invalid")
-		}
-		payload = bytes.NewReader(raw)
-	}
-	reqCtx, stop := requestContext(ctx, b.process)
-	defer stop()
-	url := "http://" + address + "/api/local/task-skill/tasks/" + taskID + suffix
-	req, err := http.NewRequestWithContext(reqCtx, method, url, payload)
-	if err != nil {
-		return toolError("teamsboard_unavailable", "local request was not sent")
-	}
-	req.Header.Set(skillClientHeader, skillClientValue)
-	if body != nil {
-		req.Header.Set("Content-Type", "application/json; charset=utf-8")
-	}
-	if language != "" {
-		req.Header.Set("X-GoTeams-Lang", language)
-	}
-	resp, err := b.client.Do(req)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "teamsboard mcp: local request failed\n")
-		return toolError("teamsboard_unavailable", "local TeamsBoard did not respond")
-	}
-	defer resp.Body.Close()
-	data, err := io.ReadAll(io.LimitReader(resp.Body, maxBodyBytes+1))
-	if err != nil {
-		return toolError("teamsboard_unavailable", "local response was not read")
-	}
-	if len(data) > maxBodyBytes {
-		return toolError("teamsboard_unavailable", "local response is too large")
-	}
-	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
-		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: string(data)}}}, nil, nil
-	}
-	code := statusCode(resp.StatusCode, suffix)
-	fmt.Fprintf(os.Stderr, "teamsboard mcp: %s status %d\n", code, resp.StatusCode)
-	return toolError(code, "local TeamsBoard rejected the request")
-}
-
-func statusCode(status int, suffix string) string {
-	switch status {
-	case http.StatusBadRequest:
-		if suffix == "/vibe-session" {
-			return "bind_rejected"
-		}
-		return "invalid_argument"
-	case http.StatusForbidden:
-		return "forbidden"
-	case http.StatusNotFound:
-		return "task_not_found"
-	case http.StatusConflict:
-		return "conflict"
-	default:
-		return "teamsboard_unavailable"
-	}
+	return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: string(data)}}}, nil, nil
 }
 
 func toolError(code, detail string) (*mcp.CallToolResult, any, error) {
-	return nil, nil, fmt.Errorf("%s: %s", code, detail)
-}
-
-func taskID(value string) (string, error) {
-	id, err := uuid.Parse(strings.TrimSpace(value))
-	if err != nil {
-		return "", fmt.Errorf("task_uuid must be a UUID")
-	}
-	return id.String(), nil
+	return nil, nil, &taskskillclient.RequestError{Code: code, Detail: detail}
 }
 
 func languageOK(value string) error {
@@ -331,30 +224,4 @@ func languageOK(value string) error {
 	default:
 		return fmt.Errorf("language must be zh-CN or en-US")
 	}
-}
-
-func readAddress(path string) (string, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return "", err
-	}
-	var info struct {
-		Address string `json:"address"`
-	}
-	if err := json.Unmarshal(data, &info); err != nil {
-		return "", err
-	}
-	address := strings.TrimSpace(info.Address)
-	host, portText, err := net.SplitHostPort(address)
-	if err != nil {
-		return "", err
-	}
-	if host != "127.0.0.1" && host != "::1" {
-		return "", fmt.Errorf("not loopback")
-	}
-	port, err := strconv.Atoi(portText)
-	if err != nil || port < 1 || port > 65535 {
-		return "", fmt.Errorf("invalid port")
-	}
-	return address, nil
 }

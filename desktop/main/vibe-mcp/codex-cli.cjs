@@ -4,20 +4,25 @@ const fs = require('node:fs/promises')
 const os = require('node:os')
 const path = require('node:path')
 
+const { SERVER_NAME, SERVER_NAMES } = require('./common.cjs')
+
 const CHANNEL_MCP = '回传通道：mcp'
 
 function tomlBasicString(value) {
   return `"${String(value).replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`
 }
 
+// 新旧 server 名都算「用户已配置」：旧名是重命名前注入过的，漏检会导致重复注入。
 function configNamesServer(text) {
   if (!text) return false
-  if (/^\s*\[mcp_servers\.teamsboard(?:\.|\])/m.test(text)) return true
-  if (/^\s*mcp_servers\.teamsboard(?:\.|\s*=)/m.test(text)) return true
+  for (const name of SERVER_NAMES) {
+    if (new RegExp(`^\\s*\\[mcp_servers\\.${name}(?:\\.|\\])`, 'm').test(text)) return true
+    if (new RegExp(`^\\s*mcp_servers\\.${name}(?:\\.|\\s*=)`, 'm').test(text)) return true
+  }
   return text.split(/^\s*\[/m).some(block => {
     if (!block.startsWith('mcp_servers]')) return false
     const body = block.slice(block.indexOf(']') + 1)
-    return /^\s*teamsboard\s*=/m.test(body)
+    return SERVER_NAMES.some(name => new RegExp(`^\\s*${name}\\s*=`, 'm').test(body))
   })
 }
 
@@ -53,8 +58,8 @@ async function prepareCodexCLI({ backendPath, workDir, homeDir = os.homedir(), c
   return {
     channel: 'mcp',
     prefixArgs: [
-      '-c', `mcp_servers.teamsboard.command=${tomlBasicString(command)}`,
-      '-c', 'mcp_servers.teamsboard.args=["mcp"]',
+      '-c', `mcp_servers.${SERVER_NAME}.command=${tomlBasicString(command)}`,
+      '-c', `mcp_servers.${SERVER_NAME}.args=["mcp"]`,
     ],
   }
 }

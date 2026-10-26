@@ -3,7 +3,7 @@
     :open="open"
     :width="730"
     :title="modalTitle"
-    :confirm-loading="saving"
+    :confirm-loading="saving || Boolean(vibeModelResolving[selectedTarget || ''])"
     :ok-button-props="{ disabled: !canConfirm }"
     :cancel-button-props="{ disabled: saving }"
     :z-index="modalZIndex"
@@ -67,32 +67,49 @@
           <a-tooltip
             :title="vibeToolDisabledReason(tool.id)"
           >
-            <label
+            <div
               class="assign-choice"
               :class="{
                 'is-selected': selectedMode === 'vibe_coding' && selectedTarget === tool.id,
                 'is-disabled': vibeToolDisabled(tool.id),
               }"
+              @click="chooseVibeTool(tool.id)"
             >
-              <input
-                class="assign-choice__input"
-                type="radio"
-                :name="executionModeRadioName"
-                :value="tool.id"
-                :checked="selectedMode === 'vibe_coding' && selectedTarget === tool.id"
-                :disabled="vibeToolDisabled(tool.id)"
-                @change="chooseVibeTool(tool.id)"
+              <label class="assign-choice__body">
+                <input
+                  class="assign-choice__input"
+                  type="radio"
+                  :name="executionModeRadioName"
+                  :value="tool.id"
+                  :checked="selectedMode === 'vibe_coding' && selectedTarget === tool.id"
+                  :disabled="vibeToolDisabled(tool.id)"
+                  @change="chooseVibeTool(tool.id)"
+                />
+                <img
+                  class="assign-choice__logo"
+                  :class="{ 'is-brand-icon': isManualVibeTool(tool.id) }"
+                  :src="vibeToolLogo(tool.id)"
+                  alt=""
+                />
+                <span class="assign-choice__name">{{ t(`workflows.task.assign.vibeTools.${tool.id}`) }}</span>
+                <span v-if="tool.id === recentVibeTool" class="assign-choice__recent">{{ t('workflows.task.assign.recent') }}</span>
+              </label>
+              <VibeModelPicker
+                v-if="supportsVibeModel(tool.id)"
+                :tool="tool.id"
+                :model-value="vibeModels[tool.id] || ''"
+                :selected="selectedMode === 'vibe_coding' && selectedTarget === tool.id"
+                :disabled="vibeToolDisabled(tool.id) || (!selectOnly && initialMode === 'vibe_coding' && initialVibeTool === tool.id)"
+                @update:model-value="selectVibeModel(tool.id, $event)"
+                @resolved="setVibeModel(tool.id, $event)"
               />
-              <img class="assign-choice__logo" :src="vibeToolLogo(tool.id)" alt="" />
-              <span class="assign-choice__name">{{ t(`workflows.task.assign.vibeTools.${tool.id}`) }}</span>
-              <span v-if="tool.id === recentVibeTool" class="assign-choice__recent">{{ t('workflows.task.assign.recent') }}</span>
               <CheckCircleFilled
                 v-if="selectedMode === 'vibe_coding' && selectedTarget === tool.id"
                 class="assign-choice__check"
                 aria-hidden="true"
               />
               <span v-else class="assign-choice__radio" aria-hidden="true" />
-            </label>
+            </div>
           </a-tooltip>
           </div>
         </div>
@@ -291,6 +308,9 @@
 </template>
 
 <script setup lang="ts">
+import VibeModelPicker from '@/components/VibeModelPicker.vue'
+import { useVibeModelPreferences } from '@/composables/useVibeModelPreferences'
+import { showVibeToolOpenResult } from '@/composables/useVibeToolFeedback'
 import { computed, ref, useId, watch } from 'vue'
 import { message } from 'ant-design-vue'
 import { Translation as I18nT } from 'vue-i18n'
@@ -307,13 +327,15 @@ import apiClient from '@/api/client'
 import cliExecutionLogo from '@/assets/icons/task-composer-cli.svg'
 import vibeCodingLogo from '@/assets/icons/vibe-coding-logo.svg'
 import {
-  loadCodexCapability,
+  loadVibeToolsCapability,
   openTaskVibeTool,
-  type CodexCapability,
-} from '@/composables/useTaskCodex'
+  type VibeToolsCapability,
+} from '@/composables/useTaskVibeTool'
 import {
   VIBE_CODING_TOOLS,
+  supportsVibeModel,
   vibeToolLogo,
+  isManualVibeTool,
   isVibeCodingTool,
   readRecentVibeTool,
   writeRecentVibeTool,
@@ -392,7 +414,7 @@ const vibeExpanded = ref(false)
 const pipelineExpanded = ref(false)
 const expertExpanded = ref(false)
 const recentVibeTool = ref('')
-const codexCapability = ref<CodexCapability>({ available: false })
+const codexCapability = ref<VibeToolsCapability>({ available: false })
 const vibeTools = VIBE_CODING_TOOLS
 const radioGroupId = useId()
 const executionModeRadioName = `assign-execution-mode-${radioGroupId}`
@@ -400,10 +422,11 @@ const selectedMode = ref<Extract<TaskExecutionMode, 'pipeline' | 'expert_group' 
 const selectedTarget = ref<string>()
 // CLI 直接执行没有 Agent 编排，模型选择与 CLI 一起构成完整的执行目标。
 const selectedModelName = ref('')
+const { vibeModels, resolving: vibeModelResolving, resetVibeModels, setVibeModel, resolveVibeModel } = useVibeModelPreferences()
 
 interface ExecutionModeAssignmentResult {
   switched?: boolean
-  start_status?: 'started' | 'failed'
+  start_status?: 'started' | 'failed' | 'awaiting_message'
   start_error?: string
 }
 
@@ -504,7 +527,7 @@ const canConfirm = computed(() => {
     return Boolean(selectedModelName.value)
   }
   if (selectedMode.value === 'vibe_coding') {
-    return isVibeCodingTool(selectedTarget.value) && !vibeToolDisabled(selectedTarget.value)
+    return isVibeCodingTool(selectedTarget.value) && !vibeToolDisabled(selectedTarget.value) && !vibeModelResolving.value[selectedTarget.value]
   }
   if (selectedMode.value === 'expert_group') {
     return expertGroups.value.some((group: ExpertGroup) => group.ready && group.uuid === selectedTarget.value)
@@ -546,12 +569,19 @@ function vibeToolDisabled(tool: string) {
   const capability = vibeCapability(tool)
   if (!capability) return tool !== 'codex' || !codexCapability.value.available
   if (!capability.available) return true
+  // 手动模式不启动本机进程，没有可执行文件可探测，只要能力可用就允许选择。
+  if (isManualVibeTool(tool)) return false
   return tool !== 'codex' && capability.installed === false
 }
 
 function vibeToolDisabledReason(tool: string) {
   if (!vibeToolDisabled(tool)) return ''
   return vibeCapability(tool)?.message || codexCapability.value.message || t('workflows.task.codex.capabilityUnavailable')
+}
+
+function selectVibeModel(tool: VibeCodingToolId, model: string) {
+  setVibeModel(tool, model)
+  chooseVibeTool(tool)
 }
 
 function chooseVibeTool(tool: VibeCodingToolId) {
@@ -586,12 +616,27 @@ function currentSelection(): ExecutionModeSelection | null {
     tool: selectedMode.value === 'cli' || selectedMode.value === 'vibe_coding' ? selectedTarget.value || '' : '',
     pipelineUuid: selectedMode.value === 'pipeline' ? selectedTarget.value || '' : '',
     expertGroupUuid: selectedMode.value === 'expert_group' ? selectedTarget.value || '' : '',
-    modelName: selectedMode.value === 'cli' ? selectedModelName.value : '',
+    modelName: selectedMode.value === 'cli' ? selectedModelName.value
+      : selectedMode.value === 'vibe_coding' ? vibeModels.value[selectedTarget.value || ''] || '' : '',
   }
 }
 
 async function confirm() {
   if (!canConfirm.value || saving.value || !selectedMode.value) return
+  if (selectedMode.value === 'vibe_coding' && selectedTarget.value && supportsVibeModel(selectedTarget.value)
+    && (props.selectOnly || props.initialMode !== 'vibe_coding' || props.initialVibeTool !== selectedTarget.value)) {
+    const tool = selectedTarget.value
+    saving.value = true
+    try {
+      await resolveVibeModel(tool)
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : t('workflows.task.assign.vibeModelLoadFailed'))
+      return
+    } finally {
+      saving.value = false
+    }
+    if (!props.open || selectedMode.value !== 'vibe_coding' || selectedTarget.value !== tool) return
+  }
   if (props.intent === 'create' || props.selectOnly) {
     if (selectedMode.value === 'vibe_coding' && selectedTarget.value) writeRecentVibeTool(selectedTarget.value)
     const selection = currentSelection()
@@ -614,7 +659,7 @@ async function confirm() {
       result = await apiClient.put<ExecutionModeAssignmentResult>(`/tasks/${encodeURIComponent(props.taskUuid)}/execution-mode`, {
         mode: 'pipeline',
         pipeline_uuid: selectedTarget.value,
-        start: true,
+        start: !props.replaceExisting,
         replace_existing: props.replaceExisting,
       })
       successKey = props.replaceExisting ? 'workflows.task.assign.switchSuccess' : 'workflows.task.assign.pipelineAssigned'
@@ -622,7 +667,7 @@ async function confirm() {
       result = await apiClient.put<ExecutionModeAssignmentResult>(`/tasks/${encodeURIComponent(props.taskUuid)}/execution-mode`, {
         mode: 'expert_group',
         expert_group_uuid: selectedTarget.value,
-        start: true,
+        start: !props.replaceExisting,
         replace_existing: props.replaceExisting,
       })
       successKey = props.replaceExisting ? 'workflows.task.assign.switchSuccess' : 'expertGroups.ready'
@@ -631,7 +676,7 @@ async function confirm() {
         mode: 'cli',
         tool: selectedTarget.value,
         model_name: selectedModelName.value,
-        start: true,
+        start: !props.replaceExisting,
         replace_existing: props.replaceExisting,
       })
       successKey = props.replaceExisting ? 'workflows.task.assign.switchSuccess' : 'workflows.task.assign.cliAssigned'
@@ -640,6 +685,7 @@ async function confirm() {
       result = await apiClient.put<ExecutionModeAssignmentResult>(`/tasks/${encodeURIComponent(props.taskUuid)}/execution-mode`, {
         mode: 'vibe_coding',
         tool: selectedTarget.value,
+        model_name: vibeModels.value[selectedTarget.value || ''] || '',
         start: props.replaceExisting || props.mode === 'board',
         replace_existing: props.replaceExisting,
       })
@@ -650,7 +696,7 @@ async function confirm() {
     if (result?.start_status === 'failed') {
       message.warning(result.start_error || t('workflows.task.assign.switchStartFailed'))
     } else {
-      message.success(t(successKey))
+      message.success(t(result?.start_status === 'awaiting_message' ? 'layout.sidebar.switchAwaitingMessage' : successKey))
     }
     emit('assigned')
     emit('update:open', false)
@@ -660,23 +706,27 @@ async function confirm() {
     saving.value = false
   }
   if (shouldOpenCliConversation) {
-    await openCliConversation(props.taskUuid)
+    if (props.replaceExisting) await router.push({ name: 'tasks', query: { taskUuid: props.taskUuid } })
+    else await openCliConversation(props.taskUuid)
     return
   }
   if (!shouldOpenVibe) return
 
   const toolName = t(`workflows.task.assign.vibeTools.${selectedTarget.value || 'codex'}`)
   const openResult = await openTaskVibeTool(props.taskUuid)
-  if (openResult.opened) {
-    message.success(t('workflows.task.detail.toolOpened', { tool: toolName }))
-  } else if (openResult.copied) {
-    message.warning(t('workflows.task.detail.toolCopiedFallback', { tool: toolName }))
-  } else if (openResult.error) {
-    message.error(openResult.error.message)
-  } else {
-    message.warning(t('workflows.task.detail.toolUnavailable', { tool: toolName }))
-  }
+  showVibeToolOpenResult(openResult, toolName)
 }
+
+watch(
+  [selectedMode, selectedTarget],
+  ([mode, tool]) => {
+    if (!props.open || mode !== 'vibe_coding' || !tool || !supportsVibeModel(tool)) return
+    if (!props.selectOnly && props.initialMode === 'vibe_coding' && props.initialVibeTool === tool) return
+    void resolveVibeModel(tool).catch(() => {
+      // 展开模型菜单或确认时展示加载错误，保留偏好以便重试。
+    })
+  },
+)
 
 watch(
   () => props.open,
@@ -694,10 +744,17 @@ watch(
           ? props.initialCliType || undefined
           : undefined
     selectedModelName.value = props.initialMode === 'cli' ? props.initialModelName : ''
+    resetVibeModels(props.initialMode === 'vibe_coding' ? props.initialVibeTool : '', props.initialModelName)
+    if (selectedMode.value === 'vibe_coding' && selectedTarget.value
+      && (props.selectOnly || props.initialMode !== 'vibe_coding' || props.initialVibeTool !== selectedTarget.value)) {
+      void resolveVibeModel(selectedTarget.value).catch(() => {
+        // 确认前会再次校验，加载失败时允许从模型菜单重试。
+      })
+    }
     const [pipelineResult, expertResult, codexResult, cliResult] = await Promise.allSettled([
       pipelineStore.loadPipelines(true),
       expertGroupStore.load(true),
-      loadCodexCapability(),
+      loadVibeToolsCapability(),
       loadCliOptions(),
     ])
     if (cliResult.status === 'fulfilled' && selectedMode.value === 'cli' && selectedTarget.value) {
@@ -908,6 +965,11 @@ watch(
   flex: 0 0 auto;
   border-radius: 50%;
   object-fit: cover;
+}
+
+/* 手动工具直接用官方应用图标（自带圆角方形或透明底），不能再被裁成圆形。 */
+.assign-choice__logo.is-brand-icon {
+  border-radius: 5px;
 }
 
 .assign-choice__avatar {

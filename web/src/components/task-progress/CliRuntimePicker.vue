@@ -12,6 +12,7 @@
       <div class="cli-picker" role="dialog" :aria-label="t('workflows.task.progress.chooseRuntime')">
         <div class="cli-picker-clis" role="listbox" :aria-label="t('workflows.task.progress.cliList')">
           <a-spin :spinning="cliLoading">
+            <button v-if="showExecutionSwitch" type="button" class="cli-picker-item execution-switch" @click="emit('switch-execution')"><SwapOutlined /><span>{{ t('workflows.task.detail.switchExecutionMode') }}</span></button>
             <button
               v-for="cli in visibleCliOptions"
               :key="cli.type"
@@ -99,6 +100,7 @@
 
 <script setup lang="ts">
 import { computed } from 'vue'
+import { SwapOutlined } from '@ant-design/icons-vue'
 import cliPickerCheckIcon from '@/assets/icons/cli-picker-check.svg'
 import { cliLogo } from '@/composables/useCliLogo'
 import type { DiscoveredCLI } from '@/views/agents/components/agentPipeline'
@@ -115,12 +117,14 @@ const props = defineProps<{
   modelOptions: string[]
   modelLoading: boolean
   modelCounts?: Record<string, number>
+  showExecutionSwitch?: boolean
 }>()
 
 const emit = defineEmits<{
   'update:open': [open: boolean]
   'select-cli': [cliType: string]
   'select-model': [model: string]
+  'switch-execution': []
 }>()
 
 const visibleCliOptions = computed(() => {
@@ -156,9 +160,10 @@ function selectModel(model: string) {
 </script>
 
 <style scoped>
+.cli-picker-item.execution-switch { justify-content: flex-start; color: #3157e2; gap: 8px; }
 .cli-picker {
   display: flex;
-  width: 520px;
+  width: min(520px, calc(100vw - 32px));
   height: 279px;
   overflow: hidden;
 }
@@ -170,8 +175,8 @@ function selectModel(model: string) {
 }
 
 .cli-picker-clis {
-  width: 206px;
-  flex: 0 0 206px;
+  width: min(206px, 40vw);
+  flex: 0 0 min(206px, 40vw);
   background: #f5f5f5;
   border-right: 1px solid #f1f5f9;
 }

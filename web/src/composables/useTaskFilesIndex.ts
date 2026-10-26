@@ -20,6 +20,14 @@ const EMPTY_RETRY_DELAY = 5 * 1000
 
 const entries = new Map<string, TaskFilesIndexEntry>()
 
+/**
+ * 清空产出文件索引缓存。
+ * 登录 / 退出登录后必须调用：索引按 taskUuid 跨页面存活，不清会继续命中上一个账号的数据。
+ */
+export function clearTaskFilesIndexCache() {
+  entries.clear()
+}
+
 function createEntry(): TaskFilesIndexEntry {
   return { status: 'idle', files: [], error: '', updatedAt: 0, pending: null }
 }

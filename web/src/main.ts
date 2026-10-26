@@ -4,7 +4,7 @@ import Antd, { message } from 'ant-design-vue'
 import App from './App.vue'
 import router from './router'
 import { setApiFeedbackHandler } from '@/api/client'
-import { applySession, fetchSession } from '@/composables/useCloudSession'
+import { applySession, fetchSession, registerSessionRecovery } from '@/composables/useCloudSession'
 import { useAuthStore } from '@/stores/auth'
 import { useAppStore } from '@/stores/app'
 import { i18n, initializeLocale, startLocaleSync } from '@/i18n'
@@ -37,6 +37,7 @@ async function bootstrap() {
   setApiFeedbackHandler(({ message: feedbackMessage }) => {
     message.warning(feedbackMessage)
   })
+  registerSessionRecovery(pinia)
   app.mount('#app')
 
   try {
@@ -47,6 +48,8 @@ async function bootstrap() {
     authStore.setLocalSession(false)
     authStore.clearCloudAuth()
     appStore.setCloudStatus('offline')
+  } finally {
+    authStore.markSessionReady()
   }
 }
 

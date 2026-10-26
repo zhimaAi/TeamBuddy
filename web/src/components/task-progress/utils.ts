@@ -46,6 +46,7 @@ const CLI_DISPLAY_NAMES: Record<string, string> = {
   hermes: 'Hermes',
   kimi: 'Kimi Code',
   qoder: 'Qoder CLI',
+  qoder_ide: 'Qoder IDE',
   'qoder-cn': 'Qoder CLI (CN)',
   qwen: 'Qwen Code',
   openclaw: 'OpenClaw',
@@ -56,5 +57,6 @@ const CLI_DISPLAY_NAMES: Record<string, string> = {
 export function cliDisplayName(cliType?: string) {
   const key = (cliType || '').trim()
   if (!key) return 'CLI'
+  if (key === 'generic') return t('workflows.task.assign.vibeTools.generic')
   return CLI_DISPLAY_NAMES[key] || key.toUpperCase() || 'CLI'
 }

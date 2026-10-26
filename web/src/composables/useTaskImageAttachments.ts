@@ -1,4 +1,4 @@
-import { computed, ref } from 'vue'
+import { computed, onScopeDispose, ref, toValue, type MaybeRefOrGetter, type Ref } from 'vue'
 import apiClient from '@/api/client'
 import { t } from '@/i18n'
 
@@ -13,6 +13,7 @@ interface PastedImage {
   file: File
   marker: string
   markdown?: string
+  previewUrl?: string
 }
 
 interface SavedTaskAttachment {
@@ -28,6 +29,7 @@ export interface TaskAttachmentItem {
   id: string
   name: string
   isImage: boolean
+  previewUrl?: string
   /** 上传完成后才有：可直接拼进消息正文的相对 Markdown 引用 */
   markdown?: string
 }
@@ -178,8 +180,20 @@ function readFileAsDataUrl(file: File) {
  * 用临时 Markdown 标记保留附件在输入中的位置，存入任务的 attachments
  * 目录后再原位替换为可移植的相对 Markdown 引用。
  */
-export function useTaskImageAttachments() {
-  const attachments = ref<PastedImage[]>([])
+export function useTaskImageAttachments(draftKey: MaybeRefOrGetter<string> = '') {
+  const drafts = new Map<string, Ref<PastedImage[]>>()
+  function draft(key = toValue(draftKey)) {
+    let value = drafts.get(key)
+    if (!value) {
+      value = ref<PastedImage[]>([])
+      drafts.set(key, value)
+    }
+    return value
+  }
+  const attachments = computed({
+    get: () => draft().value,
+    set: (value: PastedImage[]) => { draft().value = value },
+  })
   const savingCount = ref(0)
   const isSaving = computed(() => savingCount.value > 0)
   /**
@@ -192,6 +206,7 @@ export function useTaskImageAttachments() {
       name: attachmentDisplayName(attachment.file),
       isImage: SUPPORTED_IMAGE_TYPES.has(attachment.file.type),
       markdown: attachment.markdown,
+      previewUrl: attachment.previewUrl,
     })),
   )
 
@@ -214,6 +229,7 @@ export function useTaskImageAttachments() {
       return {
         file,
         marker: pendingAttachmentMarkdown(file, identifier),
+        previewUrl: SUPPORTED_IMAGE_TYPES.has(file.type) ? URL.createObjectURL(file) : undefined,
       }
     })
     attachments.value.push(...added)
@@ -264,12 +280,25 @@ export function useTaskImageAttachments() {
     }
   }
 
-  function clear() {
-    attachments.value = []
+  function revokePreview(attachment: PastedImage) {
+    if (attachment.previewUrl) URL.revokeObjectURL(attachment.previewUrl)
   }
 
-  function remove(id: string) {
-    attachments.value = attachments.value.filter((attachment) => attachment.marker !== id)
+  function clear(key = toValue(draftKey)) {
+    const target = draft(key)
+    target.value.forEach(revokePreview)
+    target.value = []
+  }
+
+  onScopeDispose(() => {
+    for (const key of drafts.keys()) clear(key)
+    drafts.clear()
+  })
+
+  function remove(id: string, key = toValue(draftKey)) {
+    const target = draft(key)
+    target.value.filter((attachment) => attachment.marker === id).forEach(revokePreview)
+    target.value = target.value.filter((attachment) => attachment.marker !== id)
   }
 
   function resolveAttachmentMarkdown(content: string, caretPosition = content.length) {

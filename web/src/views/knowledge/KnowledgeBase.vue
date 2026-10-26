@@ -1,9 +1,11 @@
 <script setup lang="ts">
-import { computed, h, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { computed, h, onBeforeUnmount, onMounted, ref, watch, type ComponentPublicInstance } from 'vue'
+import { onBeforeRouteLeave } from 'vue-router'
 import { Modal, message } from 'ant-design-vue'
 import MarkdownIt from 'markdown-it'
 import {
   CheckOutlined,
+  ClockCircleOutlined,
   FileTextOutlined,
   FolderOutlined,
   PlusOutlined,
@@ -28,7 +30,7 @@ import knowledgeAddFolderIcon from '@/assets/icons/knowledge-add-folder.svg'
 import knowledgeCopyDocumentIcon from '@/assets/icons/knowledge-copy-document.svg'
 import knowledgeDeleteIcon from '@/assets/icons/knowledge-delete.svg'
 import knowledgeDeletePermanentIcon from '@/assets/icons/knowledge-delete-permanent.svg'
-import directoryToggleIcon from '@/assets/icons/knowledge-directory-toggle.svg'
+import directoryToggleIcon from '@/assets/icons/common-sidebar-toggle.svg'
 import knowledgeDocumentIcon from '@/assets/icons/knowledge-document.svg'
 import knowledgeDocumentTrashIcon from '@/assets/icons/knowledge-document-trash.svg'
 import knowledgeFolderTreeIcon from '@/assets/icons/knowledge-folder-tree.svg'
@@ -40,16 +42,18 @@ import knowledgeRootCurrentIcon from '@/assets/icons/knowledge-root-current.svg'
 import knowledgeRootMenuIcon from '@/assets/icons/knowledge-root-menu.svg'
 import knowledgeRootSelectIcon from '@/assets/icons/knowledge-root-select.svg'
 import knowledgeSettingsIcon from '@/assets/icons/knowledge-settings.svg'
+import knowledgeSourceModeIcon from '@/assets/icons/knowledge-source-mode.svg'
 import knowledgeTrashMenuIcon from '@/assets/icons/knowledge-trash-menu.svg'
 import knowledgeTreeToggleIcon from '@/assets/icons/knowledge-tree-toggle.svg'
 import trashRestoreIcon from '@/assets/icons/knowledge-trash-restore.svg'
-import KnowledgeFolderDetail from '@/views/knowledge/components/KnowledgeFolderDetail.vue'
 import KnowledgeAddMenu from '@/views/knowledge/components/KnowledgeAddMenu.vue'
 import KnowledgeBlankAddDropdown from '@/views/knowledge/components/KnowledgeBlankAddDropdown.vue'
-import TiptapMarkdownEditor from '@/components/TiptapMarkdownEditor.vue'
+import KnowledgeDocumentEditor from '@/views/knowledge/components/KnowledgeDocumentEditor.vue'
+import KnowledgeAppearanceSettings from '@/views/knowledge/components/KnowledgeAppearanceSettings.vue'
+import { useKnowledgeTabs, draftSnapshot, tabDirty, type KnowledgeDraft, type KnowledgeTab } from '@/views/knowledge/composables/useKnowledgeTabs'
+import { KNOWLEDGE_EDITOR_MODE_KEY, readKnowledgeAppearance, readKnowledgeEditorMode, readWorkspacePreference, workspacePreferenceKey, type KnowledgeAppearance } from '@/views/knowledge/composables/knowledgePreferences'
 
 const { t, locale } = useAppI18n()
-const breadcrumbSeparator = '/'
 const rootPathSeparator = '>'
 const inlineMarkdown = new MarkdownIt({ html: true, linkify: false, typographer: false })
 
@@ -114,31 +118,14 @@ type DirectoryDropInfo = {
 }
 
 const loading = ref(false)
-const saving = ref(false)
-// S-AS-01: 自动保存状态机
-//   idle     - 无未保存改动
-//   pending  - 已有改动，等待防抖窗口结束（1500ms）
-//   saving   - PUT 请求进行中
-//   saved    - 最近一次保存成功，提示 2 秒后回到 idle
-//   error    - 最近一次保存失败（保留 dirty，下次再试）
-type AutosaveState = 'idle' | 'pending' | 'saving' | 'saved' | 'error'
-const AUTOSAVE_DEBOUNCE_MS = 1500
-const AUTOSAVE_SAVED_HINT_MS = 2000
-const autosaveState = ref<AutosaveState>('idle')
-const autosaveSavedAt = ref(0) // 最近一次保存完成的本地时间戳
-const autosaveErrorMessage = ref('') // 上一次失败的错误信息
-let autosaveTimer: ReturnType<typeof setTimeout> | undefined
-let autosaveSavedHintTimer: ReturnType<typeof setTimeout> | undefined
-// saveSeq 用于守护过期响应：自增计数，进入请求前取 mySeq，响应回来时若 mySeq !== saveSeq 表示已被新请求覆盖
-const saveSeq = ref(0)
-// 标记当前 draft 是否已初始化（刚打开文档/刚创建完时，先不触发自动保存）
-let draftReady = false
+const autosaveState = computed(() => activeTab.value?.state ?? 'idle')
+const autosaveSavedAt = computed(() => activeTab.value?.savedAt ?? 0)
+const autosaveErrorMessage = computed(() => activeTab.value?.error ?? '')
 const folders = ref<FolderNode[]>([])
 const documents = ref<KnowledgeDocument[]>([])
 const trashDocuments = ref<KnowledgeDocument[]>([])
 const searchResults = ref<SearchResult[]>([])
 const selectedFolderID = ref<number>(0)
-const selectedDocumentUUID = ref('')
 const selectedTreeKey = ref('')
 const searchKeyword = ref('')
 const searchLoading = ref(false)
@@ -149,11 +136,12 @@ const renameInputValue = ref('')
 const folderCreating = ref(false)
 // 大纲 / 属性抽屉显隐（独立于媒体查询，避免窄屏下点击无响应）
 const inspectorOpen = ref(false)
+const documentActionsOpen = ref(false)
 
 // 左侧目录栏（knowledge-sidebar）：可折叠、可拖拽改宽度。
-// 拖动到 180px 以下时自动折叠；向右最多扩展至 600px。
+// 拖拽宽度限制在 100–600px，折叠仅由按钮触发。
 const SIDEBAR_MAX_WIDTH = 600
-const SIDEBAR_COLLAPSE_THRESHOLD = 180
+const SIDEBAR_MIN_WIDTH = 100
 const SIDEBAR_DEFAULT_WIDTH = 300
 const sidebarCollapsed = ref(false)
 const sidebarWidth = ref(SIDEBAR_DEFAULT_WIDTH)
@@ -203,14 +191,7 @@ function startSidebarResize(event: MouseEvent) {
   }
   const onMove = (moveEvent: MouseEvent) => {
     const next = startWidth + (moveEvent.clientX - startX)
-    if (next < SIDEBAR_COLLAPSE_THRESHOLD) {
-      // 自动折叠不覆盖用户原本的有效宽度，重新展开时仍回到拖动前的大小。
-      sidebarWidth.value = Math.max(startWidth, SIDEBAR_DEFAULT_WIDTH)
-      collapseSidebar()
-      finishResize()
-      return
-    }
-    sidebarWidth.value = Math.min(SIDEBAR_MAX_WIDTH, next)
+    sidebarWidth.value = Math.max(SIDEBAR_MIN_WIDTH, Math.min(SIDEBAR_MAX_WIDTH, next))
   }
   document.addEventListener('mousemove', onMove)
   document.addEventListener('mouseup', finishResize)
@@ -242,32 +223,122 @@ const folderRenameModalLoading = ref(false)
 const folderRenameTarget = ref<FolderNode | null>(null)
 const folderRenameInputValue = ref('')
 
-// S-UI-14: 文件夹详情列表页（第四个主区工作区）当前文件夹；0 表示根目录视图
-const activeFolderID = ref(0)
-
-// S-UI-09 / S-UI-11: TipTap 编辑器句柄（供内容读取与大纲跳转）
-const editorRef = ref<{
-  getValue: () => string
-  scrollToHeading: (index: number) => void
-}>()
-
+const editorRefs = new Map<string, { scrollToHeading: (index: number) => void }>()
 const scanning = ref(false)
+const workspaceMutating = ref(false)
+const { tabs, activeUUID, activeTab, draft, addTab, removeTab, cancelTimer, scheduleSave } =
+  useKnowledgeTabs((tab) => performSave('auto', tab))
+watch([activeUUID, trashVisible], () => { documentActionsOpen.value = false })
+const appearance = ref(readKnowledgeAppearance())
+const editorMode = ref(readKnowledgeEditorMode())
+const appearanceSettingsOpen = ref(false)
+let workspaceReady = false
+let disposed = false
+let openSequence = 0
+const pendingOpens = new Map<string, Promise<KnowledgeDocument>>()
 
-const draft = reactive({
-  uuid: '',
-  title: '',
-  ext: 'md' as KnowledgeDocument['ext'],
-  folderID: 0,
-  tags: [] as string[],
-  content: '',
-  filePath: '',
-  contentHash: '',
-  wordCount: 0,
-  createdAt: 0,
-  updatedAt: 0,
-})
+function persistWorkspace() {
+  if (!workspaceReady || !knowledgeRoot.value) return
+  try {
+    localStorage.setItem(workspacePreferenceKey(knowledgeRoot.value), JSON.stringify({
+      version: 1,
+      documents: tabs.value.map((tab) => ({ uuid: tab.draft.uuid })),
+      activeUUID: activeUUID.value,
+      expandedKeys: sidebarCollapsed.value ? previousExpandedKeys : expandedKeys.value,
+    }))
+  } catch {
+    message.error(t('knowledge.preferenceSaveFailed'))
+  }
+}
+watch(() => JSON.stringify([
+  tabs.value.map((tab) => tab.draft.uuid), activeUUID.value, expandedKeys.value,
+]), persistWorkspace)
 
-const savedSnapshot = ref('')
+function updateAppearance(value: KnowledgeAppearance) {
+  appearance.value = value
+  try {
+    localStorage.setItem('knowledge-appearance-v1', JSON.stringify(value))
+  } catch {
+    message.error(t('knowledge.preferenceSaveFailed'))
+  }
+}
+
+function toggleEditorMode() {
+  const tab = activeTab.value
+  if (!tab || tab.draft.ext !== 'md') return
+  editorMode.value = editorMode.value === 'source' ? 'visual' : 'source'
+  try {
+    localStorage.setItem(KNOWLEDGE_EDITOR_MODE_KEY, editorMode.value)
+  } catch {
+    message.error(t('knowledge.preferenceSaveFailed'))
+  }
+}
+
+function documentDraft(document: KnowledgeDocument): KnowledgeDraft {
+  return {
+    uuid: document.uuid, title: document.title, ext: document.ext, folderID: document.folder_id,
+    tags: [...(document.tags || [])], content: document.content || '', filePath: document.file_path,
+    contentHash: document.content_hash, wordCount: document.word_count,
+    createdAt: document.created_at, updatedAt: document.updated_at,
+  }
+}
+
+function setEditorRef(uuid: string, instance: Element | ComponentPublicInstance | null) {
+  if (instance && 'scrollToHeading' in instance && typeof instance.scrollToHeading === 'function') {
+    const scrollToHeading = instance.scrollToHeading
+    editorRefs.set(uuid, { scrollToHeading: (index) => scrollToHeading(index) })
+  } else editorRefs.delete(uuid)
+}
+
+function activateTab(uuid: string, treeKey = '') {
+  openSequence += 1
+  renameModalVisible.value = false
+  activeUUID.value = uuid
+  trashVisible.value = false
+  selectedTreeKey.value = treeKey || `doc:${uuid}`
+  selectedFolderID.value = draft.value.folderID
+  const keys = folderAncestorChain(draft.value.folderID).map((folder) => `folder:${folder.id}`)
+  expandedKeys.value = [...new Set([...expandedKeys.value, ...keys])]
+}
+
+async function closeTab(uuid: string) {
+  const tab = tabs.value.find((item) => item.draft.uuid === uuid)
+  if (!tab) return
+  openSequence += 1
+  await flushTab(tab)
+  if (tabDirty(tab) && !(await confirmDiscardChanges(tab))) return
+  removeTab(uuid)
+  if (activeUUID.value) activateTab(activeUUID.value)
+  else selectedTreeKey.value = ''
+}
+
+async function restoreWorkspace() {
+  loading.value = true
+  const preference = readWorkspacePreference(knowledgeRoot.value)
+  if (preference) {
+    expandedKeys.value = preference.expandedKeys.filter((key) =>
+      flatFolders.value.some((folder) => key === `folder:${folder.id}`),
+    )
+    const existing = new Set(documents.value.map((document) => document.uuid))
+    const saved = preference.documents.filter((item) => existing.has(item.uuid))
+    const results = await Promise.allSettled(saved.map((item) =>
+      apiClient.get<KnowledgeDocument>(`/knowledge/documents/${encodeURIComponent(item.uuid)}`),
+    ))
+    if (disposed) return
+    let failed = false
+    results.forEach((result) => {
+      if (result.status === 'fulfilled') {
+        addTab(documentDraft(result.value))
+      } else failed = true
+    })
+    const target = tabs.value.find((tab) => tab.draft.uuid === preference.activeUUID) ?? tabs.value[0]
+    if (target) activateTab(target.draft.uuid)
+    if (failed) message.error(t('knowledge.workspaceRestoreFailed'))
+  }
+  workspaceReady = true
+  loading.value = false
+  persistWorkspace()
+}
 
 const flatFolders = computed(() => {
   const result: Array<FolderNode & { depth: number }> = []
@@ -284,25 +355,7 @@ const flatFolders = computed(() => {
 // S-UI-07: 知识库为空时不自动创建任何文件夹或文档，只展示引导与创建入口
 const knowledgeEmpty = computed(() => !folders.value.length && !documents.value.length)
 
-// S-UI-14: 当前打开的文件夹（详情页数据源，仅取其直接子项）；null 表示根目录视图
-const activeFolder = computed(
-  () => flatFolders.value.find((folder) => folder.id === activeFolderID.value) || null,
-)
-
-// 根目录视图数据：展示 parent_id=0 的文件夹和 folder_id=0 的文档
-const rootViewFolders = computed(() =>
-  folders.value.filter((folder) => folder.parent_id === 0),
-)
-const rootViewDocuments = computed(() =>
-  documents.value.filter((document) => document.folder_id === 0),
-)
-
-const activeFolderChildren = computed(() => ({
-  folders: activeFolder.value?.children || [],
-  documents: documents.value.filter((document) => document.folder_id === activeFolderID.value),
-}))
-
-// 从根到目标文件夹的祖先链（含目标自身）；S-UI-14 的面包屑与 S-UI-13 的引用来源路径共用
+// 从根到目标文件夹的祖先链（含目标自身），用于目录展开与来源路径。
 function folderAncestorChain(folderID: number): FolderNode[] {
   const current = flatFolders.value.find((folder) => folder.id === folderID)
   if (!current) return []
@@ -320,90 +373,12 @@ function folderAncestorChain(folderID: number): FolderNode[] {
   return chain
 }
 
-// S-UI-14: 面包屑「上级文件夹 / 当前文件夹」；首项为根节点 teamsboard（id=0），末项为当前文件夹（只读）
-const activeFolderBreadcrumbs = computed(() => {
-  const chain = folderAncestorChain(activeFolderID.value)
-  if (!chain.length) return []
-  return [
-    { id: 0, name: t('knowledge.breadcrumbRoot') },
-    ...chain.map((folder) => ({ id: folder.id, name: folder.name })),
-  ]
-})
-
-// 编辑器头部面包屑：根 → 当前文档所在文件夹链 → 当前文档；超过 3 层显示 .../ + 末两段
-const BREADCRUMB_MAX_LENGTH = 20
-const BREADCRUMB_OVERFLOW_THRESHOLD = 3
-
-type BreadcrumbLeaf = { id: number | string; kind: 'root' | 'folder' | 'document'; name: string }
-
-const documentBreadcrumbs = computed<BreadcrumbLeaf[]>(() => {
-  if (!draft.uuid) return []
-  const chain = folderAncestorChain(draft.folderID)
-  const fallbackName = draft.title || draft.filePath.split(/[\\/]+/).pop() || ''
-  const currentDoc = documents.value.find((item) => item.uuid === draft.uuid)
-  const ext = currentDoc?.ext
-  const displayName = ext ? `${fallbackName}.${ext}` : fallbackName
-  return [
-    { id: 0, kind: 'root', name: t('knowledge.breadcrumbRoot') },
-    ...chain.map((folder) => ({ id: folder.id, kind: 'folder' as const, name: folder.name })),
-    { id: draft.uuid, kind: 'document' as const, name: displayName },
-  ]
-})
-
-function truncateBreadcrumbName(rawName: string): string {
-  const name = rawName || ''
-  if (name.length <= BREADCRUMB_MAX_LENGTH) return name
-  return `${name.slice(0, BREADCRUMB_MAX_LENGTH)}…`
-}
-
-// 文件名特殊处理：保留 .md/.txt 扩展名，仅截断主名部分
-function truncateBreadcrumbDocumentName(rawName: string): string {
-  const name = rawName || ''
-  const lastDot = name.lastIndexOf('.')
-  const slashIndex = Math.max(name.lastIndexOf('/'), name.lastIndexOf('\\'))
-  if (lastDot > slashIndex && lastDot > 0 && lastDot < name.length - 1) {
-    const ext = name.slice(lastDot)
-    const stem = name.slice(0, lastDot)
-    if (stem.length <= BREADCRUMB_MAX_LENGTH) return name
-    return `${stem.slice(0, BREADCRUMB_MAX_LENGTH)}…${ext}`
-  }
-  return truncateBreadcrumbName(name)
-}
-
-function breadcrumbDisplayName(item: BreadcrumbLeaf): string {
-  return item.kind === 'document'
-    ? truncateBreadcrumbDocumentName(item.name)
-    : truncateBreadcrumbName(item.name)
-}
-
-function fullBreadcrumbName(item: BreadcrumbLeaf): string {
-  return item.name
-}
-
-// 通用面包屑点击：folder/root 跳转到对应目录（编辑态先确认放弃）
-async function navigateBreadcrumb(item: BreadcrumbLeaf) {
-  if (item.kind === 'document') return
-  if (item.kind === 'root') {
-    if (!(await confirmDiscardChanges())) return
-    clearDraft()
-    selectedFolderID.value = 0
-    selectedTreeKey.value = 'root'
-    activeFolderID.value = 0
-    return
-  }
-  if (!(await confirmDiscardChanges())) return
-  selectedFolderID.value = item.id as number
-  selectedTreeKey.value = `folder:${item.id}`
-  activeFolderID.value = item.id as number
-  clearDraft()
-}
-
 function toggleInspector() {
   inspectorOpen.value = !inspectorOpen.value
 }
 
 async function copyDocumentContent() {
-  const content = editorRef.value?.getValue() ?? draft.content
+  const content = draft.value.content
   if (!content) return
   try {
     try {
@@ -425,22 +400,6 @@ async function copyDocumentContent() {
   } catch {
     message.error(t('knowledge.copyDocumentFailed'))
   }
-}
-
-// 面包屑省略状态：默认折叠（超过3层时），点击 "…" 按钮展开全部
-const breadcrumbExpanded = ref(false)
-
-const visibleBreadcrumbs = computed(() => {
-  const items = documentBreadcrumbs.value
-  if (items.length <= BREADCRUMB_OVERFLOW_THRESHOLD || breadcrumbExpanded.value) return items
-  return [
-    { id: 'overflow' as const, kind: 'overflow' as const, name: t('knowledge.breadcrumbOverflow') },
-    ...items.slice(items.length - 2),
-  ]
-})
-
-function showFullBreadcrumb() {
-  breadcrumbExpanded.value = true
 }
 
 // S-UI-01: 设置弹窗内显示待确认的目录路径
@@ -531,17 +490,7 @@ const directoryTreeData = computed<DirectoryNode[]>(() => {
   return sortableRootNodes
 })
 
-const snapshot = computed(() =>
-  JSON.stringify({
-    title: draft.title,
-    folderID: draft.folderID,
-    tags: [...draft.tags].sort(),
-    content: draft.content,
-  }),
-)
-
-const dirty = computed(() => Boolean(draft.uuid) && snapshot.value !== savedSnapshot.value)
-const isMarkdownDraft = computed(() => draft.ext === 'md')
+const isMarkdownDraft = computed(() => draft.value.ext === 'md')
 
 // 大纲和文件名只使用标题的可见文字。TipTap 会把颜色等内联样式序列化为 HTML，
 // 这里通过 Markdown token 提取文本，避免目录显示 `<span style=...>` 等源代码。
@@ -559,7 +508,7 @@ function plainTextFromMarkdownInline(source: string): string {
 
 const outline = computed<OutlineItem[]>(() => {
   const items: OutlineItem[] = []
-  for (const line of draft.content.split(/\r?\n/)) {
+  for (const line of draft.value.content.split(/\r?\n/)) {
     const match = /^(#{1,6})\s+(.+?)\s*#*$/.exec(line)
     if (!match) continue
     const title = plainTextFromMarkdownInline(match[2].trim())
@@ -575,7 +524,7 @@ const outline = computed<OutlineItem[]>(() => {
 
 // 自动保存指示器文案：根据状态机返回不同模板；initial drafts 不显示
 const autosaveHint = computed(() => {
-  if (!draft.uuid || !draftReady) return ''
+  if (!draft.value.uuid) return ''
   if (autosaveState.value === 'pending') return t('knowledge.autosavePending')
   if (autosaveState.value === 'saving') return t('knowledge.autosaveSaving')
   if (autosaveState.value === 'saved' && autosaveSavedAt.value) {
@@ -589,69 +538,6 @@ const autosaveHint = computed(() => {
   if (autosaveState.value === 'error') return t('knowledge.autosaveFailed')
   return ''
 })
-
-// 切换文档或新建/清空时，重置自动保存相关的本地状态（在 openDocument / clearDraft 内统一调用）
-function resetAutosaveStateOnDraftChange() {
-  draftReady = false
-  autosaveState.value = 'idle'
-  autosaveSavedAt.value = 0
-  autosaveErrorMessage.value = ''
-  if (autosaveTimer) {
-    clearTimeout(autosaveTimer)
-    autosaveTimer = undefined
-  }
-  if (autosaveSavedHintTimer) {
-    clearTimeout(autosaveSavedHintTimer)
-    autosaveSavedHintTimer = undefined
-  }
-  // 提序列号，避免上一次文档的 in-flight 请求响应被错误地应用到当前状态
-  saveSeq.value++
-}
-
-function currentSnapshot() {
-  savedSnapshot.value = snapshot.value
-}
-
-// S-AS-03: 防抖自动保存核心
-// 1. 监听 snapshot（已包含 title/folderID/tags/content）；变化时把状态打到 pending 并重置防抖定时器
-// 2. draftReady 守护：避免打开文档/新建文档时立刻触发一次保存（首屏的 dirty=true 是历史遗留而非用户改动）
-// 3. dirty 守护：仅在确有未保存改动时启动定时器；保存成功后 currentSnapshot() 会让 dirty 回 false，
-//    之后 savedSnapshot 变回匹配值，watch 会再次触发但被 dirty=false 过滤掉
-// 4. 右上的「保存失败，点击重试」走 retryAutosave() 重新发起一次
-watch(
-  () => snapshot.value,
-  () => {
-    if (!draftReady || !draft.uuid) return
-    if (!dirty.value) return
-    autosaveState.value = 'pending'
-    if (autosaveTimer) clearTimeout(autosaveTimer)
-    autosaveTimer = setTimeout(() => {
-      autosaveTimer = undefined
-      void performSave('auto')
-    }, AUTOSAVE_DEBOUNCE_MS)
-  },
-)
-
-function clearDraft() {
-  Object.assign(draft, {
-    uuid: '',
-    title: '',
-    ext: 'md',
-    folderID: 0,
-    tags: [],
-    content: '',
-    filePath: '',
-    contentHash: '',
-    wordCount: 0,
-    createdAt: 0,
-    updatedAt: 0,
-  })
-  savedSnapshot.value = ''
-  selectedDocumentUUID.value = ''
-  selectedTreeKey.value = ''
-  renameModalVisible.value = false
-  resetAutosaveStateOnDraftChange()
-}
 
 function formatTime(value: number) {
   if (!value) return '—'
@@ -668,6 +554,23 @@ async function loadDocuments() {
   documents.value = result.data || []
 }
 
+function reconcileTabLocations() {
+  for (const tab of [...tabs.value]) {
+    const document = documents.value.find((item) => item.uuid === tab.draft.uuid)
+    if (!document) {
+      removeTab(tab.draft.uuid)
+      continue
+    }
+    const saving = tab.saving
+    tab.saving = true
+    tab.draft.folderID = document.folder_id
+    tab.draft.filePath = document.file_path
+    tab.saving = saving
+    tab.savedSnapshot = JSON.stringify({ ...JSON.parse(tab.savedSnapshot), folderID: document.folder_id })
+  }
+  if (activeUUID.value) activateTab(activeUUID.value)
+}
+
 async function loadTrash() {
   const result = await apiClient.get<{ data: KnowledgeDocument[] }>('/knowledge/trash')
   trashDocuments.value = result.data || []
@@ -681,18 +584,17 @@ async function refreshTrash() {
   }
 }
 
-async function loadWorkspace(selectFirst = false, scan = false) {
+async function loadWorkspace(scan = false) {
   loading.value = true
   try {
     await Promise.all([loadFolders(), loadDocuments(), loadTrash()])
     if (scan) {
       await scanKnowledgeBase()
     }
-    if (selectFirst && !draft.uuid && documents.value.length) {
-      await openDocument(documents.value[0].uuid, true)
-    }
+    return true
   } catch (error) {
     message.error(error instanceof Error ? error.message : t('knowledge.loadFailed'))
+    return false
   } finally {
     loading.value = false
   }
@@ -715,7 +617,7 @@ async function scanKnowledgeBase() {
 
 async function refreshWorkspace() {
   if (loading.value || scanning.value) return
-  await loadWorkspace(false, true)
+  await loadWorkspace(true)
 }
 
 // S-UI-01: 加载当前 KR 与默认 KR
@@ -767,13 +669,14 @@ async function confirmSetKnowledgeRoot() {
 
   rootModalLoading.value = true
   try {
+    if (!(await flushTabs())) return
+    persistWorkspace()
     const result = await migrateKnowledgeRoot(dir)
     knowledgeRoot.value = result.root
-    // 迁移后旧 draft 的上下文已失效，回到根目录视图并整体刷新目录树与文档列表
-    clearDraft()
-    activeFolderID.value = 0
     await loadKnowledgeRoot()
-    await loadWorkspace(false, false)
+    await loadWorkspace(false)
+    reconcileTabLocations()
+    persistWorkspace()
     rootModalVisible.value = false
     pendingRootDir.value = ''
     message.success(
@@ -881,61 +784,55 @@ function cancelRootModal() {
   pendingRootDir.value = ''
 }
 
-function confirmDiscardChanges() {
-  if (!dirty.value) return Promise.resolve(true)
+function confirmDiscardChanges(tab = activeTab.value) {
+  if (!tab || !tabDirty(tab)) return Promise.resolve(true)
   return new Promise<boolean>((resolve) => {
     Modal.confirm({
       title: t('knowledge.unsavedTitle'),
       content: t('knowledge.unsavedDescription'),
-      okText: t('knowledge.discard'),
-      okType: 'danger',
-      cancelText: t('knowledge.continueEditing'),
-      onOk: () => resolve(true),
-      onCancel: () => resolve(false),
+      okText: t('knowledge.discard'), okType: 'danger', cancelText: t('knowledge.continueEditing'),
+      onOk: () => resolve(true), onCancel: () => resolve(false),
     })
   })
 }
 
 async function openDocument(uuid: string, force = false, treeKey = '') {
-  if (!force && uuid !== draft.uuid && !(await confirmDiscardChanges())) return
+  if (loading.value || disposed) return
+  const sequence = ++openSequence
+  const existing = tabs.value.find((tab) => tab.draft.uuid === uuid)
+  if (existing && !force) {
+    activateTab(uuid, treeKey)
+    return
+  }
   try {
-    const document = await apiClient.get<KnowledgeDocument>(
-      `/knowledge/documents/${uuid}`,
-    )
-    Object.assign(draft, {
-      uuid: document.uuid,
-      title: document.title,
-      ext: document.ext,
-      folderID: document.folder_id,
-      tags: [...(document.tags || [])],
-      content: document.content || '',
-      filePath: document.file_path,
-      contentHash: document.content_hash,
-      wordCount: document.word_count,
-      createdAt: document.created_at,
-      updatedAt: document.updated_at,
-    })
-    selectedDocumentUUID.value = uuid
-    selectedTreeKey.value = treeKey || `doc:${uuid}`
-    selectedFolderID.value = document.folder_id
-    if (document.folder_id > 0) {
-      const folderKeys = folderAncestorChain(document.folder_id).map((folder) => `folder:${folder.id}`)
-      expandedKeys.value = [...new Set([...expandedKeys.value, ...folderKeys])]
+    let request = pendingOpens.get(uuid)
+    if (!request) {
+      request = apiClient.get<KnowledgeDocument>(`/knowledge/documents/${encodeURIComponent(uuid)}`)
+      pendingOpens.set(uuid, request)
     }
-    trashVisible.value = false
-    currentSnapshot()
-    // 切到新文档：清掉上一文档的自动保存状态/错误信息；序列号提升到下一次，避免过期 in-flight 响应污染
-    resetAutosaveStateOnDraftChange()
-    // 文档已加载好，可以开始自动保存；任何修改都会触发 snapshot watcher
-    draftReady = true
+    const document = await request
+    if (disposed) return
+    let tab = tabs.value.find((item) => item.draft.uuid === uuid)
+    if (!tab) tab = addTab(documentDraft(document))
+    else if (force) {
+      cancelTimer(uuid)
+      tab.saving = true
+      Object.assign(tab.draft, documentDraft(document))
+      tab.savedSnapshot = draftSnapshot(tab.draft)
+      tab.saving = false
+      tab.state = 'idle'
+      tab.error = ''
+    }
+    if (sequence === openSequence) activateTab(uuid, treeKey)
   } catch (error) {
     message.error(error instanceof Error ? error.message : t('knowledge.documentLoadFailed'))
+  } finally {
+    pendingOpens.delete(uuid)
   }
 }
 
 // 新建 Markdown 文档后直接进入编辑器；首行标题同时作为默认文件名。
 async function createDocument(targetFolderId?: number) {
-  if (!(await confirmDiscardChanges())) return
   const folderId = targetFolderId ?? selectedFolderID.value
   try {
     // 默认「未命名文档」也预判重名 (n)，避免同一文件夹下出现同名文件；正文首行同步保持一致
@@ -972,20 +869,23 @@ function updateDocumentInList(document: KnowledgeDocument) {
   }
 }
 
-async function saveAsCopy() {
+async function saveAsCopy(tab: KnowledgeTab) {
+  const targetDraft = tab.draft
   try {
-    const copyTitle = t('knowledge.conflictCopy', { title: draft.title.trim() || t('knowledge.untitled') })
+    const copyTitle = t('knowledge.conflictCopy', { title: targetDraft.title.trim() || t('knowledge.untitled') })
     // 同目录预判重名 (n)，正文首行同步换成副本标题，保持首行与文件名一致
-    const finalTitle = uniqueTitleInFolder(draft.folderID, copyTitle)
-    const heading = extractFirstHeading(draft.content)
-    const finalContent = heading !== null ? replaceFirstHeading(draft.content, finalTitle) : draft.content
+    const finalTitle = uniqueTitleInFolder(targetDraft.folderID, copyTitle)
+    const heading = extractFirstHeading(targetDraft.content)
+    const finalContent = heading !== null ? replaceFirstHeading(targetDraft.content, finalTitle) : targetDraft.content
     const created = await apiClient.post<KnowledgeDocument>('/knowledge/documents', {
       title: finalTitle,
-      folder_id: draft.folderID,
+      folder_id: targetDraft.folderID,
       content: finalContent,
-      tags: draft.tags,
+      tags: targetDraft.tags,
+      ext: targetDraft.ext,
     })
     await loadDocuments()
+    removeTab(tab.draft.uuid)
     await openDocument(created.uuid, true)
     message.success(t('knowledge.savedAsCopy'))
   } catch (error) {
@@ -993,156 +893,103 @@ async function saveAsCopy() {
   }
 }
 
-function handleSaveConflict() {
+function handleSaveConflict(tab: KnowledgeTab) {
   Modal.confirm({
     title: t('knowledge.conflictTitle'),
     content: t('knowledge.conflictDescription'),
     okText: t('knowledge.reload'),
     cancelText: t('knowledge.saveAsCopy'),
     async onOk() {
-      await openDocument(draft.uuid, true)
+      await openDocument(tab.draft.uuid, true)
     },
     async onCancel() {
-      await saveAsCopy()
+      await saveAsCopy(tab)
     },
   })
 }
 
-// S-AS-02: 共享保存逻辑，拆分手动（Ctrl+S / 保留旧调用）与自动（防抖触发）两条路径。
-// 区别仅在反馈：手动保存弹「文档已保存」toast，自动保存只更新右上指示器，409 仍走原冲突弹窗。
-async function performSave(source: 'manual' | 'auto') {
-  if (!draft.uuid || saving.value) return
-  // 正文首行是 `# xxx` 时文件名取首行；空 H1 回退为“未命名文档”，但保留空标题供编辑器展示占位。
-  const heading = extractFirstHeading(draft.content)
-  const emptyHeading = hasEmptyFirstHeading(draft.content)
-  const titleSource = emptyHeading ? t('knowledge.untitled') : heading ?? draft.title.trim()
-  const unique = uniqueTitleInFolder(draft.folderID, titleSource, draft.uuid)
-  const nextTitle = unique
-  const nextContent = heading !== null && unique !== heading
-    ? replaceFirstHeading(draft.content, unique)
-    : draft.content
-  if (!nextTitle.trim()) {
-    if (source === 'manual') {
-      message.error(t('knowledge.titleRequired'))
-    } else {
-      autosaveState.value = 'idle'
-    }
+// 保存始终绑定发起请求的标签。请求期间继续输入时，只更新磁盘基线，不覆盖新草稿。
+const saveRequests = new Map<string, Promise<void>>()
+async function performSave(source: 'manual' | 'auto', tab = activeTab.value): Promise<void> {
+  if (!tab || disposed || workspaceMutating.value) return
+  const running = saveRequests.get(tab.draft.uuid)
+  if (running) {
+    await running
     return
   }
-  // 同步到 draft：仅在变化时写回，避免无谓触发 watcher 再次排自动保存
-  if (nextTitle !== draft.title) draft.title = nextTitle
-  if (nextContent !== draft.content) draft.content = nextContent
-  // 手动保存时取消挂起的自动保存定时器，避免在手动保存完成后再被自动保存覆盖
-  if (source === 'manual' && autosaveTimer) {
-    clearTimeout(autosaveTimer)
-    autosaveTimer = undefined
+  if (!tabDirty(tab)) return
+  const request = saveTab(source, tab)
+  saveRequests.set(tab.draft.uuid, request)
+  try { await request } finally { saveRequests.delete(tab.draft.uuid) }
+}
+
+async function saveTab(source: 'manual' | 'auto', tab: KnowledgeTab) {
+  const targetDraft = tab.draft
+  cancelTimer(targetDraft.uuid)
+  tab.saving = true
+  tab.state = 'saving'
+  const heading = targetDraft.ext === 'md' ? extractFirstHeading(targetDraft.content) : null
+  const emptyHeading = targetDraft.ext === 'md' && hasEmptyFirstHeading(targetDraft.content)
+  const titleSource = emptyHeading ? t('knowledge.untitled') : heading ?? targetDraft.title.trim()
+  const nextTitle = uniqueTitleInFolder(targetDraft.folderID, titleSource, targetDraft.uuid)
+  if (!nextTitle.trim()) {
+    tab.saving = false
+    tab.state = 'error'
+    tab.error = t('knowledge.titleRequired')
+    return
   }
-  const mySeq = ++saveSeq.value
-  autosaveState.value = 'saving'
-  saving.value = true
+  targetDraft.title = nextTitle
+  if (heading !== null && nextTitle !== heading) targetDraft.content = replaceFirstHeading(targetDraft.content, nextTitle)
+  const sentSnapshot = draftSnapshot(targetDraft)
   try {
     const updated = await apiClient.put<KnowledgeDocument>(
-      `/knowledge/documents/${draft.uuid}`,
-      {
-        title: nextTitle,
-        folder_id: draft.folderID,
-        content: nextContent,
-        tags: draft.tags.map((tag) => tag.trim()).filter(Boolean),
-        base_hash: draft.contentHash,
-      },
+      `/knowledge/documents/${encodeURIComponent(targetDraft.uuid)}`,
+      { title: nextTitle, folder_id: targetDraft.folderID, content: targetDraft.content,
+        tags: targetDraft.tags.map((tag) => tag.trim()).filter(Boolean), base_hash: targetDraft.contentHash },
     )
-    // 已被更新的请求覆盖，本响应丢弃
-    if (mySeq !== saveSeq.value) return
-    Object.assign(draft, {
-      title: updated.title,
-      ext: updated.ext || draft.ext,
-      folderID: updated.folder_id,
-      tags: [...updated.tags],
-      content: updated.content || '',
-      filePath: updated.file_path,
-      contentHash: updated.content_hash,
-      wordCount: updated.word_count,
-      updatedAt: updated.updated_at,
+    const unchanged = draftSnapshot(targetDraft) === sentSnapshot
+    const saved = documentDraft(updated)
+    if (unchanged) Object.assign(targetDraft, saved)
+    else Object.assign(targetDraft, {
+      contentHash: saved.contentHash, filePath: saved.filePath,
+      wordCount: saved.wordCount, updatedAt: saved.updatedAt,
     })
-    currentSnapshot()
+    tab.savedSnapshot = draftSnapshot(saved)
     updateDocumentInList(updated)
-    autosaveSavedAt.value = Date.now()
-    autosaveErrorMessage.value = ''
-    autosaveState.value = 'saved'
-    if (autosaveSavedHintTimer) clearTimeout(autosaveSavedHintTimer)
-    autosaveSavedHintTimer = setTimeout(() => {
-      if (autosaveState.value === 'saved') autosaveState.value = 'idle'
-    }, AUTOSAVE_SAVED_HINT_MS)
-    if (source === 'manual') {
-      message.success(t('knowledge.documentSaved'))
-    }
+    tab.savedAt = Date.now()
+    tab.error = ''
+    tab.state = 'saved'
+    if (source === 'manual') message.success(t('knowledge.documentSaved'))
   } catch (error) {
-    if (mySeq !== saveSeq.value) return
-    autosaveErrorMessage.value =
-      error instanceof Error ? error.message : t('knowledge.saveFailed')
-    autosaveState.value = 'error'
-    if (error instanceof ApiError && error.status === 409) {
-      handleSaveConflict()
-    } else if (source === 'manual') {
-      message.error(autosaveErrorMessage.value)
-    }
-    // 自动保存失败时仅显示右上错误指示器，不弹 toast，避免频繁打扰
+    tab.error = error instanceof Error ? error.message : t('knowledge.saveFailed')
+    tab.state = 'error'
+    if (error instanceof ApiError && error.status === 409 && source === 'manual') handleSaveConflict(tab)
+    else if (source === 'manual') message.error(tab.error)
   } finally {
-    if (mySeq === saveSeq.value) saving.value = false
+    tab.saving = false
+    if (tabDirty(tab) && tab.state !== 'error' && !disposed) scheduleSave(tab)
   }
 }
 
-function saveDocument() {
-  return performSave('manual')
-}
-
-// 用户点击「保存失败」提示时，由自动保存路径立即重试一次（不重置防抖）
-async function retryAutosave() {
-  if (saving.value || !draft.uuid) return
-  if (autosaveTimer) {
-    clearTimeout(autosaveTimer)
-    autosaveTimer = undefined
-  }
-  await performSave('auto')
-}
-
-function deleteDocument() {
-  if (!draft.uuid) return
-  Modal.confirm({
-    title: t('knowledge.deleteTitle', { title: draft.title }),
-    content: t('knowledge.deleteDescription'),
-    okText: t('knowledge.moveToTrash'),
-    okType: 'danger',
-    cancelText: t('knowledge.cancel'),
-    async onOk() {
-      try {
-        await apiClient.delete(`/knowledge/documents/${draft.uuid}`)
-        clearDraft()
-        await Promise.all([loadDocuments(), loadTrash()])
-        message.success(t('knowledge.movedToTrash'))
-      } catch (error) {
-        message.error(error instanceof Error ? error.message : t('knowledge.deleteFailed'))
-      }
-    },
-  })
-}
+function saveDocument() { return performSave('manual') }
+async function retryAutosave() { await performSave('manual') }
 
 // 目录树文档节点三点菜单「重命名」→ 打开目标文档后唤起重命名弹窗。
 // 三点按钮会阻止树节点的选中事件，不能依赖 selectedDocumentUUID 已预先更新。
 async function handleRenameDocument(uuid: string) {
   if (!uuid) return
-  if (draft.uuid !== uuid) {
+  if (draft.value.uuid !== uuid) {
     await openDocument(uuid, false, `doc:${uuid}`)
   }
-  // 用户取消未保存确认，或目标文档加载失败时，不打开错误目标的弹窗。
-  if (draft.uuid !== uuid) return
+  // 目标文档加载失败时，不打开错误目标的弹窗。
+  if (draft.value.uuid !== uuid) return
   startRename()
 }
 
-// 重命名入口：把当前标题作为弹窗初值。弹窗提交后只更新 draft.title，由自动保存负责落盘
+// 重命名入口：把当前标题作为弹窗初值。弹窗提交后只更新 草稿标题，由自动保存负责落盘
 function startRename() {
-  if (!draft.uuid) return
-  renameInputValue.value = draft.title
+  if (!draft.value.uuid) return
+  renameInputValue.value = draft.value.title
   renameModalVisible.value = true
 }
 
@@ -1158,49 +1005,47 @@ async function submitRename() {
   }
   // 提前按文件名规则清洗，避免标题里含非法字符导致后端落盘失败
   const sanitized = sanitizeTitle(next)
-  if (sanitized === draft.title.trim()) {
+  if (sanitized === draft.value.title.trim()) {
     renameModalVisible.value = false
     return
   }
   renameModalVisible.value = false
-  // 直接改 draft.title，watch 到 snapshot 变化后会自动保存；触发表单 → dirty 的过渡
-  draft.title = sanitized
+  // 直接修改草稿标题，监听到草稿变化后会自动保存；触发表单 → dirty 的过渡
+  draft.value.title = sanitized
   // 正文首行是文件名的体现，同步更新首行保持一致，避免被 performSave 的「首行为准」逻辑覆盖回旧值
-  if (extractFirstHeading(draft.content) !== null) {
-    draft.content = replaceFirstHeading(draft.content, sanitized)
+  if (extractFirstHeading(draft.value.content) !== null) {
+    draft.value.content = replaceFirstHeading(draft.value.content, sanitized)
   }
 }
 
 // 目录树文档节点三点菜单「移到回收站」
 function handleDeleteDocument(uuid: string) {
-  if (selectedDocumentUUID.value !== uuid) {
-    // 如果不是当前打开的文档，直接调接口
-    Modal.confirm({
-      title: t('knowledge.deleteTitle', { title: documents.value.find((d) => d.uuid === uuid)?.title || '' }),
-      content: t('knowledge.deleteDescription'),
-      okText: t('knowledge.moveToTrash'),
-      okType: 'danger',
-      cancelText: t('knowledge.cancel'),
-      async onOk() {
-        try {
-          await apiClient.delete(`/knowledge/documents/${uuid}`)
-          await Promise.all([loadDocuments(), loadTrash()])
-          if (draft.uuid === uuid) clearDraft()
-          message.success(t('knowledge.movedToTrash'))
-        } catch (error) {
-          message.error(error instanceof Error ? error.message : t('knowledge.deleteFailed'))
-        }
-      },
-    })
-    return
-  }
-  deleteDocument()
+  if (!uuid) return
+  Modal.confirm({
+    title: t('knowledge.deleteTitle', { title: documents.value.find((item) => item.uuid === uuid)?.title || '' }),
+    content: t('knowledge.deleteDescription'),
+    okText: t('knowledge.moveToTrash'), okType: 'danger', cancelText: t('knowledge.cancel'),
+    async onOk() {
+      try {
+        const tab = tabs.value.find((item) => item.draft.uuid === uuid)
+        cancelTimer(uuid)
+        const running = saveRequests.get(uuid)
+        if (running) await running
+        cancelTimer(uuid)
+        await apiClient.delete(`/knowledge/documents/${encodeURIComponent(uuid)}`)
+        if (tab) removeTab(uuid)
+        if (activeUUID.value) activateTab(activeUUID.value)
+        else selectedTreeKey.value = ''
+        await Promise.all([loadDocuments(), loadTrash()])
+        message.success(t('knowledge.movedToTrash'))
+      } catch (error) {
+        message.error(error instanceof Error ? error.message : t('knowledge.deleteFailed'))
+      }
+    },
+  })
 }
 
 async function openTrash() {
-  if (!(await confirmDiscardChanges())) return
-  clearDraft()
-  activeFolderID.value = 0
   trashVisible.value = true
   await refreshTrash()
 }
@@ -1235,34 +1080,22 @@ function hardDeleteDocument(document: KnowledgeDocument) {
 }
 
 async function selectDirectory(keys: Array<string | number>, info: DirectorySelectInfo) {
-  if (!keys.length) return
   const node = info.node
   if (node.kind === 'document') {
+    if (!keys.length) return
     selectedFolderID.value = node.folderID
     await openDocument(String(node.entityId), false, node.key)
     return
   }
-  if (!(await confirmDiscardChanges())) return
-  clearDraft()
-  selectedTreeKey.value = node.key
-  trashVisible.value = false
-
-  // 点击文件夹时：如果 sidebar 收起则自动展开，并展开该目录节点
-  if (sidebarCollapsed.value) {
-    previousExpandedKeys = [...expandedKeys.value]
-    sidebarCollapsed.value = false
-  }
-
-  // 文件夹进入详情页
+  if (sidebarCollapsed.value) expandSidebar()
   selectedFolderID.value = node.folderID
-  activeFolderID.value = node.folderID
-  // 自动展开该目录节点
-  if (!expandedKeys.value.includes(node.key)) {
-    expandedKeys.value = [...expandedKeys.value, node.key]
-  }
+  expandedKeys.value = expandedKeys.value.includes(node.key)
+    ? expandedKeys.value.filter((key) => key !== node.key)
+    : [...expandedKeys.value, node.key]
 }
 
 async function moveDirectoryNode(info: DirectoryDropInfo) {
+  if (workspaceMutating.value) return
   const dragged = info.dragNode
   const target = info.node
   if (!info.dropToGap && target.kind !== 'folder') return
@@ -1349,22 +1182,23 @@ async function moveDirectoryNode(info: DirectoryDropInfo) {
   }
 
   try {
+    if (!(await flushTabs())) return
+    workspaceMutating.value = true
     if (dragged.kind === 'folder' && sourceFolderID !== targetFolderID) {
       await apiClient.put(`/knowledge/folders/${dragged.entityId}`, {
         parent_id: targetFolderID,
       })
       await loadFolders()
+      await loadDocuments()
+      reconcileTabLocations()
     } else if (dragged.kind === 'document' && sourceFolderID !== targetFolderID) {
       const updated = await apiClient.put<KnowledgeDocument>(
         `/knowledge/documents/${dragged.entityId}`,
         { folder_id: targetFolderID },
       )
       updateDocumentInList(updated)
-      if (draft.uuid === dragged.entityId) {
-        draft.folderID = targetFolderID
-        selectedTreeKey.value = draggedOrderKey
-        currentSnapshot()
-      }
+      reconcileTabLocations()
+      if (draft.value.uuid === dragged.entityId) selectedTreeKey.value = draggedOrderKey
     }
 
     const nextDirectoryOrder = {
@@ -1387,6 +1221,11 @@ async function moveDirectoryNode(info: DirectoryDropInfo) {
     }
   } catch (error) {
     message.error(error instanceof Error ? error.message : t('knowledge.moveFailed'))
+  } finally {
+    workspaceMutating.value = false
+    for (const tab of tabs.value) {
+      if (tabDirty(tab) && tab.state !== 'error') scheduleSave(tab)
+    }
   }
 }
 
@@ -1551,49 +1390,26 @@ async function confirmDeleteFolder(mode: 'keep' | 'purge') {
   if (!folder) return
   deleteFolderModalLoading.value = true
   try {
+    if (!(await flushTabs())) return
     await deleteKnowledgeFolder(folder.id, mode)
     deleteFolderModalVisible.value = false
     deleteFolderTarget.value = null
-    // S-UI-14: 删除成功后回到上级文件夹详情页（有上级）或根目录视图（folder_id=0）
+    // 删除后仍保留未受影响的文档标签，并校准文件所在位置。
     const parentID = folder.parent_id
     selectedFolderID.value = parentID
     selectedTreeKey.value = parentID > 0 ? `folder:${parentID}` : 'root'
-    activeFolderID.value = parentID
     if (mode === 'purge') {
       await Promise.all([loadFolders(), loadDocuments(), loadTrash()])
     } else {
       await Promise.all([loadFolders(), loadDocuments()])
     }
+    reconcileTabLocations()
     message.success(mode === 'purge' ? t('knowledge.folderDeleted') : t('knowledge.folderKept'))
   } catch (error) {
     message.error(error instanceof Error ? error.message : t('knowledge.folderDeleteFailed'))
   } finally {
     deleteFolderModalLoading.value = false
   }
-}
-
-// S-UI-14: 详情页逐层下钻与面包屑返回
-function handleDetailOpenFolder(folderId: number) {
-  activeFolderID.value = folderId
-  selectedFolderID.value = folderId
-  selectedTreeKey.value = `folder:${folderId}`
-  trashVisible.value = false
-}
-
-function handleDetailNavigate(folderId: number) {
-  activeFolderID.value = folderId
-  selectedFolderID.value = folderId
-  selectedTreeKey.value = folderId > 0 ? `folder:${folderId}` : 'root'
-}
-
-async function handleDetailOpenDocument(uuid: string) {
-  await openDocument(uuid)
-}
-
-// 详情页删除当前文件夹：复用既有 keep/purge 双选项弹窗（S-UI-14 / CK-3）
-function handleDetailDeleteFolder(folderId: number) {
-  selectedFolderID.value = folderId
-  deleteSelectedFolder()
 }
 
 async function performSearch() {
@@ -1627,8 +1443,38 @@ function scheduleSearch() {
 
 // S-UI-10: 大纲跳转由编辑器定位第 index 个标题元素
 function scrollToHeading(index: number) {
-  editorRef.value?.scrollToHeading(index)
+  editorRefs.get(draft.value.uuid)?.scrollToHeading(index)
 }
+
+async function flushTab(tab: KnowledgeTab) {
+  await performSave('auto', tab)
+  // 已有请求期间产生的新输入再保存一次；失败保留草稿，交给用户处理。
+  if (tabDirty(tab) && tab.state !== 'error') await performSave('auto', tab)
+}
+
+async function flushTabs() {
+  await Promise.all(tabs.value.map(flushTab))
+  if (tabs.value.some(tabDirty)) {
+    message.error(t('knowledge.pendingChangesBlocked'))
+    return false
+  }
+  return true
+}
+
+function beforeUnload(event: BeforeUnloadEvent) {
+  if (!tabs.value.some(tabDirty)) return
+  event.preventDefault()
+  event.returnValue = ''
+}
+
+onBeforeRouteLeave(async () => {
+  await Promise.all(tabs.value.map(flushTab))
+  for (const tab of tabs.value) {
+    if (tabDirty(tab) && !(await confirmDiscardChanges(tab))) return false
+  }
+  persistWorkspace()
+  return true
+})
 
 function handleKeyboard(event: KeyboardEvent) {
   if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's') {
@@ -1639,6 +1485,7 @@ function handleKeyboard(event: KeyboardEvent) {
 
 onMounted(async () => {
   window.addEventListener('keydown', handleKeyboard)
+  window.addEventListener('beforeunload', beforeUnload)
   try {
     directoryOrder.value = JSON.parse(
       localStorage.getItem('knowledge-directory-order') || '{}',
@@ -1647,23 +1494,19 @@ onMounted(async () => {
     directoryOrder.value = {}
   }
   await loadKnowledgeRoot()
-  await loadWorkspace(false, true)
+  if (await loadWorkspace(true)) await restoreWorkspace()
 })
 
 onBeforeUnmount(() => {
   window.removeEventListener('keydown', handleKeyboard)
+  window.removeEventListener('beforeunload', beforeUnload)
+  persistWorkspace()
   if (searchTimer) clearTimeout(searchTimer)
   // 防止组件卸载时仍残留拖拽监听与光标样式
   sidebarResizeCleanup?.()
-  // 清掉自动保存相关的残余定时器，避免在 setup 之外跑逻辑
-  if (autosaveTimer) {
-    clearTimeout(autosaveTimer)
-    autosaveTimer = undefined
-  }
-  if (autosaveSavedHintTimer) {
-    clearTimeout(autosaveSavedHintTimer)
-    autosaveSavedHintTimer = undefined
-  }
+  disposed = true
+  openSequence += 1
+  editorRefs.clear()
 })
 </script>
 
@@ -1676,8 +1519,8 @@ onBeforeUnmount(() => {
     >
       <aside v-show="!sidebarCollapsed" class="knowledge-sidebar">
         <header class="knowledge-titlebar">
-          <span>{{ t('knowledge.title') }}</span>
-          <div class="directory-actions">
+          <span class="knowledge-title" :title="t('knowledge.title')">{{ t('knowledge.title') }}</span>
+          <div v-if="sidebarWidth >= 140" class="directory-actions">
             <a-dropdown :trigger="['click']" placement="bottomRight">
               <button class="icon-button titlebar-action" type="button" :aria-label="t('knowledge.settings')">
                 <img :src="knowledgeSettingsIcon" alt="" aria-hidden="true" class="knowledge-toolbar-icon" />
@@ -1692,7 +1535,6 @@ onBeforeUnmount(() => {
                     <img :src="knowledgeTrashMenuIcon" alt="" aria-hidden="true" class="knowledge-menu-icon" />
                     {{ t('knowledge.trash') }}
                   </a-menu-item>
-                  <a-menu-divider />
                   <a-menu-item key="refresh" :disabled="scanning" @click="refreshWorkspace">
                     <img
                       :src="knowledgeRefreshIcon"
@@ -1702,6 +1544,10 @@ onBeforeUnmount(() => {
                       :class="{ spinning: scanning }"
                     />
                     {{ t('knowledge.refreshDirectory') }}
+                  </a-menu-item>
+                  <a-menu-item key="appearance" @click="appearanceSettingsOpen = true">
+                    <img :src="knowledgeSettingsIcon" alt="" aria-hidden="true" class="knowledge-menu-icon" />
+                    {{ t('knowledge.appearanceSettings') }}
                   </a-menu-item>
                 </a-menu>
               </template>
@@ -1949,126 +1795,145 @@ onBeforeUnmount(() => {
       </main>
 
       <main v-else-if="draft.uuid" class="editor-workspace" :class="{ 'is-inspector-collapsed': !inspectorOpen }">
-        <!-- 面包屑导航行 -->
-        <nav class="editor-breadcrumb-row" aria-label="文件路径导航">
-          <div class="editor-breadcrumb-leading">
-            <!-- 左侧目录栏折叠 / 展开切换（固定在 nav 最左侧） -->
-            <button
-              class="icon-button sidebar-nav-toggle"
-              type="button"
-              :aria-label="sidebarCollapsed ? t('knowledge.expandSidebar') : t('knowledge.collapseSidebar')"
-              @click="toggleSidebar"
-            >
-              <img
-                :src="directoryToggleIcon"
-                alt=""
-                aria-hidden="true"
-                class="sidebar-nav-toggle-icon"
-                :class="{ 'is-collapsed': sidebarCollapsed }"
-              />
-            </button>
-            <div class="editor-breadcrumb">
-              <template v-for="(item, index) in visibleBreadcrumbs" :key="item.id">
-                <!-- 溢出省略号：显示省略号按钮，点击展开全部路径 -->
-                <span v-if="item.kind === 'overflow'" class="breadcrumb-overflow">
-                    <a-tooltip :title="documentBreadcrumbs.map(i => fullBreadcrumbName(i)).join(' / ')">
-                      <button
-                        type="button"
-                        class="crumb-overflow-btn"
-                        :aria-label="t('knowledge.breadcrumbOverflow')"
-                        @click="showFullBreadcrumb"
-                      >{{ t('knowledge.breadcrumbOverflow') }}</button>
-                    </a-tooltip>
-                  </span>
-                <button
-                  v-else-if="item.kind !== 'document'"
-                  type="button"
-                  class="crumb crumb-link"
-                  :title="fullBreadcrumbName(item)"
-                  @click="navigateBreadcrumb(item)"
-                >{{ breadcrumbDisplayName(item) }}</button>
-                <span v-else class="crumb crumb-current" :title="fullBreadcrumbName(item)">{{ breadcrumbDisplayName(item) }}</span>
-                <span v-if="index < visibleBreadcrumbs.length - 1" class="crumb-separator">
-                  {{ breadcrumbSeparator }}
-                </span>
-              </template>
-            </div>
-          </div>
-
-          <div class="editor-header-actions">
-            <!-- 自动保存状态指示：pending/saving 时短暂展示文案，saved 后 2 秒回 idle，error 时点击重试 -->
-            <button
-              v-if="autosaveState === 'error'"
-              type="button"
-              class="autosave-indicator autosave-indicator--error"
-              :title="autosaveErrorMessage"
-              :aria-label="t('knowledge.autosaveFailed')"
-              @click="retryAutosave"
-            >
-              <ReloadOutlined />
-              <span>{{ t('knowledge.autosaveFailed') }}</span>
-            </button>
-            <span
-              v-else-if="autosaveHint"
-              class="autosave-indicator"
-              :class="{
-                'autosave-indicator--pending': autosaveState === 'pending',
-                'autosave-indicator--saving': autosaveState === 'saving',
-                'autosave-indicator--saved': autosaveState === 'saved',
-              }"
-              aria-live="polite"
-            >
-              <span
-                v-if="autosaveState === 'saving'"
-                class="autosave-spinner"
-                aria-hidden="true"
-              />
-              <span>{{ autosaveHint }}</span>
-            </span>
-            <a-tooltip :title="t('knowledge.copyDocument')">
-              <button
-                class="icon-button"
-                type="button"
-                :disabled="!draft.content"
-                :aria-label="t('knowledge.copyDocument')"
-                @click="copyDocumentContent"
-              >
-                <img
-                  :src="knowledgeCopyDocumentIcon"
-                  alt=""
-                  aria-hidden="true"
-                  class="knowledge-toolbar-icon"
-                />
-              </button>
-            </a-tooltip>
-            <!-- 抽屉展开 / 折叠切换 -->
-            <button
-              class="icon-button"
-              type="button"
-              :aria-label="inspectorOpen ? t('knowledge.inspectorCollapse') : t('knowledge.inspectorExpand')"
-              @click="toggleInspector"
-            >
-              <img
-                :src="directoryToggleIcon"
-                alt=""
-                aria-hidden="true"
-                class="inspector-nav-toggle-icon"
-              />
-            </button>
-          </div>
-        </nav>
-
-
-        <!--
-          S-UI-09: md 与 txt 统一使用 TipTap 所见即所得编辑器；
-          S-UI-11: 浮动工具栏由编辑器内部维护。
-        -->
+        <a-tabs
+          class="document-tabs"
+          :active-key="activeUUID"
+          type="editable-card"
+          hide-add
+          @change="(key: string | number) => activateTab(String(key))"
+          @edit="(key: string | number) => closeTab(String(key))"
+        >
+          <a-tab-pane v-for="tab in tabs" :key="tab.draft.uuid">
+            <template #tab>
+              <span :title="`${tab.draft.title}.${tab.draft.ext}`" class="document-tab-title">
+                {{ `${tab.draft.title}.${tab.draft.ext}` }}
+              </span>
+              <span v-if="tab.state === 'error'" role="status">{{ t('knowledge.tabSaveFailed') }}</span>
+              <span v-else-if="tabDirty(tab)" :aria-label="t('knowledge.autosavePending')">{{ t('knowledge.tabUnsavedMark') }}</span>
+            </template>
+          </a-tab-pane>
+        </a-tabs>
         <section class="editor-body">
-          <TiptapMarkdownEditor
-            ref="editorRef"
-            v-model="draft.content"
-            :title-placeholder="isMarkdownDraft ? t('knowledge.titlePlaceholder') : ''"
-            :ensure-title-heading="isMarkdownDraft"
+          <div class="editor-floating-tools">
+            <a-tooltip v-if="autosaveState === 'error'" :title="autosaveErrorMessage || t('knowledge.autosaveFailed')">
+              <a-button
+                type="text"
+                class="autosave-indicator autosave-indicator--error"
+                :aria-label="t('knowledge.autosaveFailed')"
+                @click="retryAutosave"
+              >
+                <ReloadOutlined />
+              </a-button>
+            </a-tooltip>
+            <a-tooltip v-else-if="autosaveHint" :title="autosaveHint">
+              <span
+                class="autosave-indicator"
+                :class="{
+                  'autosave-indicator--pending': autosaveState === 'pending',
+                  'autosave-indicator--saving': autosaveState === 'saving',
+                  'autosave-indicator--saved': autosaveState === 'saved',
+                }"
+                role="status"
+                :aria-label="autosaveHint"
+              >
+                <span v-if="autosaveState === 'saving'" class="autosave-spinner" aria-hidden="true" />
+                <CheckOutlined v-else-if="autosaveState === 'saved'" aria-hidden="true" />
+                <ClockCircleOutlined v-else aria-hidden="true" />
+              </span>
+            </a-tooltip>
+            <a-popover
+              v-model:open="documentActionsOpen"
+              trigger="hover"
+              placement="bottom"
+              :overlay-inner-style="{ padding: '4px 8px' }"
+            >
+              <a-button
+                type="text"
+                class="editor-settings-trigger"
+                :aria-label="t('knowledge.settings')"
+                :aria-expanded="documentActionsOpen"
+                @click="documentActionsOpen = true"
+                @keydown.esc="documentActionsOpen = false"
+              >
+                <img :src="knowledgeSettingsIcon" alt="" aria-hidden="true" class="knowledge-toolbar-icon" />
+              </a-button>
+              <template #content>
+                <div
+                  class="editor-settings-actions"
+                  role="group"
+                  :aria-label="t('knowledge.moreActions')"
+                  @click="documentActionsOpen = false"
+                  @keydown.esc="documentActionsOpen = false"
+                >
+                  <a-tooltip placement="left" :title="t('knowledge.copyDocument')">
+                    <a-button
+                      type="text"
+                      :disabled="!draft.content"
+                      :aria-label="t('knowledge.copyDocument')"
+                      @click="copyDocumentContent"
+                    >
+                      <img :src="knowledgeCopyDocumentIcon" alt="" aria-hidden="true" class="knowledge-toolbar-icon" />
+                    </a-button>
+                  </a-tooltip>
+                  <a-tooltip
+                    v-if="isMarkdownDraft && activeTab"
+                    placement="left"
+                    :title="t(editorMode === 'source' ? 'knowledge.visualMode' : 'knowledge.sourceMode')"
+                  >
+                    <a-button
+                      type="text"
+                      class="source-mode-toggle"
+                      :class="{ 'is-active': editorMode === 'source' }"
+                      :aria-label="t(editorMode === 'source' ? 'knowledge.visualMode' : 'knowledge.sourceMode')"
+                      :aria-pressed="editorMode === 'source'"
+                      @click="toggleEditorMode"
+                    >
+                      <img :src="knowledgeSourceModeIcon" class="source-mode-icon" alt="" aria-hidden="true" />
+                    </a-button>
+                  </a-tooltip>
+                  <a-tooltip placement="left" :title="sidebarCollapsed ? t('knowledge.expandSidebar') : t('knowledge.collapseSidebar')">
+                    <a-button
+                      type="text"
+                      :aria-label="sidebarCollapsed ? t('knowledge.expandSidebar') : t('knowledge.collapseSidebar')"
+                      :aria-expanded="!sidebarCollapsed"
+                      @click="toggleSidebar"
+                    >
+                      <img
+                        :src="directoryToggleIcon"
+                        alt=""
+                        aria-hidden="true"
+                        class="sidebar-nav-toggle-icon"
+                        :class="{ 'is-collapsed': sidebarCollapsed }"
+                      />
+                    </a-button>
+                  </a-tooltip>
+                  <a-tooltip placement="left" :title="inspectorOpen ? t('knowledge.inspectorCollapse') : t('knowledge.inspectorExpand')">
+                    <a-button
+                      type="text"
+                      :aria-label="inspectorOpen ? t('knowledge.inspectorCollapse') : t('knowledge.inspectorExpand')"
+                      :aria-expanded="inspectorOpen"
+                      @click="toggleInspector"
+                    >
+                      <img :src="directoryToggleIcon" alt="" aria-hidden="true" class="inspector-nav-toggle-icon" />
+                    </a-button>
+                  </a-tooltip>
+                </div>
+              </template>
+            </a-popover>
+          </div>
+
+          <KnowledgeDocumentEditor
+            v-for="tab in tabs"
+            v-show="tab.draft.uuid === activeUUID"
+            :key="tab.draft.uuid"
+            :ref="(instance) => setEditorRef(tab.draft.uuid, instance)"
+            v-model="tab.draft.content"
+            :markdown="tab.draft.ext === 'md'"
+            :mode="tab.draft.ext === 'md' ? editorMode : 'visual'"
+            :font-size="appearance.fontSize"
+            :line-height="appearance.lineHeight"
+            :text-color="appearance.textColor"
+            :disabled="workspaceMutating || rootModalLoading || deleteFolderModalLoading"
           />
         </section>
 
@@ -2100,47 +1965,15 @@ onBeforeUnmount(() => {
         </a-popover>
       </main>
 
-      <!-- 根目录视图：展示 folder_id=0 的文档和 parent_id=0 的文件夹 -->
-      <KnowledgeFolderDetail
-        v-else-if="activeFolderID === 0"
-        :folder-id="0"
-        :folder-name="t('knowledge.breadcrumbRoot')"
-        :breadcrumbs="[{ id: 0, name: t('knowledge.breadcrumbRoot') }]"
-        :child-folders="rootViewFolders"
-        :child-documents="rootViewDocuments"
-        :loading="loading"
-        :sidebar-collapsed="sidebarCollapsed"
-        :folder-creating="folderCreating"
-        @open-folder="handleDetailOpenFolder"
-        @open-document="handleDetailOpenDocument"
-        @create-document="createDocument"
-        @create-folder="createFolder"
-        @toggle-sidebar="toggleSidebar"
-        @delete-folder="handleDetailDeleteFolder"
-        @navigate="handleDetailNavigate"
-      />
-
-      <!-- S-UI-14: 文件夹详情列表页（独立工作区，仅直接子项、逐层下钻） -->
-      <KnowledgeFolderDetail
-        v-else-if="activeFolder"
-        :folder-id="activeFolderID"
-        :folder-name="activeFolder.name"
-        :breadcrumbs="activeFolderBreadcrumbs"
-        :child-folders="activeFolderChildren.folders"
-        :child-documents="activeFolderChildren.documents"
-        :loading="loading"
-        :sidebar-collapsed="sidebarCollapsed"
-        :folder-creating="folderCreating"
-        @open-folder="handleDetailOpenFolder"
-        @open-document="handleDetailOpenDocument"
-        @create-document="createDocument"
-        @create-folder="createFolder"
-        @toggle-sidebar="toggleSidebar"
-        @delete-folder="handleDetailDeleteFolder"
-        @navigate="handleDetailNavigate"
-      />
-
       <main v-else class="knowledge-empty">
+        <button
+          class="icon-button empty-sidebar-toggle"
+          type="button"
+          :aria-label="sidebarCollapsed ? t('knowledge.expandSidebar') : t('knowledge.collapseSidebar')"
+          @click="toggleSidebar"
+        >
+          <img :src="directoryToggleIcon" alt="" aria-hidden="true" class="sidebar-nav-toggle-icon" />
+        </button>
         <div class="empty-state">
           <div class="empty-illustration" aria-hidden="true">
             <FolderOutlined class="empty-folder" />
@@ -2178,6 +2011,11 @@ onBeforeUnmount(() => {
       </aside>
 
     <!-- S-UI-01: 设置知识库目录弹窗（S-UI-17: 迁移语义 + 二次确认 + 全流程反馈） -->
+    <KnowledgeAppearanceSettings
+      v-model:open="appearanceSettingsOpen"
+      :value="appearance"
+      @change="updateAppearance"
+    />
     <a-modal
       v-model:open="rootModalVisible"
       :width="584"
@@ -2295,7 +2133,7 @@ onBeforeUnmount(() => {
     </a-modal>
 
     <!-- 文档重命名弹窗（取代原 editor-header 内的标题就地编辑）。提交只更新 draft.title，
-         由 snapshot 防抖自动保存落盘；与新建/编辑文档共用 title 校验。 -->
+         由草稿防抖自动保存落盘；与新建/编辑文档共用 title 校验。 -->
     <a-modal
       v-model:open="renameModalVisible"
       :width="584"
@@ -2324,6 +2162,24 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
+.empty-sidebar-toggle { position: absolute; top: 12px; left: 12px; }
+.document-tabs { flex: 0 0 auto; min-width: 0; }
+.document-tabs :deep(.ant-tabs-nav) { margin: 0; }
+.document-tabs :deep(.ant-tabs-content-holder) { display: none; }
+.document-tabs :deep(.ant-tabs-tab-active .ant-tabs-tab-btn) {
+  color: #262626;
+  font-weight: 600;
+  text-shadow: none;
+}
+.document-tab-title {
+  display: inline-block;
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: middle;
+}
+
 .knowledge-shell {
   /* 使用标题栏下方的可用高度；clip 阻止光标定位滚动外层，正文仍由编辑器内部滚动。 */
   height: 100%;
@@ -2342,6 +2198,12 @@ onBeforeUnmount(() => {
   font-size: 20px;
   font-weight: 600;
   line-height: 28px;
+}
+
+.knowledge-title {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
 }
 
 .knowledge-page {
@@ -2625,15 +2487,9 @@ onBeforeUnmount(() => {
 
 .editor-workspace,
 .trash-workspace,
-.folder-detail,
 .knowledge-empty {
   min-width: 0;
   min-height: 0;
-}
-
-/* S-UI-14: 详情页与回收站一致占满主区与右侧列（属性面板仅编辑器工作区展示） */
-.folder-detail {
-  grid-column: 2 / 4;
 }
 
 .editor-workspace {
@@ -2651,59 +2507,70 @@ onBeforeUnmount(() => {
   grid-column: 2 / 4;
 }
 
-/* S-AS-04: 顶部 nav 右侧的自动保存指示器 */
+.editor-floating-tools {
+  position: absolute;
+  z-index: 5;
+  top: 6px;
+  right: 12px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.editor-settings-trigger,
+.editor-settings-actions :deep(.ant-btn),
 .autosave-indicator {
   display: inline-flex;
+  width: 32px;
+  height: 32px;
   flex: 0 0 auto;
   align-items: center;
-  gap: 6px;
-  max-width: 220px;
-  padding: 0 10px;
-  border: 0;
+  justify-content: center;
+  padding: 0;
   border-radius: 6px;
-  color: #8e939b;
-  font-size: 12px;
-  line-height: 26px;
-  white-space: nowrap;
 }
 
-.autosave-indicator > span:last-child {
-  overflow: hidden;
-  text-overflow: ellipsis;
+.editor-settings-trigger:focus-visible,
+.editor-settings-actions :deep(.ant-btn:focus-visible),
+.autosave-indicator:focus-visible {
+  outline: 2px solid #3157e2;
+  outline-offset: 2px;
 }
 
-.autosave-indicator--pending {
-  color: #6c7178;
+.editor-settings-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+
+.editor-settings-actions :deep(.ant-btn) {
+  width: 28px;
+  height: 28px;
+}
+
+.autosave-indicator {
+  color: #8c8c8c;
+  font-size: 16px;
+}
+
+.autosave-indicator--pending,
+.autosave-indicator--saved {
+  color: #595959;
 }
 
 .autosave-indicator--saving {
   color: #3157e2;
 }
 
-.autosave-indicator--saved {
-  color: #5d6573;
-}
-
 .autosave-indicator--error {
-  display: inline-flex;
-  flex: 0 0 auto;
-  align-items: center;
-  gap: 6px;
-  max-width: 220px;
-  padding: 0 10px;
-  border: 0;
-  border-radius: 6px;
-  color: #ff6b4a;
-  background: transparent;
-  font-size: 12px;
-  line-height: 26px;
-  cursor: pointer;
-  white-space: nowrap;
+  color: #fb363f;
+  background: #fef2f2;
 }
 
 .autosave-indicator--error:hover {
-  color: #d9482b;
-  background: #fff1ec;
+  color: #fb363f;
+  background: #fef2f2;
 }
 
 .autosave-spinner {
@@ -2716,6 +2583,10 @@ onBeforeUnmount(() => {
   animation: autosave-spin 0.8s linear infinite;
 }
 
+@media (prefers-reduced-motion: reduce) {
+  .autosave-spinner { animation: none; }
+}
+
 @keyframes autosave-spin {
   to {
     transform: rotate(360deg);
@@ -2724,6 +2595,7 @@ onBeforeUnmount(() => {
 
 /* S-UI-09: 编辑器工作区由 TipTap 所见即所得编辑器承载。 */
 .editor-body {
+  position: relative;
   display: flex;
   min-height: 0;
   flex: 1;
@@ -2988,6 +2860,7 @@ onBeforeUnmount(() => {
 }
 
 .knowledge-empty {
+  position: relative;
   grid-column: 2 / 4;
   display: flex;
   align-items: center;
@@ -3057,28 +2930,6 @@ onBeforeUnmount(() => {
   width: 100%;
 }
 
-/* 编辑器头部面包屑行：与 .detail-breadcrumb 排版保持一致，避免点击文件/文件夹切换时高度跳动 */
-.editor-breadcrumb-row {
-  display: flex;
-  height: 44px;
-  flex: 0 0 auto;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 0 24px;
-  border-bottom: 1px solid #f0f0f0;
-  font-size: 14px;
-}
-
-/* 面包屑行左侧容器：包含 sidebar 折叠按钮 + 路径导航 */
-.editor-breadcrumb-leading {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  min-width: 0;
-  overflow: hidden;
-}
-
 .sidebar-nav-toggle {
   flex: 0 0 auto;
 }
@@ -3101,80 +2952,21 @@ onBeforeUnmount(() => {
   transform: rotate(180deg);
 }
 
-/* 路径部分样式：参考 detail-breadcrumb-path */
-.editor-breadcrumb {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
-  overflow: hidden;
-  font-size: 14px;
+.source-mode-icon {
+  width: 16px;
+  height: 16px;
+  display: block;
 }
 
-/* crumb 基础样式：参考 .crumb，颜色与字号集中到基础类 */
-.editor-breadcrumb .crumb {
-  flex: 0 0 auto;
-  padding: 0;
-  border: 0;
-  background: transparent;
-  white-space: nowrap;
-  color: #8c8c8c;
-}
-
-/* 溢出省略号按钮：编辑器特有，用于长路径折叠 */
-.editor-breadcrumb .crumb-overflow-btn {
-  flex: 0 0 auto;
-  padding: 2px 6px;
-  border: 0;
-  border-radius: 4px;
-  color: #8c8c8c;
-  background: #f0f1f3;
-  cursor: pointer;
-  font-size: 12px;
-}
-
-.editor-breadcrumb .crumb-overflow-btn:hover {
+.source-mode-toggle.is-active,
+.source-mode-toggle.is-active:hover {
   color: #3157e2;
   background: #e5efff;
 }
 
-/* 链接样式：参考 .crumb-link，光标和颜色变体由链接单独提供 */
-.editor-breadcrumb .crumb-link {
-  cursor: pointer;
-}
-
-.editor-breadcrumb .crumb-link:hover {
-  color: #3157e2;
-}
-
-.editor-breadcrumb .crumb-link:focus-visible {
+.source-mode-toggle:focus-visible {
   outline: 2px solid #3157e2;
   outline-offset: 2px;
-}
-
-/* 当前页样式：参考 .crumb-current，使用更深的强调色和加粗 */
-.editor-breadcrumb .crumb-current {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  color: #262626;
-  font-weight: 600;
-}
-
-/* 分隔符样式：参考 .crumb-separator，保留 flex 防止溢出时被压缩 */
-.editor-breadcrumb .crumb-separator {
-  color: #bfbfbf;
-  flex: 0 0 auto;
-}
-
-.breadcrumb-overflow {
-  flex: 0 0 auto;
-}
-
-.editor-header-actions {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex: 0 0 auto;
 }
 
 /* 目录树三点按钮 */
@@ -3207,6 +2999,7 @@ onBeforeUnmount(() => {
 
 .directory-actions {
   display: flex;
+  flex-shrink: 0;
   align-items: center;
   gap: 8px;
 }
@@ -3479,8 +3272,7 @@ onBeforeUnmount(() => {
   }
 
   .trash-workspace,
-  .folder-detail,
-  .knowledge-empty {
+    .knowledge-empty {
     grid-column: 2;
   }
 }
@@ -3494,6 +3286,10 @@ onBeforeUnmount(() => {
     padding-inline: 18px;
   }
 
+}
+
+.knowledge-page.is-sidebar-narrow .knowledge-sidebar {
+  padding-inline: 8px;
 }
 
 /* 折叠状态：移除 sidebar 可见边框，防止 0px 时仍有边框线残留 */

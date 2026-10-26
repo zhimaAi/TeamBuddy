@@ -17,6 +17,7 @@ import (
 	"goteams-client/internal/executor"
 	"goteams-client/internal/i18n"
 	"goteams-client/internal/storage/log"
+	"goteams-client/internal/taskruntime"
 )
 
 // EventBroadcaster is the event broadcast callback type
@@ -138,6 +139,7 @@ type Orchestrator struct {
 	mu             sync.RWMutex
 	activeSessions map[string]*activeSession
 	executionGates *taskExecutionGateRegistry
+	sessionStarts  *taskExecutionGateRegistry
 
 	eventBroadcaster    EventBroadcaster
 	stateBroadcaster    StateBroadcaster
@@ -156,6 +158,7 @@ func NewOrchestrator(db *sql.DB, logDB *sql.DB, eventStore *log.EventStore) *Orc
 		eventStore:     eventStore,
 		activeSessions: make(map[string]*activeSession),
 		executionGates: newTaskExecutionGateRegistry(),
+		sessionStarts:  newTaskExecutionGateRegistry(),
 		artifacts:      artifactstore.Default(),
 		liveActivity:   map[string]LiveActivity{},
 	}
@@ -193,6 +196,9 @@ func (o *Orchestrator) RunStep(ctx context.Context, opts RunStepOptions) (string
 }
 
 func (o *Orchestrator) runStep(ctx context.Context, opts RunStepOptions) (string, error) {
+	// 与执行切换的共享门闩分开：同任务的校验、幂等查询和创建必须串行。
+	release := o.sessionStarts.acquire(opts.TaskUUID, true)
+	defer release()
 	// 1. Resolve the immutable task-step snapshot.
 	var stepUUID, stepKey, stepCLIType, modelName, workDir, snapshotUUID, expertSnapshotUUID, executionMode string
 	err := o.db.QueryRowContext(ctx,
@@ -203,7 +209,7 @@ func (o *Orchestrator) runStep(ctx context.Context, opts RunStepOptions) (string
 		opts.TaskUUID, opts.StepUUID, opts.StepUUID, opts.StepUUID, opts.StepKey).Scan(
 		&stepUUID, &stepKey, &stepCLIType, &modelName, &workDir, &snapshotUUID, &expertSnapshotUUID, &executionMode)
 	if err == sql.ErrNoRows {
-		return "", fmt.Errorf("Agent 编排不存在")
+		return "", fmt.Errorf("Agent 编排不存在: %w", err)
 	}
 	if err != nil {
 		return "", fmt.Errorf("查询步骤失败: %w", err)
@@ -222,12 +228,18 @@ func (o *Orchestrator) runStep(ctx context.Context, opts RunStepOptions) (string
 	}
 	opts.StepUUID = stepUUID
 	opts.StepKey = stepKey
-	if err := o.validateRun(ctx, opts); err != nil {
-		return "", err
-	}
 	displayPrompt := strings.TrimSpace(opts.DisplayPrompt)
 	if displayPrompt == "" {
 		displayPrompt = strings.TrimSpace(opts.UserPrompt)
+	}
+	if id, err := o.existingRequest(ctx, opts.TaskUUID, stepUUID, opts.RequestID, displayPrompt, opts.CLIType, opts.Model); id != "" || err != nil {
+		return id, err
+	}
+	if err := o.validateRun(ctx, opts); err != nil {
+		return "", err
+	}
+	if strings.TrimSpace(cliType) == "" || strings.TrimSpace(modelName) == "" {
+		return "", ErrStepRuntimeRequired
 	}
 	var promptSnapshot string
 	promptSnapshot, err = BuildRoundPrompt(ctx, o.db, executionMode, opts.TaskUUID, stepUUID, opts.UserPrompt)
@@ -240,7 +252,7 @@ func (o *Orchestrator) runStep(ctx context.Context, opts RunStepOptions) (string
 	// Each re-execution of a step creates a new conversation_uuid, and is stored as
 	// it is still the next round of the step, so run_no must not be reset to 1 for a new conversation.
 	conversationUUID := uuid.New().String()
-	sessionUUID := uuid.New().String()
+	sessionUUID := sessionUUIDForRequest(opts.TaskUUID, opts.RequestID)
 	if executionMode == "expert_group" {
 		if strings.TrimSpace(opts.ExpertChainUUID) == "" {
 			opts.ExpertChainUUID = uuid.NewString()
@@ -275,6 +287,11 @@ func (o *Orchestrator) runStep(ctx context.Context, opts RunStepOptions) (string
 		return "", fmt.Errorf("开启执行事务失败: %w", err)
 	}
 	defer tx.Rollback()
+	if executionMode == "pipeline" {
+		if err := initializePipelineProgress(ctx, tx, opts.TaskUUID, now); err != nil {
+			return "", err
+		}
+	}
 	if recordType == "user_question" {
 		_, err = tx.ExecContext(ctx, `INSERT INTO gt_task_progress
 		(uuid, task_uuid, task_pipeline_snapshot_uuid, task_step_uuid, local_step_uuid, cloud_step_id,
@@ -393,6 +410,11 @@ func (o *Orchestrator) continueConversation(ctx context.Context, opts ContinueCo
 	if err != nil {
 		return "", fmt.Errorf("读取历史会话失败: %w", err)
 	}
+	release := o.sessionStarts.acquire(taskUUID, true)
+	defer release()
+	if id, err := o.existingRequest(ctx, taskUUID, stepUUID, opts.RequestID, displayPrompt, opts.CLIType, opts.Model); id != "" || err != nil {
+		return id, err
+	}
 	if !IsTerminalStatus(parentStatus) {
 		return "", fmt.Errorf("当前一轮仍在执行，请等待完成或先终止")
 	}
@@ -405,6 +427,9 @@ func (o *Orchestrator) continueConversation(ctx context.Context, opts ContinueCo
 	)
 	if err != nil {
 		return "", err
+	}
+	if cliType == "" || modelName == "" {
+		return "", ErrStepRuntimeRequired
 	}
 	runOpts := RunStepOptions{TaskUUID: taskUUID, StepUUID: stepUUID, StepKey: stepKey,
 		WorkDir: workDir, RequestID: opts.RequestID, CLIType: cliType, Model: modelName,
@@ -432,7 +457,7 @@ func (o *Orchestrator) continueConversation(ctx context.Context, opts ContinueCo
 	}
 	execPath, execErr := resolveCLIExecutable(cliType)
 	now := nowMillis()
-	sessionUUID := uuid.NewString()
+	sessionUUID := sessionUUIDForRequest(taskUUID, opts.RequestID)
 	if executionMode == "expert_group" {
 		if opts.ExpertChainUUID == "" {
 			opts.ExpertChainUUID = uuid.NewString()
@@ -461,12 +486,12 @@ func (o *Orchestrator) continueConversation(ctx context.Context, opts ContinueCo
 		WHERE t.uuid=? AND ts.uuid=?`, taskUUID, stepUUID).Scan(&stepStatus, &taskStatus, &activeCount); err != nil {
 		return "", fmt.Errorf("重新校验任务步骤失败: %w", err)
 	}
-	// 已完成的编排允许继续对话；仅拦截尚未开始的后续步骤
-	if stepStatus != "active" && stepStatus != "completed" {
+	// 越序对话不改变步骤业务状态，pending 步骤也允许继续已有会话。
+	if executionMode != "pipeline" && stepStatus != "active" && stepStatus != "completed" {
 		return "", fmt.Errorf("只能继续已开始或已完成的 Agent 编排")
 	}
 	if activeCount > 0 {
-		return "", fmt.Errorf("任务已有活动 Session")
+		return "", ErrTaskBusy
 	}
 	// 1. 用户提问 progress（record_type = user_question, user_prompt = 用户输入，显示为用户消息气泡）
 	if !opts.InternalHandoff {
@@ -1449,29 +1474,39 @@ func (o *Orchestrator) waitSessionTerminal(ctx context.Context, sessionUUID stri
 // validateRun pre-flight validation
 func (o *Orchestrator) validateRun(ctx context.Context, opts RunStepOptions) error {
 	// Check task exists
-	var stepStatus, executionMode string
-	err := o.db.QueryRowContext(ctx, `SELECT s.status, COALESCE(NULLIF(s.execution_mode,''), t.execution_mode)
-		FROM gt_task_steps s
-		JOIN gt_tasks t ON t.uuid=s.task_uuid
-		WHERE s.task_uuid = ? AND s.uuid = ?`, opts.TaskUUID, opts.StepUUID).Scan(&stepStatus, &executionMode)
-	if err == sql.ErrNoRows {
-		return fmt.Errorf("任务不存在: %s", opts.TaskUUID)
-	}
+	var stepStatus, executionMode, taskStatus, stepMode, snapshot, currentSnapshot string
+	err := o.db.QueryRowContext(ctx, `SELECT s.status, t.execution_mode, t.status, s.execution_mode,
+		s.task_pipeline_snapshot_uuid,t.pipeline_snapshot_uuid
+		FROM gt_task_steps s JOIN gt_tasks t ON t.uuid=s.task_uuid
+		WHERE s.task_uuid=? AND s.uuid=?`, opts.TaskUUID, opts.StepUUID).Scan(
+		&stepStatus, &executionMode, &taskStatus, &stepMode, &snapshot, &currentSnapshot)
 	if err != nil {
-		return fmt.Errorf("查询任务失败: %w", err)
+		return fmt.Errorf("查询任务步骤失败: %w", err)
 	}
-	// 已完成的编排允许再次执行/继续对话，不改变流水线进度；仅拦截尚未开始的后续步骤
-	if executionMode != "expert_group" && stepStatus != "active" && stepStatus != "completed" {
+	if stepMode != "" && stepMode != executionMode || executionMode == "vibe_coding" ||
+		(executionMode == "pipeline" && (snapshot == "" || snapshot != currentSnapshot)) {
+		return taskruntime.ErrExecutionModeConflict
+	}
+	if executionMode != "pipeline" && executionMode != "expert_group" && stepStatus != "active" && stepStatus != "completed" {
 		return fmt.Errorf("只能执行任务进行中或已完成的 Agent 编排")
 	}
-
-	// Check concurrency limit (at most 1 active Session per task at a time)
+	if executionMode == "pipeline" && taskStatus == "done" {
+		var rounds int
+		if err := o.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM gt_cli_sessions WHERE task_uuid=? AND step_uuid=?`, opts.TaskUUID, opts.StepUUID).Scan(&rounds); err != nil {
+			return err
+		}
+		if rounds == 0 {
+			return ErrPipelineTaskDone
+		}
+	}
 	var activeCount int
-	o.db.QueryRow(
-		`SELECT COUNT(*) FROM gt_cli_sessions WHERE task_uuid = ? AND status IN ('created', 'running', 'waiting_input', 'stop_requested')`,
-		opts.TaskUUID).Scan(&activeCount)
+	if err := o.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM gt_cli_sessions WHERE task_uuid=? AND status IN ('created','running','waiting_input','stop_requested')`,
+		opts.TaskUUID).Scan(&activeCount); err != nil {
+		return err
+	}
 	if activeCount > 0 {
-		return fmt.Errorf("任务已有活动 Session")
+		return ErrTaskBusy
 	}
 
 	// Check working directory

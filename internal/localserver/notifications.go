@@ -9,16 +9,31 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"goteams-client/internal/cloud"
 	"goteams-client/internal/i18n"
 )
 
-type NotificationsHandler struct{ db func() *sql.DB }
+type NotificationsHandler struct {
+	db          func() *sql.DB
+	cloudClient func() *cloud.Client
+}
 
-func NewNotificationsHandler(db func() *sql.DB) *NotificationsHandler {
-	return &NotificationsHandler{db: db}
+func NewNotificationsHandler(db func() *sql.DB, clients ...func() *cloud.Client) *NotificationsHandler {
+	h := &NotificationsHandler{db: db}
+	if len(clients) > 0 {
+		h.cloudClient = clients[0]
+	}
+	return h
+}
+func (h *NotificationsHandler) client() *cloud.Client {
+	if h.cloudClient == nil {
+		return nil
+	}
+	return h.cloudClient()
 }
 
 func (h *NotificationsHandler) RegisterRoutes(r *gin.RouterGroup) {
+	r.Use(h.requireScope())
 	r.GET("", h.list)
 	r.PUT("/:uuid/read", h.read)
 	r.PUT("/tasks/:task_uuid/read", h.readTask)
@@ -32,12 +47,14 @@ func (h *NotificationsHandler) list(c *gin.Context) {
 		t.execution_mode, t.execution_tool, COALESCE(t.work_dir, ''), COALESCE(t.project_uuid, '')
 		FROM gt_task_notifications n JOIN gt_tasks t ON t.uuid = n.task_uuid
 		LEFT JOIN gt_task_steps s ON s.uuid = n.task_step_uuid`
+	scopeSQL, args := taskScopeSQL(h.client(), "t")
+	query += " WHERE " + scopeSQL
 	if !includeArchived {
-		query += ` WHERE n.is_archived = 0`
+		query += " AND n.is_archived = 0"
 	}
 	query += ` ORDER BY n.created_at DESC`
 
-	rows, err := h.db().QueryContext(c.Request.Context(), query)
+	rows, err := h.db().QueryContext(c.Request.Context(), query, args...)
 	if err != nil {
 		i18n.LocalServerError(c, http.StatusInternalServerError, err)
 		return
@@ -128,4 +145,41 @@ func (h *NotificationsHandler) archiveTask(c *gin.Context) {
 		}
 	}
 	c.JSON(http.StatusOK, gin.H{"ok": true, "is_archived": body.IsArchived})
+}
+
+func (h *NotificationsHandler) requireScope() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		id := c.Param("task_uuid")
+		query := "SELECT COUNT(*) FROM gt_tasks t WHERE t.uuid=? AND "
+		if id == "" {
+			id = c.Param("uuid")
+			query = "SELECT COUNT(*) FROM gt_tasks t JOIN gt_task_notifications n ON n.task_uuid=t.uuid WHERE n.uuid=? AND "
+		}
+		if id == "" {
+			c.Next()
+			return
+		}
+		scopeSQL, args := taskScopeSQL(h.client(), "t")
+		var count int
+		err := h.db().QueryRowContext(c.Request.Context(), query+scopeSQL, append([]any{id}, args...)...).Scan(&count)
+		if err != nil {
+			i18n.LocalServerError(c, http.StatusInternalServerError, err)
+			c.Abort()
+			return
+		}
+		if count == 0 {
+			i18n.Error(c, http.StatusNotFound, "localserver_task_not_found", "task_not_found")
+			c.Abort()
+			return
+		}
+		c.Next()
+	}
+}
+
+// UnreadCount uses the same task scope as notification lists and mutations.
+func (h *NotificationsHandler) UnreadCount(ctx context.Context) (int, error) {
+	scopeSQL, args := taskScopeSQL(h.client(), "t")
+	var count int
+	err := h.db().QueryRowContext(ctx, "SELECT COUNT(*) FROM gt_task_notifications n JOIN gt_tasks t ON t.uuid=n.task_uuid WHERE n.is_archived=0 AND n.is_read=0 AND "+scopeSQL, args...).Scan(&count)
+	return count, err
 }

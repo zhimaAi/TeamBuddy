@@ -1,11 +1,12 @@
 <script setup lang="ts">
 import { ref, watch } from 'vue'
 import { message } from 'ant-design-vue'
-import type { UserInfo } from '@/api/types'
 import apiClient, { ApiError } from '@/api/client'
-import { useAppStore } from '@/stores/app'
 import { useAuthStore } from '@/stores/auth'
+import { useConversationStore } from '@/stores/conversation'
 import { useLastLogin } from '@/composables/useLastLogin'
+import { refreshSession } from '@/composables/useCloudSession'
+import { clearTaskFilesIndexCache } from '@/composables/useTaskFilesIndex'
 import LoginForm from './components/LoginForm.vue'
 import MyWorkView from './components/MyWorkView.vue'
 import { useAppI18n } from '@/i18n'
@@ -27,7 +28,6 @@ interface CloudLoginResponse {
 }
 
 const authStore = useAuthStore()
-const appStore = useAppStore()
 const configState = ref<CloudConfigState>('loading')
 const loginLoading = ref(false)
 const officialUrl = ref('')
@@ -52,26 +52,15 @@ async function handleLogin(form: {
   loginLoading.value = true
   try {
     const serverType = form.serverType === 'custom' ? 'custom' : 'official'
-    const response = await apiClient.post<CloudLoginResponse>('/auth/login', {
+    await apiClient.post<CloudLoginResponse>('/auth/login', {
       username: form.username,
       password: form.password,
       server_type: serverType,
       server_url: serverType === 'custom' ? form.serverUrl : officialUrl.value,
     })
-    const cloudUser = response.user || { id: '', username: form.username }
-    const userInfo: UserInfo = {
-      id: cloudUser.id || '',
-      username: cloudUser.username || form.username,
-      displayName:
-        cloudUser.display_name?.trim() || cloudUser.displayName?.trim() || undefined,
-      avatar: cloudUser.avatar,
-      role: cloudUser.role,
-    }
-
-    // Login credentials are stored by the backend in an HttpOnly Cookie; frontend state is only for current UI display.
-    authStore.setCloudAuth('local-session', userInfo)
-    authStore.setLocalSession(true)
-    appStore.setCloudStatus('online')
+    await refreshSession()
+    clearTaskFilesIndexCache()
+    void useConversationStore().loadConversations(true).catch(() => {})
     message.success(t('workbench.loginSuccess'))
 
     // Remember this login method and auto-select it and refill the custom domain next time.

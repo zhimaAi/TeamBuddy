@@ -758,7 +758,7 @@ import MarkdownPreview from '@/components/MarkdownPreview.vue'
 import TiptapMarkdownEditor from '@/components/TiptapMarkdownEditor.vue'
 import { useTaskImageAttachments } from '@/composables/useTaskImageAttachments'
 import closeIcon from '@/assets/icons/task-detail-close.svg'
-import directoryToggleIcon from '@/assets/icons/knowledge-directory-toggle.svg'
+import directoryToggleIcon from '@/assets/icons/common-sidebar-toggle.svg'
 import dateIcon from '@/assets/icons/task-detail-date.svg'
 import pipelineIcon from '@/assets/icons/task-detail-pipeline.svg'
 import priorityIcon from '@/assets/icons/task-detail-priority.svg'
@@ -767,6 +767,7 @@ import relatedProjectIcon from '@/assets/icons/task-detail-related-project.svg'
 import statusIcon from '@/assets/icons/task-detail-status.svg'
 import workDirIcon from '@/assets/icons/task-detail-work-dir.svg'
 import { selectDirectory } from '@/composables/useDesktop'
+import { vibeToolDisplayLabel, vibeToolLabelKey } from '@/composables/useVibeCoding'
 import { projectIconPreset } from '@/constants/project-icons'
 import { usePipelineStore } from '@/stores/pipeline'
 import type { LocalProject } from '@/types/project'
@@ -782,6 +783,7 @@ const props = defineProps<{
   task?: TaskWithDetails
   status: string
   renderedDescription: string
+  initialEditing?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -882,7 +884,8 @@ const childProjectOptions = computed(() =>
     .map((item) => ({ label: item.name, value: item.uuid })),
 )
 const pipelineDisplayName = computed(() => {
-  if (props.task?.execution_mode === 'vibe_coding') return 'Vibe Coding / Codex'
+  if (props.task?.execution_mode === 'cli') return t('workflows.task.common.directExecution')
+  if (props.task?.execution_mode === 'vibe_coding') return vibeToolDisplayLabel(props.task.execution_tool || '', t(vibeToolLabelKey(props.task.execution_tool || '')), props.task.execution_tool_name)
 	if (props.task?.execution_mode === 'expert_group') return props.task.expert_group_name_snapshot || t('agents.expertTeam')
   if (form.pipeline_uuid && editing.value) {
     return pipelines.value.find((item) => item.uuid === form.pipeline_uuid)?.name || t('workflows.task.detail.unassigned')
@@ -893,7 +896,9 @@ const projectChipLabel = computed(
   () => selectedProject.value?.name || props.task?.project_name || t('workflows.task.detail.project'),
 )
 const pipelineChipLabel = computed(
-  () => selectedPipeline.value?.name || props.task?.pipeline_name_snapshot || t('workflows.task.detail.pipeline'),
+  () => props.task?.execution_mode === 'cli'
+    ? pipelineDisplayName.value
+    : selectedPipeline.value?.name || props.task?.pipeline_name_snapshot || t('workflows.task.detail.pipeline'),
 )
 const allWorkDirs = computed(() => {
   const dirs = [
@@ -933,6 +938,7 @@ watch(
       return
     }
     syncFormFromTask()
+    if (props.initialEditing) void enterEdit()
   },
 )
 

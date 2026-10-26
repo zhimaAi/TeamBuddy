@@ -12,6 +12,8 @@ const { registerDialogIPC } = require('./ipc/dialog.cjs')
 const { registerApiTokenIPC } = require('./ipc/api-token.cjs')
 const { registerBrowserLoginIPC, notifyBrowserLoginResult } = require('./ipc/browser-login.cjs')
 const { registerCodexIPC } = require('./ipc/codex.cjs')
+const { resolveQoderBackend } = require('./qoder-backend.cjs')
+const { registerQoderIDEIPC } = require('./ipc/qoder-ide.cjs')
 const { registerVibeCliIPC } = require('./ipc/vibe-cli.cjs')
 const { mcpBackendPath } = require('./vibe-mcp/codex-cli.cjs')
 const { registerTaskNotificationIPC } = require('./ipc/notification.cjs')
@@ -49,6 +51,7 @@ let removeApiTokenIPC = null
 let removeBrowserLoginIPC = null
 let removeCodexIPC = null
 let removeVibeCliIPC = null
+let removeQoderIDEIPC = null
 let removeTaskNotificationIPC = null
 let removeTrayIPC = null
 let removeUpdateIPC = null
@@ -305,7 +308,7 @@ async function startApplication() {
   if (quitting) return
   const created = createMainWindow(backendConnection)
   trackMainWindow(created.win)
-  removeIPC = registerDialogIPC(created.allowedOrigins)
+  removeIPC = registerDialogIPC(created.allowedOrigins, () => backendConnection)
   removeApiTokenIPC = registerApiTokenIPC(created.allowedOrigins, backendConnection.apiToken)
   removeBrowserLoginIPC = registerBrowserLoginIPC(created.allowedOrigins, () => backendConnection)
   removeCodexIPC = registerCodexIPC(created.allowedOrigins)
@@ -316,6 +319,16 @@ async function startApplication() {
       repoRoot,
       platform: process.platform,
     }).command),
+  })
+  removeQoderIDEIPC = registerQoderIDEIPC(created.allowedOrigins, {
+    backendPath: signal => resolveQoderBackend({
+      isPackaged: app.isPackaged,
+      resourcesPath: process.resourcesPath,
+      repoRoot,
+      stateRoot: app.getPath('userData'),
+      platform: process.platform,
+      signal,
+    }),
   })
   removeTaskNotificationIPC = registerTaskNotificationIPC(created.allowedOrigins, {
     getMainWindow: () => mainWindow,
@@ -369,6 +382,7 @@ if (!singleInstance) {
     removeBrowserLoginIPC?.()
     removeCodexIPC?.()
     removeVibeCliIPC?.()
+    removeQoderIDEIPC?.()
     removeTaskNotificationIPC?.()
     removeTrayIPC?.()
     removeUpdateIPC?.()

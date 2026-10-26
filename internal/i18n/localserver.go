@@ -72,6 +72,8 @@ func Key(err error) (string, string) {
 		return "localserver_expert_group_invalid", "expert_group_invalid"
 	case errors.Is(err, taskruntime.ErrNotFound):
 		return "localserver_task_not_found", "task_not_found"
+	case errors.Is(err, taskruntime.ErrVibeModelInvalid):
+		return "localserver_vibe_model_invalid", "vibe_model_invalid"
 	case errors.Is(err, taskruntime.ErrExecutionModeConflict):
 		return "localserver_execution_mode_conflict", "execution_mode_conflict"
 	case errors.Is(err, taskruntime.ErrExecutionModeUnsupported):

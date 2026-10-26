@@ -1,9 +1,10 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
+import { useRoute, useRouter, type RouteLocationNormalizedLoaded } from 'vue-router'
 import { notification } from 'ant-design-vue'
 import apiClient from '@/api/client'
 import { useAppStore } from '@/stores/app'
+import { useAuthStore } from '@/stores/auth'
 import { useConversationStore } from '@/stores/conversation'
 import { removeDeletedTaskFromCache } from '@/utils/taskConversationCache'
 import {
@@ -19,12 +20,13 @@ import { provideDocumentTitle } from '@/composables/useDocumentTitle'
 import { useAppI18n } from '@/i18n'
 import type { TaskWithDetails } from '@/types/task-detail'
 import type { TaskNotification } from '@/types/pipeline'
-import sidebarToggleLight from '@/assets/icons/sidebar-toggle-light.svg'
+import sidebarToggleIcon from '@/assets/icons/common-sidebar-toggle.svg'
 import AppSidebar from './components/AppSidebar.vue'
 
 const route = useRoute()
 const router = useRouter()
 const appStore = useAppStore()
+const authStore = useAuthStore()
 const conversationStore = useConversationStore()
 const isMacDesktop = isMacDesktopRuntime()
 const isWindowsDesktop = isWindowsDesktopRuntime()
@@ -46,6 +48,12 @@ const currentMenuTitle = computed(() =>
       : undefined,
 )
 provideDocumentTitle(currentMenuTitle)
+
+function routeViewKey(currentRoute: RouteLocationNormalizedLoaded) {
+  const key = currentRoute.name ?? currentRoute.path
+  const hasTaskState = currentRoute.meta.menu === 'tasks' || currentRoute.params.taskUuid !== undefined
+  return hasTaskState ? `${String(key)}:${authStore.cloudUser?.sessionGeneration || 'local'}` : key
+}
 
 const mainContentClasses = computed(() => {
   const layout = route.meta.contentLayout ?? 'default'
@@ -229,7 +237,7 @@ onUnmounted(() => {
           @click="appStore.setSidebarCollapsed(false)"
         >
           <img
-            :src="sidebarToggleLight"
+            :src="sidebarToggleIcon"
             alt=""
             class="expand-icon"
           />
@@ -260,7 +268,7 @@ onUnmounted(() => {
           <component
             :is="Component"
             v-if="!currentRoute.meta.keepAlive"
-            :key="currentRoute.name ?? currentRoute.path"
+            :key="routeViewKey(currentRoute)"
           />
         </RouterView>
       </main>
@@ -343,8 +351,9 @@ onUnmounted(() => {
 }
 
 .expand-icon {
-  width: 16px;
-  height: 16px;
+  display: block;
+  width: 20px;
+  height: 20px;
   transform: rotate(180deg);
 }
 

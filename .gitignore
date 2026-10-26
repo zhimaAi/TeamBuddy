@@ -25,3 +25,5 @@ node_modules/
 
 .esbuild-tmp/
 
+# Qoder 本机配置
+/.qoder/

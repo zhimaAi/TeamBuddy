@@ -3,66 +3,64 @@
     class="step-strip scrollbar--subtle"
     :aria-label="t('workflows.task.progress.orchestrationSteps')"
   >
-    <template
+    <Tooltip
       v-for="(step, stepIndex) in steps"
       :key="step.uuid"
+      :title="stepTooltip(step)"
+      :mouse-enter-delay="0"
+      :trigger="['hover', 'focus']"
     >
-      <span
-        v-if="stepIndex > 0"
-        class="step-link"
-        :class="{ done: stepIndex <= currentStepIndex }"
-        aria-hidden="true"
-        ><ArrowRightOutlined
-      /></span>
-      <button
-        type="button"
-        class="step-card"
-        :class="[`step-card--${stepState(step)}`, { selected: selectedStepUuid === step.uuid }]"
-        :disabled="readOnly"
-        @click="emit('select', step.uuid)"
-      >
-        <span
-          class="step-avatar-wrap"
-          :class="{ spinning: stepState(step) === 'process' }"
+      <span class="step-tooltip-trigger">
+        <button
+          type="button"
+          class="step-card"
+          :aria-label="stepTooltip(step)"
+          :aria-pressed="selectedStepUuid === step.uuid"
+          :aria-current="step.uuid === currentStepUuid ? 'step' : undefined"
+          :class="[`step-card--${stepState(step)}`, { selected: selectedStepUuid === step.uuid }]"
+          :disabled="readOnly"
+          @click="emit('select', step.uuid)"
         >
           <span
-            class="step-avatar has-image"
+            class="step-avatar-wrap"
+            :class="{ spinning: stepState(step) === 'process' }"
           >
-            <img
-              :src="resolveAgentAvatar(step, stepIndex)"
-              alt=""
-            />
+            <span
+              class="step-avatar has-image"
+            >
+              <img
+                :src="resolveAgentAvatar(step, stepIndex)"
+                alt=""
+              />
+            </span>
+            <span class="step-state-marker" :class="`marker-${stepState(step)}`" aria-hidden="true"><CheckOutlined v-if="stepState(step) === 'finish'" /><CloseOutlined v-else-if="stepState(step) === 'error'" /><LoadingOutlined v-else-if="stepState(step) === 'process'" spin /><MinusOutlined v-else /></span>
           </span>
-        </span>
-        <span class="step-copy">{{ step.name }}</span>
-        <span
-          v-if="step.status === 'completed'"
-          class="step-finish-marker"
-          aria-hidden="true"
-          ><CheckOutlined
-        /></span>
-      </button>
-    </template>
+          <span class="step-copy">{{ step.name }}</span>
+        </button>
+      </span>
+    </Tooltip>
   </nav>
 </template>
 
 <script setup lang="ts">
-import { ArrowRightOutlined, CheckOutlined } from '@ant-design/icons-vue'
+import {CheckOutlined, CloseOutlined, LoadingOutlined, MinusOutlined } from '@ant-design/icons-vue'
+import { Tooltip } from 'ant-design-vue'
 import { resolveAgentAvatar } from '@/config/agentAvatars'
 import type { PipelineStep } from '@/types/pipeline'
 import { useAppI18n } from '@/i18n'
 
 const { t } = useAppI18n()
 
-const props = withDefaults(
+withDefaults(
   defineProps<{
     steps: PipelineStep[]
     currentStepIndex: number
     currentStepUuid: string
     selectedStepUuid: string
     readOnly?: boolean
+    showArrows?: boolean
   }>(),
-  { readOnly: false },
+  { readOnly: false, showArrows: true },
 )
 
 const emit = defineEmits<{
@@ -70,179 +68,40 @@ const emit = defineEmits<{
 }>()
 
 function stepState(step: PipelineStep) {
+  if (step.execution_status === 'created' || step.execution_status === 'running') return 'process'
   if (step.status === 'completed') return 'finish'
-  if (
-    step.uuid === props.currentStepUuid &&
-    step.execution_status &&
-    step.execution_status !== 'idle'
-  ) {
-    return step.execution_status === 'failed' ? 'error' : 'process'
-  }
+  if (step.execution_status === 'failed') return 'error'
   return 'wait'
 }
+
+function stepTooltip(step: PipelineStep) {
+  const status = step.execution_status && step.execution_status !== 'idle'
+    ? step.execution_status
+    : step.status === 'completed' ? 'success' : 'waiting'
+  return `${step.name} · ${t(`workflows.task.execution.${status}`)}`
+}
+
 </script>
 
 <style scoped>
-.step-strip {
-  display: flex;
-  gap: 12px;
-  align-items: center;
-  overflow-x: auto;
-  overflow-y: hidden;
-  padding: 0;
-}
-.step-card {
-  position: relative;
-  display: flex;
-  box-sizing: border-box;
-  width: 155px;
-  height: 40px;
-  flex: 0 0 auto;
-  align-items: center;
-  gap: 8px;
-  padding: 6px 12px;
-  border: 1px solid transparent;
-  border-radius: 6px;
-  color: #262626;
-  background: #f0f0f0;
-  cursor: pointer;
-  text-align: left;
-  transition:
-    background 0.15s,
-    color 0.15s;
-}
-.step-card:not(:disabled):hover {
-  border-color: var(--02, #262626);
-  background: #e5e7eb;
-}
-.step-card.selected {
-  color: #fff;
-  background: #8c8c8c;
-}
-.step-card.selected:not(:disabled):hover {
-  background: #262626;
-}
-.step-card:disabled {
-  cursor: default;
-  opacity: 1;
-}
-.step-card--finish .step-avatar {
-  background: #22c55e;
-}
-.step-card--error .step-avatar {
-  background: #ef4444;
-}
-.step-card--process .step-avatar {
-  background: #3157e2;
-}
-.step-card.selected .step-avatar {
-  background: #fff;
-  color: #262626;
-}
-.step-card--wait .step-avatar {
-  opacity: 0.4;
-}
-.step-card--wait .step-copy {
-  opacity: 0.8;
-}
-.step-avatar-wrap {
-  position: relative;
-  display: flex;
-  flex: 0 0 auto;
-}
-/* 进行中：头像外叠双圆环（底环+旋转弧），对应设计稿“进行中”步骤态 */
-.step-avatar-wrap.spinning::before {
-  content: '';
-  position: absolute;
-  inset: -3px;
-  border: 1.5px solid #e4e6eb;
-  border-radius: 50%;
-}
-.step-avatar-wrap.spinning::after {
-  content: '';
-  position: absolute;
-  inset: -3px;
-  border: 1.5px solid transparent;
-  border-top-color: #8c8c8c;
-  border-radius: 50%;
-  animation: step-avatar-spin 1s linear infinite;
-}
-@keyframes step-avatar-spin {
-  to {
-    transform: rotate(360deg);
-  }
-}
-.step-avatar {
-  display: flex;
-  overflow: hidden;
-  flex: 0 0 auto;
-  align-items: center;
-  justify-content: center;
-  width: 28px;
-  height: 28px;
-  border-radius: 50%;
-  color: #fff;
-  background: #9ca3af;
-  font-size: 11px;
-  font-weight: 600;
-}
-.step-avatar.has-image {
-  border: 1px solid #fff;
-  box-sizing: border-box;
-}
-.step-avatar img {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-}
-.step-copy {
-  display: block;
-  width: 86px;
-  flex: 0 1 86px;
-  overflow: hidden;
-}
-.step-copy strong {
-  display: block;
-  overflow: hidden;
-  color: inherit;
-  font-size: 14px;
-  font-weight: 400;
-  line-height: 22px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.step-card.selected .step-copy strong {
-  color: #fff;
-  font-weight: 600;
-}
-.step-finish-marker {
-  position: absolute;
-  top: 0;
-  left: 0;
-  display: inline-flex;
-  width: 12px;
-  height: 12px;
-  align-items: center;
-  justify-content: center;
-  border-radius: 50%;
-  color: #fff;
-  background: #595959;
-  font-size: 8px;
-  line-height: 1;
-}
-.step-link {
-  display: inline-flex;
-  flex: 0 0 auto;
-  align-items: center;
-  justify-content: center;
-  width: 24px;
-  height: 40px;
-  color: #d9d9d9;
-}
-.step-link.done {
-  color: #d9d9d9;
-}
-.step-link .anticon {
-  font-size: 16px;
-}
+.step-strip { display: flex; align-items: flex-start; gap: 4px; overflow-x: auto; overflow-y: hidden; padding: 4px 0; }
+.step-tooltip-trigger { display: inline-flex; flex: 0 0 auto; }
+.step-card { display: flex; width: 96px; min-height: 64px; flex: 0 0 auto; flex-direction: column; align-items: center; gap: 4px; padding: 6px 4px; border: 1px solid transparent; border-radius: 12px; color: #595959; background: transparent; cursor: pointer; }
+.step-card:not(:disabled):hover { background: #f0f0f0; }
+.step-card.selected { color: #3157e2; background: #e5efff; }
+.step-card.selected:not(:disabled):hover { border-color: #3157e2; background: #e5efff; }
+.step-card:disabled { cursor: default; pointer-events: none; }
+.step-card:focus-visible { outline: 2px solid #3157e2; outline-offset: -2px; }
+.step-avatar-wrap { position: relative; display: flex; flex: 0 0 auto; }
+.step-avatar { display: flex; overflow: hidden; width: 28px; height: 28px; border-radius: 50%; background: #f0f0f0; }
+.step-avatar img { width: 100%; height: 100%; object-fit: cover; }
+.step-state-marker { position: absolute; right: -2px; bottom: -2px; display: flex; width: 14px; height: 14px; align-items: center; justify-content: center; border: 1px solid #fff; border-radius: 50%; color: #fff; background: #bfbfbf; font-size: 8px; }
+.marker-finish { background: #16a34a; }
+.marker-process { background: #3157e2; }
+.marker-error { background: #fb363f; }
+.step-copy { overflow: hidden; max-width: 100%; font-size: 12px; line-height: 20px; text-overflow: ellipsis; white-space: nowrap; }
+.step-card.selected .step-copy { font-weight: 600; }
+.step-link { display: inline-flex; width: 16px; height: 16px; flex: 0 0 auto; align-items: center; justify-content: center; margin-top: 12px; color: #d9d9d9; font-size: 12px; }
+.step-avatar-wrap.spinning { border-radius: 50%; outline: 1px solid #3157e2; outline-offset: 2px; }
+@media (prefers-reduced-motion: reduce) { .step-state-marker :deep(.anticon-spin) { animation: none; } }
 </style>

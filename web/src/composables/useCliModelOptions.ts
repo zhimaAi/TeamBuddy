@@ -2,7 +2,7 @@ import { computed, ref } from 'vue'
 import apiClient from '@/api/client'
 import type { DiscoveredCLI } from '@/views/agents/components/agentPipeline'
 
-export function useCliModelOptions() {
+export function useCliModelOptions(retainModelsOnEmpty = true) {
   const cliOptions = ref<DiscoveredCLI[]>([])
   const modelOptions = ref<string[]>([])
   const modelCache = ref<Record<string, string[]>>({})
@@ -63,7 +63,8 @@ export function useCliModelOptions() {
           refresh,
         })
         if (generation !== (modelGenerations.get(cliType) || 0)) return modelCache.value[cliType] || []
-        const nextModels = result.models?.length ? result.models : modelCache.value[cliType] || []
+        const nextModels = result.models?.length ? result.models
+          : retainModelsOnEmpty ? modelCache.value[cliType] || [] : []
         modelCache.value = { ...modelCache.value, [cliType]: nextModels }
         return nextModels
       } catch (error) {

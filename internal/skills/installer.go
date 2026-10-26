@@ -14,9 +14,9 @@ import (
 )
 
 const (
-	TaskSkillName = "teamsboard"
-	// S-BE005, DA-003: ImBotCLISkillName 是 teamsboard-im-bot-cli 内置 Skill 的名称
-	ImBotCLISkillName                = "teamsboard-im-bot-cli"
+	TaskSkillName = "teambuddy"
+	// S-BE005, DA-003: ImBotCLISkillName 是 teambuddy-im-bot-cli 内置 Skill 的名称
+	ImBotCLISkillName                = "teambuddy-im-bot-cli"
 	CapabilityReasonNotManaged       = "skill_not_managed"
 	CapabilityReasonInstallationFail = "skill_install_failed"
 	managedMarker                    = ".goteams-managed.json"
@@ -37,7 +37,7 @@ type managedMetadata struct {
 // never traverses or changes sibling directories below the skill root.
 // A skill root that is a symlink is resolved once to a real directory inside
 // the user home; later writes use that path, so replacing the original link
-// cannot redirect the install. The teamsboard directory itself must still be
+// cannot redirect the install. The teambuddy directory itself must still be
 // a real directory.
 func InstallBuiltin(sourceFS fs.FS, targetRoot string) error {
 	root, err := writableSkillRoot(targetRoot)
@@ -298,8 +298,8 @@ func digestEntries(entries map[string][]byte) string {
 	return hex.EncodeToString(hash.Sum(nil))
 }
 
-// S-BE005, DA-003: InstallImBotCLISkill 安装 teamsboard-im-bot-cli 内置 Skill
-// 复用 InstallBuiltin 的机制，将 teamsboard-im-bot-cli 目录复制到用户 skill 目录
+// S-BE005, DA-003: InstallImBotCLISkill 安装 teambuddy-im-bot-cli 内置 Skill
+// 复用 InstallBuiltin 的机制，将 teambuddy-im-bot-cli 目录复制到用户 skill 目录
 func InstallImBotCLISkill(sourceFS fs.FS, targetRoot string) error {
 	root, err := writableSkillRoot(targetRoot)
 	if err != nil {

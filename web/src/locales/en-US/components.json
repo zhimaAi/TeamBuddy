@@ -30,6 +30,9 @@
     "empty": "No Markdown content",
     "attachmentLoadFailed": "Attachment failed to load",
     "attachmentDownloadFailed": "Attachment download failed",
+    "revealInFolder": "Show in folder",
+    "revealFailed": "Unable to show this file in its folder",
+    "revealUseDesktop": "The file path was copied. Opening a local folder is unavailable here. Use the TeamBuddy desktop app.",
     "uploadUnavailable": "Image uploads are not enabled for this editor",
     "uploadFailed": "Failed to paste image",
     "placeholder": "Add a description…",
@@ -80,7 +83,10 @@
     "delete": "Delete",
     "deleteBlockTitle": "Delete this paragraph?",
     "deleteBlockDescription": "This action removes the current paragraph from the document.",
-    "blockOperationFailed": "Unable to locate this paragraph. Select it again and retry."
+    "blockOperationFailed": "Unable to locate this paragraph. Select it again and retry.",
+    "customColor": "Custom color",
+    "colorHex": "Color (HEX)",
+    "resetTextColor": "Default"
   },
   "placeholder": {
     "developing": "{title} is under development"

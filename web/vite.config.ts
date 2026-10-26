@@ -108,7 +108,7 @@ function localBackendProxyPlugin(resolveTarget: () => string | null): Plugin {
           return
         }
         const target = resolveTarget()
-        console.log('[proxy] 请求到达 ' + req.method + ' ' + req.url + ' target=' + target)
+        //console.log('[proxy] 请求到达 ' + req.method + ' ' + req.url + ' target=' + target)
         if (!target) return writeProxyError(res, null)
         let targetUrl: URL
         try {

@@ -9,6 +9,8 @@ export interface CreateTaskDefaults {
   execution_tool: string
   model_name: string
   expert_group_uuid: string
+  /** 是否同步 Agent 产出（团队任务配置里的勾选项）；默认开启并记住上次选择 */
+  sync_agent_output: boolean
 }
 
 const STORAGE_KEY = 'goteams.createTask.lastDefaults'
@@ -23,6 +25,7 @@ function emptyDefaults(): CreateTaskDefaults {
     execution_tool: '',
     model_name: '',
     expert_group_uuid: '',
+    sync_agent_output: true,
   }
 }
 
@@ -54,6 +57,9 @@ export function useCreateTaskDefaults() {
         model_name: typeof parsed.model_name === 'string' ? parsed.model_name : '',
         expert_group_uuid:
           typeof parsed.expert_group_uuid === 'string' ? parsed.expert_group_uuid : '',
+        // 未记录过选择时默认勾选，与产品默认值保持一致
+        sync_agent_output:
+          typeof parsed.sync_agent_output === 'boolean' ? parsed.sync_agent_output : true,
       }
     } catch {
       return emptyDefaults()
@@ -73,6 +79,7 @@ export function useCreateTaskDefaults() {
           execution_tool: defaults.execution_tool || '',
           model_name: defaults.model_name || '',
           expert_group_uuid: defaults.expert_group_uuid || '',
+          sync_agent_output: defaults.sync_agent_output !== false,
         }),
       )
     } catch {

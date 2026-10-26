@@ -225,8 +225,7 @@ async function load(showError = true) {
 async function loadPipeline(uuid: string, showError = true) {
   selectedUuid.value = uuid
   try {
-    const detail = await apiClient.get<Pipeline>(`/pipelines/${uuid}`)
-    pipelineStore.upsertPipeline(detail)
+    await pipelineStore.loadPipeline(uuid)
   } catch (error) {
     if (showError) message.error(error instanceof Error ? error.message : t('agents.detailLoadFailed'))
   }
@@ -424,18 +423,21 @@ onDeactivated(() => {
   editingStep.value = undefined
 })
 
-// 登出后立即从列表移除团队同步的流水线；重新登录后重新同步恢复
+// 本地资源保留；账号变化后校准选中项，停用页面由激活钩子刷新。
 watch(
-  () => authStore.cloudLoggedIn,
-  (loggedIn) => {
+  () => authStore.cloudUser?.sessionGeneration || authStore.cloudUser?.accountScope || '',
+  () => {
     if (!isActiveAgentRoute()) return
-    if (loggedIn) {
-      void syncCloudPipelines(false)
-      return
-    }
     if (!pipelines.value.some((item) => item.uuid === selectedUuid.value)) {
       selectedUuid.value = pipelines.value[0]?.uuid || ''
-      if (selectedUuid.value) void loadPipeline(selectedUuid.value, false)
+    }
+    if (!expertGroups.value.some((item) => item.uuid === selectedExpertUuid.value)) {
+      selectedExpertUuid.value = expertGroups.value[0]?.uuid || ''
+    }
+    if (authStore.cloudLoggedIn) {
+      void syncCloudPipelines(false)
+    } else {
+      void load(false)
     }
   },
 )

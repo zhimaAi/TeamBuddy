@@ -15,6 +15,7 @@ import (
 
 	"goteams-client/internal/applog"
 	"goteams-client/internal/cloud"
+	"goteams-client/internal/pipeline"
 )
 
 // Pusher serializes capture and delivery for each task. Snapshots, revisions and
@@ -34,6 +35,37 @@ var defaultPusher = NewPusher()
 func DefaultPusher() *Pusher { return defaultPusher }
 
 func (p *Pusher) PushTaskSync(ctx context.Context, db *sql.DB, client *cloud.Client, taskUUID string) error {
+	return p.pushTaskSync(ctx, db, client, taskUUID, false)
+}
+
+// RetryTaskSync 手动重报一个任务：先清掉退避等待，再强制推进 revision 推一次。
+// 不清退避时，失败后的 next_attempt_at 会让手动点击没有任何效果；不强制推进
+// revision 时，内容哈希未变会被 CaptureTaskExecution 直接短路，同样没有上报动作。
+func (p *Pusher) RetryTaskSync(ctx context.Context, db *sql.DB, client *cloud.Client, taskUUID string) error {
+	if db == nil || client == nil || client.UserID() == "" {
+		return fmt.Errorf("云端账号未就绪，无法上报")
+	}
+	// 先接管空归属的历史任务，再判断归属：否则这类任务会被直接拒绝，连重报都做不到。
+	if err := adoptTaskOwner(ctx, db, client, taskUUID); err != nil {
+		return err
+	}
+	owned, err := ownsTask(ctx, db, client, taskUUID)
+	if err != nil {
+		return err
+	}
+	if !owned {
+		return fmt.Errorf("该任务不属于当前登录的云端账号（cloud_source_key 或 cloud_user_id 与云端地址不匹配），无法上报")
+	}
+	primary, alternate := pipeline.CloudSourceKeys(client.BaseURL())
+	if _, err = db.ExecContext(ctx, `UPDATE gt_cloud_sync_outbox SET next_attempt_at=0
+		WHERE task_uuid=? AND cloud_source_key IN (?, ?) AND cloud_user_id=?`,
+		taskUUID, primary, alternate, client.UserID()); err != nil {
+		return err
+	}
+	return p.pushTaskSync(ctx, db, client, taskUUID, true)
+}
+
+func (p *Pusher) pushTaskSync(ctx context.Context, db *sql.DB, client *cloud.Client, taskUUID string, force bool) error {
 	if db == nil || client == nil || client.UserID() == "" {
 		return fmt.Errorf("cloud account is not ready")
 	}
@@ -45,12 +77,15 @@ func (p *Pusher) PushTaskSync(ctx context.Context, db *sql.DB, client *cloud.Cli
 		return ctx.Err()
 	}
 	defer func() { <-lock }()
+	if err := adoptTaskOwner(ctx, db, client, taskUUID); err != nil {
+		return err
+	}
 	owned, err := ownsTask(ctx, db, client, taskUUID)
 	if err != nil {
 		return err
 	}
 	if owned {
-		if err = CaptureTaskExecution(ctx, db, taskUUID); err != nil {
+		if err = captureTaskExecution(ctx, db, taskUUID, force); err != nil {
 			return err
 		}
 	}
@@ -288,12 +323,14 @@ func loadTaskSteps(ctx context.Context, db syncQueryer, taskUUID string) ([]clou
 // cloudStepStatus maps the local step lifecycle to the cloud step status vocabulary
 // (pending/running/success/failed/stopped/idle).
 func cloudStepStatus(status, execStatus string) string {
+	// 用户已确认完成的步骤按业务完成态上报；失败、停止等原始执行结果仍保留在会话中。
+	if status == "completed" {
+		return "success"
+	}
 	if execStatus != "" && execStatus != "idle" {
 		return execStatus
 	}
 	switch status {
-	case "completed":
-		return "success"
 	case "active":
 		return "running"
 	case "pending":

@@ -1,6 +1,8 @@
 /** * API request encapsulation * baseURL: /api/local */
 
 import { getApiToken, invalidateApiToken } from './token'
+import { getActivePinia } from 'pinia'
+import { useAuthStore } from '@/stores/auth'
 import { getCurrentLocale, t, type AppLocale } from '@/i18n'
 
 const BASE_URL = import.meta.env.VITE_API_BASE_URL || '/api/local'
@@ -10,6 +12,7 @@ export interface RequestOptions {
   body?: unknown
   headers?: Record<string, string>
   params?: Record<string, string | number | boolean | undefined>
+  signal?: AbortSignal
 }
 
 export interface ApiResponse<T = unknown> {
@@ -30,6 +33,12 @@ export interface ApiFeedback {
 type ApiFeedbackHandler = (feedback: ApiFeedback) => void
 
 let apiFeedbackHandler: ApiFeedbackHandler | undefined
+let accountScopeChangedHandler: (() => Promise<void>) | undefined
+let accountScopeRecovery: Promise<void> | undefined
+
+export function setAccountScopeChangedHandler(handler: () => Promise<void>) {
+  accountScopeChangedHandler = handler
+}
 
 export function setApiFeedbackHandler(handler?: ApiFeedbackHandler) {
   apiFeedbackHandler = handler
@@ -82,7 +91,7 @@ function getLanguageContext(response: Response, requestLocale: AppLocale) {
 
 function readRecord(value: unknown): Record<string, unknown> | undefined {
   return typeof value === 'object' && value !== null
-    ? value as Record<string, unknown>
+    ? (value as Record<string, unknown>)
     : undefined
 }
 
@@ -94,19 +103,14 @@ function readCode(value: unknown): number | string | undefined {
   return typeof value === 'number' || typeof value === 'string' ? value : undefined
 }
 
-function emitWarning(
-  warning: unknown,
-  language: ReturnType<typeof getLanguageContext>,
-) {
+function emitWarning(warning: unknown, language: ReturnType<typeof getLanguageContext>) {
   const message = readMessage(warning)
   if (!message || !apiFeedbackHandler) return
 
   try {
     apiFeedbackHandler({
       kind: 'warning',
-      message: language.staleLocale
-        ? t('common.feedback.completedAfterLanguageChange')
-        : message,
+      message: language.staleLocale ? t('common.feedback.completedAfterLanguageChange') : message,
       ...language,
     })
   } catch {
@@ -149,17 +153,44 @@ function buildUrl(path: string, params?: RequestOptions['params']): string {
   return qs ? `${url}?${qs}` : url
 }
 
+// Capture before awaiting token discovery: a delayed request must not silently
+// become an operation on the account selected in the meantime.
+function accountRequestHeaders(): Record<string, string> {
+  if (!getActivePinia()) return {}
+  const user = useAuthStore().cloudUser
+  return {
+    'X-GoTeams-Account-Scope': user?.accountScope || 'local',
+    'X-GoTeams-Session-Generation': user?.sessionGeneration || 'local',
+  }
+}
+
+// 只恢复仍与失败请求同代的窗口；迟到错误不能覆盖用户刚完成的新登录。
+async function recoverAccountScope(error: ApiError, headers: Record<string, string>) {
+  if (error.status !== 409 || error.code !== 'account_scope_changed' || !accountScopeChangedHandler) return
+  const current = accountRequestHeaders()
+  if (headers['X-GoTeams-Account-Scope'] !== current['X-GoTeams-Account-Scope'] ||
+      headers['X-GoTeams-Session-Generation'] !== current['X-GoTeams-Session-Generation']) return
+  if (!accountScopeRecovery) {
+    accountScopeRecovery = accountScopeChangedHandler().catch(() => {
+      // 恢复失败仍返回原业务错误，下次范围冲突可以重新探测。
+    }).finally(() => { accountScopeRecovery = undefined })
+  }
+  await accountScopeRecovery
+}
+
 export async function request<T = unknown>(
   path: string,
   options: RequestOptions = {},
 ): Promise<T> {
-  const { method = 'GET', body, headers = {}, params } = options
+  const { method = 'GET', body, headers = {}, params, signal } = options
 
   const url = buildUrl(path, params)
   console.log('[api] ' + method + ' ' + url)
 
+  // 页面可先挂载，但业务请求须等首次握手完成，不能把未知身份当成本地账号。
+  if (!path.startsWith('/auth/') && getActivePinia() && !useAuthStore().sessionReady) await useAuthStore().waitForSessionReady()
   const isFormData = body instanceof FormData
-  const finalHeaders: Record<string, string> = { ...headers }
+  const finalHeaders: Record<string, string> = { ...headers, ...accountRequestHeaders() }
   if (!isFormData) finalHeaders['Content-Type'] = 'application/json'
   // /auth/* 是后端放行的握手/登录入口，不携带 token，避免引导请求依赖 token 就绪
   const needsToken = !path.startsWith('/auth/')
@@ -175,13 +206,16 @@ export async function request<T = unknown>(
     headers: finalHeaders,
     body: body ? (isFormData ? body : JSON.stringify(body)) : undefined,
     credentials: 'same-origin',
+    signal,
     // 会话接口必须拿到实时状态；Electron 磁盘缓存曾缓存过本地后端的过期响应
     //（如 index.html），命中后请求根本不发出，导致登录态判断永远错误。
     cache: 'no-store',
   })
 
   if (!response.ok) {
-    throw await createApiError(response, requestLocale)
+    const error = await createApiError(response, requestLocale)
+    await recoverAccountScope(error, finalHeaders)
+    throw error
   }
 
   const contentType = response.headers.get('content-type') || ''
@@ -214,7 +248,8 @@ export async function request<T = unknown>(
 
 async function requestBlob(path: string, params?: RequestOptions['params']): Promise<Blob> {
   const url = buildUrl(path, params)
-  const headers: Record<string, string> = {}
+  if (getActivePinia() && !useAuthStore().sessionReady) await useAuthStore().waitForSessionReady()
+  const headers: Record<string, string> = accountRequestHeaders()
   const token = await getApiToken()
   if (token) headers['X-GoTeams-Api-Token'] = token
   const requestLocale = getCurrentLocale()
@@ -226,16 +261,15 @@ async function requestBlob(path: string, params?: RequestOptions['params']): Pro
     cache: 'no-store',
   })
   if (!response.ok) {
-    throw await createApiError(response, requestLocale)
+    const error = await createApiError(response, requestLocale)
+    await recoverAccountScope(error, headers)
+    throw error
   }
   return response.blob()
 }
 
 // 后端重启后 token 会失效（dev 模式常见）：收到 403 时清除缓存、重取 token 并重试一次。
-async function fetchWithTokenRetry(
-  url: string,
-  init: RequestInit,
-): Promise<Response> {
+async function fetchWithTokenRetry(url: string, init: RequestInit): Promise<Response> {
   let response = await fetch(url, init)
   const sentToken = (init.headers as Record<string, string>)['X-GoTeams-Api-Token']
   if (response.status !== 403 || !sentToken) return response
@@ -251,16 +285,14 @@ async function fetchWithTokenRetry(
 }
 
 export const apiClient = {
-  get: <T = unknown>(path: string, params?: RequestOptions['params']) =>
-    request<T>(path, { method: 'GET', params }),
+  get: <T = unknown>(path: string, params?: RequestOptions['params'], signal?: AbortSignal) =>
+    request<T>(path, { method: 'GET', params, signal }),
 
   getBlob: (path: string, params?: RequestOptions['params']) => requestBlob(path, params),
 
-  post: <T = unknown>(path: string, body?: unknown) =>
-    request<T>(path, { method: 'POST', body }),
+  post: <T = unknown>(path: string, body?: unknown) => request<T>(path, { method: 'POST', body }),
 
-  put: <T = unknown>(path: string, body?: unknown) =>
-    request<T>(path, { method: 'PUT', body }),
+  put: <T = unknown>(path: string, body?: unknown) => request<T>(path, { method: 'PUT', body }),
 
   delete: <T = unknown>(path: string, body?: unknown) =>
     request<T>(path, { method: 'DELETE', body }),

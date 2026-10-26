@@ -1,7 +1,8 @@
 <script setup lang="ts">
+import { showVibeToolOpenResult } from '@/composables/useVibeToolFeedback'
 import { computed, nextTick, onUnmounted, reactive, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
-import { message } from 'ant-design-vue'
+import { ConfigProvider, message } from 'ant-design-vue'
 import {
   AppstoreOutlined,
   CalendarOutlined,
@@ -17,15 +18,16 @@ import {
 } from '@ant-design/icons-vue'
 import apiClient from '@/api/client'
 import { useContentFullscreen } from '@/composables/useContentFullscreen'
-import MarkdownEditor from '@/components/MarkdownEditor.vue'
+import TaskDescriptionEditor from '@/components/TaskDescriptionEditor.vue'
 import AssignExecutionModeModal, {
   type ExecutionModeSelection,
 } from '@/components/AssignExecutionModeModal.vue'
 import { useCreateTaskDefaults } from '@/composables/useCreateTaskDefaults'
 import { useCliKickoffNavigation } from '@/composables/useCliKickoff'
 import { isDesktopRuntime, selectDirectory } from '@/composables/useDesktop'
-import { openTaskInCodex } from '@/composables/useTaskCodex'
-import { isVibeCodingTool, vibeToolLabelKey, vibeToolLogo } from '@/composables/useVibeCoding'
+import { openTaskVibeTool } from '@/composables/useTaskVibeTool'
+import { isManualVibeTool, isVibeCodingTool, vibeToolLabelKey, vibeToolLogo } from '@/composables/useVibeCoding'
+import { readRecentVibeModels, useVibeModelPreferences } from '@/composables/useVibeModelPreferences'
 import { useTaskImageAttachments } from '@/composables/useTaskImageAttachments'
 import { usePipelineStore } from '@/stores/pipeline'
 import { useExpertGroupStore } from '@/stores/expert-group'
@@ -37,6 +39,17 @@ import WorkDirectoryPicker from '@/components/WorkDirectoryPicker.vue'
 
 const { t } = useAppI18n()
 const { openCliConversation } = useCliKickoffNavigation()
+const relatedProjectTheme = {
+  components: {
+    Select: {
+      fontSize: 14,
+      lineHeight: 22 / 14,
+      controlHeight: 32,
+      controlHeightSM: 24,
+      borderRadius: 6,
+    },
+  },
+}
 
 const props = defineProps<{
   open: boolean
@@ -60,7 +73,7 @@ const {
   clear: clearImageAttachments,
   isSaving: isSavingPastedImages,
 } = useTaskImageAttachments()
-const descriptionEditor = ref<{ getValue: () => string; resize?: () => void }>()
+const descriptionEditor = ref<{ getValue: () => string }>()
 const projects = ref<LocalProject[]>([])
 const executionPickerOpen = ref(false)
 const form = reactive({
@@ -83,11 +96,17 @@ const chipRowRef = ref<HTMLElement | null>(null)
 const showDates = ref(false)
 const showChildren = ref(false)
 const showDirs = ref(false)
+
+function toggleRelatedProjects() {
+  if (showChildren.value) form.child_project_uuids = []
+  showChildren.value = !showChildren.value
+}
+
+function toggleRelatedDirectories() {
+  if (showDirs.value) form.additional_dirs = []
+  showDirs.value = !showDirs.value
+}
 const { fullscreen } = useContentFullscreen()
-watch(fullscreen, async () => {
-  await nextTick()
-  descriptionEditor.value?.resize?.()
-})
 
 const selectedPipeline = computed(() =>
   pipelines.value.find((item) => item.uuid === form.pipeline_uuid),
@@ -127,7 +146,7 @@ function pipelineLabel(pipeline?: Pipeline) {
   return pipeline?.name || t('workflows.task.create.pipeline')
 }
 function executionChipLabel() {
-  if (isCodexSelected.value) return t(vibeToolLabelKey(form.execution_tool))
+  if (isCodexSelected.value) return [t(vibeToolLabelKey(form.execution_tool)), form.model_name].filter(Boolean).join(' · ')
   if (isCLISelected.value) {
     return form.execution_tool
       ? `${t('workflows.task.assign.cliMode')} · ${form.execution_tool}`
@@ -170,8 +189,12 @@ function reset() {
 }
 
 async function handleDescriptionImages(files: File[]) {
-  if (isSavingPastedImages.value) throw new Error(t('workflows.task.create.savingImages'))
+  if (saving.value || isSavingPastedImages.value) throw new Error(t('workflows.task.create.savingImages'))
   return addImages(files).map((attachment) => attachment.marker)
+}
+
+function close() {
+  if (!saving.value) emit('update:open', false)
 }
 
 async function load() {
@@ -187,7 +210,23 @@ async function load() {
 	if (expertResult.status === 'rejected') message.warning(t('expertGroups.loadFailed'))
   if (projectResult.status === 'rejected') message.warning(t('workflows.task.create.projectLoadFailed'))
   applyCreateTaskDefaults()
+  try {
+    await validateVibeFormModel()
+  } catch {
+    // 提交时重试校验，暂时保留历史偏好。
+  }
   loading.value = false
+}
+
+const { resetVibeModels, resolveVibeModel } = useVibeModelPreferences()
+
+async function validateVibeFormModel() {
+  if (form.execution_mode !== 'vibe_coding') return
+  const tool = form.execution_tool
+  const candidate = form.model_name || ''
+  resetVibeModels(tool, candidate)
+  const model = await resolveVibeModel(tool)
+  if (form.execution_mode === 'vibe_coding' && form.execution_tool === tool && (form.model_name || '') === candidate) form.model_name = model
 }
 
 function applyCreateTaskDefaults() {
@@ -225,6 +264,7 @@ function applyCreateTaskDefaults() {
   ) {
     form.execution_mode = 'vibe_coding'
     form.execution_tool = defaults.execution_tool
+    form.model_name = readRecentVibeModels()[defaults.execution_tool] ?? defaults.model_name ?? ''
   } else if (
     executionMode === 'cli' &&
     defaults.execution_tool &&
@@ -274,6 +314,7 @@ async function addDirectory() {
 }
 
 async function create() {
+  if (loading.value || saving.value) return
   form.description = descriptionEditor.value?.getValue() ?? form.description
   if (!form.title.trim() && !form.description.trim())
     return message.warning(t('workflows.task.create.titleOrDescriptionRequired'))
@@ -296,6 +337,7 @@ async function create() {
   const shouldOpenVibe = form.execution_mode === 'vibe_coding'
   const vibeTool = form.execution_tool
   try {
+    await validateVibeFormModel()
     const attachments = await buildDraftAttachmentInputs(form.description)
     const result = await apiClient.post<{ uuid: string }>('/tasks', {
       title: form.title.trim(),
@@ -336,6 +378,8 @@ async function create() {
       execution_tool: form.execution_tool,
       model_name: form.model_name,
       expert_group_uuid: form.expert_group_uuid,
+      // 本弹窗没有「同步 Agent 产出」选项，沿用上次在团队任务配置里的选择
+      sync_agent_output: getCreateTaskDefaults().sync_agent_output,
     })
     message.success(t('workflows.task.create.created'))
     createdTaskUuid = result.uuid
@@ -357,16 +401,8 @@ async function create() {
   if (!shouldOpenVibe) return
 
   const toolName = t(vibeToolLabelKey(vibeTool))
-  const openResult = await openTaskInCodex(createdTaskUuid)
-  if (openResult.opened) {
-    message.success(t('workflows.task.detail.toolOpened', { tool: toolName }))
-  } else if (openResult.copied) {
-    message.warning(t('workflows.task.detail.toolCopiedFallback', { tool: toolName }))
-  } else if (openResult.error) {
-    message.error(openResult.error.message)
-  } else {
-    message.warning(t('workflows.task.detail.toolUnavailable', { tool: toolName }))
-  }
+  const openResult = await openTaskVibeTool(createdTaskUuid)
+  showVibeToolOpenResult(openResult, toolName)
 }
 
 // chip 下拉统一向下展开：按 chip 行下沿到视口底部的距离限制菜单高度，
@@ -422,7 +458,7 @@ watch(
       :class="{ 'is-fullscreen': fullscreen }"
       role="dialog"
       aria-modal="true"
-      @keydown.esc="emit('update:open', false)"
+      @keydown.esc="close"
     >
       <div v-show="!fullscreen" class="linear-task-mask" />
       <div class="linear-task-panel">
@@ -433,24 +469,25 @@ watch(
           <button type="button" :aria-label="fullscreen ? t('workflows.task.common.exitFullscreen') : t('workflows.task.common.fullscreen')" @click="fullscreen = !fullscreen">
             <FullscreenExitOutlined v-if="fullscreen" /><FullscreenOutlined v-else />
           </button>
-          <button type="button" :aria-label="t('workflows.task.create.close')" @click="emit('update:open', false)"><CloseOutlined /></button>
+          <button type="button" :disabled="saving" :aria-label="t('workflows.task.create.close')" @click="close"><CloseOutlined /></button>
         </div>
       </header>
       <section class="task-primary">
         <a-input
           v-model:value="form.title"
+          :disabled="saving"
           :maxlength="50"
           :bordered="false"
           :placeholder="t('workflows.task.create.customName')"
           class="title-input"
         />
         <div class="description-box">
-          <MarkdownEditor
+          <TaskDescriptionEditor
             v-if="open"
             ref="descriptionEditor"
             v-model="form.description"
-            cache-id="create-local-task-description"
             :placeholder="t('workflows.task.create.description')"
+            :disabled="saving"
             :on-upload-images="handleDescriptionImages"
           />
         </div>
@@ -574,6 +611,7 @@ watch(
           <img
             v-if="isCodexSelected"
             class="chip-avatar"
+            :class="{ 'is-brand-icon': isManualVibeTool(form.execution_tool) }"
             :src="vibeToolLogo(form.execution_tool)"
             alt=""
           />
@@ -617,12 +655,12 @@ watch(
               >
               <a-menu-item
                 key="children"
-                @click="showChildren = !showChildren"
+                @click="toggleRelatedProjects"
                 ><AppstoreOutlined />{{ t('workflows.task.create.relatedProject') }}</a-menu-item
               >
               <a-menu-item
                 key="dirs"
-                @click="showDirs = !showDirs"
+                @click="toggleRelatedDirectories"
                 ><FolderOpenOutlined />{{ t('workflows.task.create.relatedDirectory') }}</a-menu-item
               >
             </a-menu>
@@ -673,19 +711,22 @@ watch(
           v-if="showChildren"
           class="expanded-row children-row"
         >
-          <span>{{ t('workflows.task.create.relatedProject') }}</span
-          ><a-select
-            v-model:value="form.child_project_uuids"
-            mode="multiple"
-            :max-tag-count="1"
-            :options="childProjectOptions"
-            :placeholder="t('workflows.task.create.choose')"
-            size="small"
-          /><button
+          <span>{{ t('workflows.task.create.relatedProject') }}</span>
+          <ConfigProvider :theme="relatedProjectTheme">
+            <a-select
+              v-model:value="form.child_project_uuids"
+              mode="multiple"
+              :max-tag-count="1"
+              :options="childProjectOptions"
+              :placeholder="t('workflows.task.create.choose')"
+              size="middle"
+            />
+          </ConfigProvider>
+          <button
             type="button"
             class="expanded-close"
-            :aria-label="t('workflows.task.create.hideProject')"
-            @click="showChildren = false"
+            :aria-label="t('workflows.task.create.removeRelatedProjects')"
+            @click="toggleRelatedProjects"
           >
             <CloseOutlined />
           </button>
@@ -709,9 +750,10 @@ watch(
                 <span :title="dir || t('workflows.task.create.notEntered')">{{ dir || t('workflows.task.create.notEntered') }}</span>
                 <button
                   type="button"
+                  :aria-label="t('workflows.task.detail.removeRelatedDirectory')"
                   @click="form.additional_dirs.splice(index, 1)"
                 >
-                  ×
+                  <CloseOutlined />
                 </button>
               </div>
             </div>
@@ -725,8 +767,8 @@ watch(
           <button
             type="button"
             class="expanded-close"
-            :aria-label="t('workflows.task.create.hideRelatedDirectory')"
-            @click="showDirs = false"
+            :aria-label="t('workflows.task.create.removeRelatedDirectories')"
+            @click="toggleRelatedDirectories"
           >
             <CloseOutlined />
           </button>
@@ -743,10 +785,11 @@ watch(
         ><span v-else-if="form.execution_mode">{{ t('workflows.task.create.executionTargetRequired') }}</span
         ><span v-else>{{ t('workflows.task.create.pipelineLater') }}</span>
         <div>
-          <a-button @click="emit('update:open', false)">{{ t('common.actions.cancel') }}</a-button
+          <a-button :disabled="saving" @click="close">{{ t('common.actions.cancel') }}</a-button
           ><a-button
             type="primary"
             :loading="saving"
+            :disabled="loading"
             @click="create"
             >{{ t('workflows.task.import.create') }}</a-button
           >
@@ -763,7 +806,7 @@ watch(
       :preferred-pipeline-uuid="form.pipeline_uuid"
       :preferred-expert-group-uuid="form.expert_group_uuid"
       :initial-cli-type="form.execution_mode === 'cli' ? form.execution_tool : ''"
-      :initial-model-name="form.execution_mode === 'cli' ? form.model_name : ''"
+      :initial-model-name="form.model_name"
       :initial-vibe-tool="form.execution_mode === 'vibe_coding' ? form.execution_tool : ''"
       @selected="applyExecutionSelection"
     />
@@ -951,6 +994,11 @@ watch(
   object-fit: cover;
 }
 
+/* 手动工具直接用官方应用图标（自带圆角方形或透明底），不能再被裁成圆形。 */
+.chip-avatar.is-brand-icon {
+  border-radius: 5px;
+}
+
 /* chip 下拉共用一套菜单外观：内边距、圆角、阴影、悬停底色一致。
    高度上限由 syncChipMenuMaxHeight 按视口可用空间写入，保证向下展开时不被裁剪。 */
 :global(.chip-select-menu .ant-dropdown-menu) {
@@ -1120,7 +1168,12 @@ watch(
 }
 
 .directory-item > button {
+  display: inline-flex;
+  width: 24px;
+  height: 24px;
   flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
   padding: 0;
   border: 0;
   background: transparent;
@@ -1257,20 +1310,5 @@ watch(
   min-height: 0;
   flex: 1;
   flex-direction: column;
-}
-.linear-task-root.is-fullscreen .markdown-editor,
-.linear-task-root.is-fullscreen .vditor,
-.linear-task-root.is-fullscreen .vditor-content,
-.linear-task-root.is-fullscreen .vditor-ir {
-  height: 100% !important;
-  min-height: 0;
-}
-.linear-task-root.is-fullscreen .vditor {
-  display: flex;
-  flex-direction: column;
-}
-.linear-task-root.is-fullscreen .vditor-content {
-  flex: 1;
-  overflow: auto;
 }
 </style>

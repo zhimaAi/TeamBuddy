@@ -1,4 +1,5 @@
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
+import { useAuthStore } from '@/stores/auth'
 import { defineStore } from 'pinia'
 import apiClient from '@/api/client'
 import type { TaskNotification } from '@/types/pipeline'
@@ -82,6 +83,15 @@ export const useConversationStore = defineStore('conversation', () => {
   const taskStatuses = ref<Record<string, TaskStatus>>({})
   let loadVersion = 0
   let workspaceLoadVersion = 0
+  const auth = useAuthStore()
+  watch(() => auth.cloudUser?.sessionGeneration || auth.cloudUser?.accountScope || '', () => {
+    loadVersion += 1
+    rawNotifications.value = []
+    taskStatuses.value = {}
+    loaded.value = false
+    loading.value = false
+    void loadConversations(true)
+  }, { flush: 'sync' })
 
   function normalizeTaskStatus(status?: string): TaskStatus | undefined {
     if (status === 'pending' || status === 'active' || status === 'done' || status === 'blocked') {
@@ -186,8 +196,9 @@ export const useConversationStore = defineStore('conversation', () => {
           items,
           latest,
           running:
+            latest.execution_mode !== 'vibe_coding' &&
             taskStatus === 'active' &&
-            ['created', 'running'].includes(latest.status || latest.terminal_status || ''),
+            (latest.status || latest.terminal_status) === 'running',
           unread: items.some((i) => !i.is_read),
           is_archived: isArchived,
         }
@@ -218,7 +229,7 @@ export const useConversationStore = defineStore('conversation', () => {
     () => allConversations.value.filter((c) => !c.is_archived && c.unread).length,
   )
 
-  function groupList(convs: TaskConversation[], includeEmptyPinned = false): ConversationGroup[] {
+  function groupList(convs: TaskConversation[], includeEmptyWorkspaces = false): ConversationGroup[] {
     const groupsMap = new Map<string, TaskConversation[]>()
     for (const conv of convs) {
       // 斜杠、盘符大小写、尾部分隔符和 \\?\ 前缀不同，仍是同一目录。
@@ -228,11 +239,11 @@ export const useConversationStore = defineStore('conversation', () => {
       groupsMap.set(dirKey, list)
     }
 
-    if (includeEmptyPinned) {
+    if (includeEmptyWorkspaces) {
       const query = searchQuery.value.trim().toLowerCase()
       for (const preference of workspacePreferences.value) {
         const info = resolveWorkDirInfo(preference.work_dir)
-        if (preference.pinned_at && !groupsMap.has(preference.directory_key) &&
+        if (!groupsMap.has(preference.directory_key) &&
           (!query || [info.displayName, info.projectName || '', preference.work_dir].some((value) => value.toLowerCase().includes(query)))) {
           groupsMap.set(preference.directory_key, [])
         }
@@ -271,7 +282,7 @@ export const useConversationStore = defineStore('conversation', () => {
     if (version === workspaceLoadVersion) workspacePreferences.value = res.items || []
   }
 
-  async function updateWorkspace(workDir: string, changes: { display_name?: string; pinned?: boolean }) {
+  async function updateWorkspace(workDir: string, changes: { display_name?: string; pinned?: boolean; create_only?: boolean }) {
     const item = await apiClient.put<SidebarWorkspace>('/tasks/workspaces', { work_dir: workDir, ...changes })
     workspaceLoadVersion += 1
     const index = workspacePreferences.value.findIndex((entry) => entry.directory_key === item.directory_key)
@@ -302,7 +313,7 @@ export const useConversationStore = defineStore('conversation', () => {
     } catch {
       // 存储失败不改变已完成的删除结果。
     }
-    await Promise.allSettled(result.deleted_task_uuids.map(removeDeletedTaskFromCache))
+    await Promise.allSettled(result.deleted_task_uuids.map(taskUuid => removeDeletedTaskFromCache(taskUuid)))
     // 再加载可见数据，保留预览后新建的任务；刷新失败不误报删除失败。
     void loadConversations(true)
     return result
@@ -395,6 +406,7 @@ export const useConversationStore = defineStore('conversation', () => {
     for (const item of rawNotifications.value) {
       if (item.task_uuid === taskUuid) item.task_title = result.title
     }
+    return result
   }
 
   async function deleteTask(taskUuid: string) {

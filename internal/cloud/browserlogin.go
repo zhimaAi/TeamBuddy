@@ -2,8 +2,8 @@ package cloud
 
 import (
 	"context"
-	"fmt"
 	"net/http"
+	"net/url"
 )
 
 // BrowserLoginScheme 客户端注册的自定义协议名。浏览器登录确认页由服务端按这个
@@ -24,6 +24,7 @@ type BrowserLoginSession struct {
 // CreateBrowserLoginSession 向云端登记一次浏览器登录，返回应在系统浏览器中打开的地址。
 // 该接口不需要登录态：调用方（客户端）此时还没有任何凭据。
 func (c *Client) CreateBrowserLoginSession(ctx context.Context, state string) (*BrowserLoginSession, error) {
+	c = c.WithoutCredentials()
 	body := map[string]string{
 		"state":        state,
 		"redirect_uri": BrowserLoginCallbackURL,
@@ -32,18 +33,20 @@ func (c *Client) CreateBrowserLoginSession(ctx context.Context, state string) (*
 	if err := c.do(ctx, http.MethodPost, "/api/client/login-sessions", body, &payload); err != nil {
 		return nil, err
 	}
-	if payload.LoginURL == "" {
-		return nil, fmt.Errorf("云端未返回浏览器登录地址")
-	}
 	if payload.State == "" {
 		payload.State = state
 	}
+	// Official and self-hosted services expose the same confirmation route.
+	// Keep registration, browser confirmation and ticket exchange on the selected
+	// deployment, even if its response contains an internal/default web address.
+	payload.LoginURL = c.baseURL + "/client-login?state=" + url.QueryEscape(payload.State)
 	return &payload, nil
 }
 
 // ExchangeBrowserLoginTicket 用一次性 ticket 换取登录态，返回结构与账号密码登录一致。
 // state 与 ticket 都参与校验，云端应保证 ticket 一次性且与 state 绑定。
 func (c *Client) ExchangeBrowserLoginTicket(ctx context.Context, state, ticket string) (*LoginResponse, error) {
+	c = c.WithoutCredentials()
 	body := map[string]string{
 		"state":  state,
 		"ticket": ticket,

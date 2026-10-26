@@ -80,7 +80,7 @@ func syncCloudExpertGroups(ctx context.Context, client *cloud.Client) ([]expertg
 		}
 		inputs = append(inputs, input)
 	}
-	return expertgroup.DefaultCloudStore().ReplaceAll(pipeline.CloudSourceKey(client.BaseURL()), inputs)
+	return expertgroup.DefaultCloudStore().ReplaceAll(pipeline.CloudSourceKey(client.BaseURL()), inputs, client.SessionScope())
 }
 
 func (h *ExpertGroupsHandler) RegisterRoutes(r *gin.RouterGroup) {

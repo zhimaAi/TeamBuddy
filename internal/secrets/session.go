@@ -71,3 +71,17 @@ func (s *SessionStore) Exists(key string) (bool, error) {
 	}
 	return err == nil, err
 }
+
+// RevokeAfter commits the next account's credentials under the old writer's
+// barrier. Failed persistence leaves the old session usable; successful writes
+// revoke delayed refreshes before releasing the barrier.
+func (s *SessionStore) RevokeAfter(persist func() error) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := persist(); err != nil {
+		return err
+	}
+	s.closed = true
+	clear(s.values)
+	return nil
+}

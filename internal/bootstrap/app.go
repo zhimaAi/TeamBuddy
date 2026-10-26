@@ -3,6 +3,7 @@ package bootstrap
 import (
 	"context"
 	"crypto/rand"
+	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -35,8 +36,8 @@ type App struct {
 	codexSkillReady  bool
 	codexSkillReason string
 	vibeSkills       []localserver.VibeSkillStatus
-	// vibeImBotSkills 记录每个 Vibe Coding 工具对应的 teamsboard-im-bot-cli Skill 安装状态。
-	// teamsboard-im-bot-cli 与 teamsboard 共用 VibeSkillRoot，按工具分别安装到 ~/.codex/skills、~/.claude/skills 等。
+	// vibeImBotSkills 记录每个 Vibe Coding 工具对应的 teambuddy-im-bot-cli Skill 安装状态。
+	// teambuddy-im-bot-cli 与 teambuddy 共用 VibeSkillRoot，按工具分别安装到 ~/.codex/skills、~/.claude/skills 等。
 	// 微信通道兜底任务的 prompt 直接通过 markdown 本地路径引用此 Skill，CLI 启动后自行加载。
 	vibeImBotSkills map[string]localserver.VibeImBotSkillStatus
 	cloud           *config.CloudConfig
@@ -117,7 +118,7 @@ func New(ctx context.Context) (*App, error) {
 	}
 
 	// 6. Initialize the cloud client (does not rely on database)
-	app.cloudClient = cloud.NewClient(cloudCfg, app.secretStore)
+	app.cloudClient = cloud.NewClient(cloudCfg, nil)
 
 	// 7. Initialize the application-level local task runtime. This is deliberately
 	// independent from cloud login and remains alive across logout/account switches.
@@ -146,6 +147,14 @@ func New(ctx context.Context) (*App, error) {
 		app.cloudClient, app.secretStore, bootstrapStore,
 		app.configDir, app.localRuntime,
 	)
+	app.localRuntime.WSHub.RegisterAccountPushFunc(func(client *cloud.Client) (string, interface{}) {
+		notifications := localserver.NewNotificationsHandler(func() *sql.DB { return app.localRuntime.DB }, func() *cloud.Client { return client })
+		unread, err := notifications.UnreadCount(ctx)
+		if err != nil {
+			return "", nil
+		}
+		return "app.notifications.unread", map[string]interface{}{"count": unread}
+	})
 
 	return app, nil
 }
@@ -220,6 +229,23 @@ func (a *App) Run(ctx context.Context) error {
 		}
 		return nil
 	}).Start(runCtx)
+
+	// 产出文档上报是独立旁路：独立表、独立协程、独立重试，挂在任务投影之后，
+	// 不进入任务主链路。关闭开关时 worker 空转但不扫描，文件树也不返回上报状态。
+	cloudsync.SetDocumentUploadConfig(a.cloud.DocumentUpload)
+	documentSync := cloudsync.NewDocumentSyncService(a.localRuntime.DB, func() *cloud.Client {
+		if sess := a.accountMgr.Current(); sess != nil {
+			return sess.CloudClient
+		}
+		return nil
+	}, a.cloud.DocumentUpload.Interval())
+	cloudsync.SetDefaultDocumentSyncService(documentSync)
+	documentSync.Start(runCtx)
+	applog.Info("产出文档上报已初始化",
+		"enabled", a.cloud.DocumentUpload.Enabled,
+		"interval", a.cloud.DocumentUpload.Interval().String(),
+		"max_file_mb", a.cloud.DocumentUpload.MaxFileMB,
+		"max_files_per_task", a.cloud.DocumentUpload.MaxFilesPerTask)
 
 	// 会话进入终态后，把这一轮的执行过程和执行结果推到云端。这里不改本地任务泳道，
 	// 也不改云端需求状态；两边的状态各自保留。专家团路由中的中间态只推任务投影。
@@ -346,8 +372,13 @@ func (a *App) initDirs() error {
 // process also keeps its own copy beside the relocated data, so both paths
 // publish the same live loopback address.
 func (a *App) writeRuntimeInfo(addr string) error {
+	clientPath, err := currentClientPath()
+	if err != nil {
+		return err
+	}
 	info := map[string]interface{}{
 		"address":      addr,
+		"client_path":  clientPath,
 		"pid":          os.Getpid(),
 		"os":           runtime.GOOS,
 		"arch":         runtime.GOARCH,
@@ -380,6 +411,25 @@ func writeRuntimeFiles(paths []string, data []byte) error {
 		}
 	}
 	return nil
+}
+
+func currentClientPath() (string, error) {
+	path, err := os.Executable()
+	if err != nil {
+		return "", fmt.Errorf("读取客户端程序路径失败: %w", err)
+	}
+	absolute, err := filepath.Abs(path)
+	if err != nil || !filepath.IsAbs(absolute) {
+		return "", fmt.Errorf("客户端程序路径不是绝对路径")
+	}
+	info, err := os.Stat(absolute)
+	if err != nil {
+		return "", fmt.Errorf("客户端程序不可访问: %w", err)
+	}
+	if info.IsDir() {
+		return "", fmt.Errorf("客户端程序路径不是文件")
+	}
+	return absolute, nil
 }
 
 // generateTicket generates a one-time browser Ticket

@@ -1,14 +1,6 @@
 <template>
   <header class="agent-detail-header">
     <div class="header-copy">
-      <span class="header-eyebrow">
-        <img
-          :src="agentOrchestrationIcon"
-          alt=""
-          aria-hidden="true"
-        />
-        {{ t('agents.orchestration') }}
-      </span>
       <h3 :title="title">{{ title }}</h3>
     </div>
     <div
@@ -21,12 +13,12 @@
 </template>
 
 <script setup lang="ts">
-import agentOrchestrationIcon from '@/assets/icons/agent-orchestration.svg'
 import { useAppI18n } from '@/i18n'
 
 defineProps<{ title: string }>()
 
 const { t } = useAppI18n()
+void t
 </script>
 
 <style scoped>
@@ -34,8 +26,8 @@ const { t } = useAppI18n()
   position: relative;
   z-index: 1;
   display: flex;
-  min-height: 84px;
-  flex: 0 0 84px;
+  min-height: 64px;
+  flex: 0 0 64px;
   align-items: center;
   justify-content: space-between;
   gap: 24px;
@@ -141,7 +133,7 @@ const { t } = useAppI18n()
 
 @media (max-width: 760px) {
   .agent-detail-header {
-    min-height: 84px;
+    min-height: 64px;
     flex: 0 0 auto;
     align-items: flex-start;
     flex-direction: column;

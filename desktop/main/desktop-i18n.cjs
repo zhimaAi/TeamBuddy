@@ -154,6 +154,38 @@ const MESSAGES = Object.freeze({
     'zh-CN': { other: '无法打开 Codex，请复制提示词后手动打开' },
     'en-US': { other: 'Could not open Codex. Copy the prompt and open it manually.' },
   },
+  'error.qoderIDE.not_installed': {
+    'zh-CN': { other: "未找到 Qoder IDE，请先安装 IDE（Qoder 应用不能替代 IDE）" },
+    'en-US': { other: "Qoder IDE was not found. Install the IDE; the Qoder app is a separate product." },
+  },
+  'error.qoderIDE.backend_unavailable': {
+    'zh-CN': { other: "无法准备 Qoder IDE 回调程序，请检查开发环境中的 Go 命令或桌面版服务文件后重试" },
+    'en-US': { other: "Could not prepare Qoder IDE callbacks. Check Go in the development environment or the packaged service files and retry." },
+  },
+  'error.qoderIDE.configuration_conflict': {
+    'zh-CN': { other: "Qoder Hooks 配置或安装记录无效，请检查项目 .qoder/settings.local.json 及本机安装记录后重试" },
+    'en-US': { other: "Qoder Hooks configuration or installation records are invalid. Check the project .qoder/settings.local.json and local installation records, then retry." },
+  },
+  'error.qoderIDE.configuration_modified': {
+    'zh-CN': { other: 'Qoder Hooks 受管配置已被修改或移除，为保留现有设置已停止安装，请核对项目 .qoder/settings.local.json' },
+    'en-US': { other: 'Managed Qoder Hooks were modified or removed. Installation stopped to preserve your settings. Check the project .qoder/settings.local.json.' },
+  },
+  'error.qoderIDE.configuration_locked': {
+    'zh-CN': { other: 'Qoder Hooks 安装锁已存在，请等待安装结束；若客户端曾异常退出，请核对本机 install.lock 后重试' },
+    'en-US': { other: 'A Qoder Hooks installation lock exists. Wait for installation to finish; if the client exited unexpectedly, inspect the local install.lock before retrying.' },
+  },
+  'error.qoderIDE.prompt_too_long': {
+    'zh-CN': { other: "提示词超过 Qoder 深链长度限制，请重启 Qoder IDE，在任务目录粘贴提示词并手动发送" },
+    'en-US': { other: "The prompt exceeds the Qoder deeplink length limit. Restart Qoder IDE, paste the prompt in the task workspace, and send it manually." },
+  },
+  'error.qoderIDE.openFailed': {
+    'zh-CN': { other: "无法打开 Qoder IDE，请检查安装并重试" },
+    'en-US': { other: "Could not open Qoder IDE. Check the installation and retry." },
+  },
+  'error.qoderIDE.busy': {
+    'zh-CN': { other: "Qoder IDE 正在打开，请稍候" },
+    'en-US': { other: "Qoder IDE is opening. Please wait." },
+  },
   'error.vibeCli.openFailed': {
     'zh-CN': { other: '无法打开 CLI，请复制提示词后手动打开' },
     'en-US': { other: 'Could not open the CLI. Copy the prompt and open it manually.' },

@@ -2,6 +2,28 @@ import { createRouter, createWebHistory } from 'vue-router'
 import type { RouteRecordRaw } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 
+const LAST_MENU_STORAGE_KEY = 'goteams.sidebar.last-menu.v1'
+const sidebarMenuPaths = new Map<string, string>([
+  ['tasks', '/tasks/new'],
+  ['workflows', '/board'],
+  ['agents', '/agents'],
+  ['knowledge', '/knowledge'],
+  ['remote-channels', '/remote-channels'],
+  ['projects', '/projects'],
+  ['settings', '/settings'],
+  ['commands', '/commands'],
+  ['apis', '/apis'],
+])
+
+function readLastMenuPath(): string {
+  try {
+    const key = localStorage.getItem(LAST_MENU_STORAGE_KEY)
+    return sidebarMenuPaths.get(key || '') || '/tasks/new'
+  } catch {
+    return '/tasks/new'
+  }
+}
+
 const routes: RouteRecordRaw[] = [
   {
     path: '/',
@@ -10,7 +32,8 @@ const routes: RouteRecordRaw[] = [
       {
         path: '',
         name: 'home',
-        redirect: '/tasks/new',
+        // 仅首页恢复菜单，直接访问业务路由时保留深链目标。
+        redirect: readLastMenuPath,
       },
       {
         path: 'workbench',
@@ -158,7 +181,16 @@ router.beforeEach((to) => {
   return true
 })
 
-router.afterEach((to) => {
+router.afterEach((to, _from, failure) => {
+  const menu = to.meta.menu
+  if (!failure && typeof menu === 'string' && sidebarMenuPaths.has(menu)) {
+    try {
+      // 只保存菜单偏好，任务 UUID、目录与其他路由参数不进入持久化。
+      localStorage.setItem(LAST_MENU_STORAGE_KEY, menu)
+    } catch {
+      // 本地存储不可用时仍允许正常导航。
+    }
+  }
   if (import.meta.env.DEV) {
     console.log(`[Route] ${to.fullPath}`)
   }

@@ -2,6 +2,9 @@ appId: cn.goteams.client
 productName: TeamBuddy
 asar: true
 
+electronDownload:
+  mirror: https://npmmirror.com/mirrors/electron/
+
 directories:
   output: ../dist/desktop
 
@@ -41,11 +44,6 @@ mac:
     - dmg
   category: public.app-category.developer-tools
   artifactName: "TeamBuddy-macos-${arch}.${ext}"
-  extraResources:
-    - from: resources/backend
-      to: backend
-      filter:
-        - client
 
 nsis:
   oneClick: false

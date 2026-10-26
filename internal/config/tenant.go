@@ -7,14 +7,18 @@ type CloudConfig struct {
 	ListenAddr    string //Local service listening address (the address opened by the browser)
 	iniPath       string // INI configuration file path (for runtime reading and writing)
 	configSource  string // The actual effective configuration source (embedded config_<env>.ini or the path covered by the disk), used for log display
+
+	// DocumentUpload 产出文档上报配置（[document-upload] 段）
+	DocumentUpload DocumentUploadConfig
 }
 
 // NewCloudConfig creates a cloud configuration instance
 func NewCloudConfig(apiBaseURL, clientVersion, iniPath string) *CloudConfig {
 	return &CloudConfig{
-		APIBaseURL:    apiBaseURL,
-		ClientVersion: clientVersion,
-		iniPath:       iniPath,
+		APIBaseURL:     apiBaseURL,
+		ClientVersion:  clientVersion,
+		iniPath:        iniPath,
+		DocumentUpload: DefaultDocumentUploadConfig(),
 	}
 }
 

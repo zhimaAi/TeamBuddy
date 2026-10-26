@@ -59,6 +59,34 @@
                     )
                   }}
                 </p>
+                <!-- 这条沟通记录是否已上报线上：状态 + 上报时间 + 重新上报 -->
+                <span
+                  v-if="showSyncState(item)"
+                  class="message-sync"
+                  :class="`sync-${item.cloud_sync_status}`"
+                >
+                  <a-tooltip :title="syncTooltip(item)">
+                    <span class="sync-label">
+                      <CheckCircleFilled v-if="item.cloud_sync_status === 'success'" />
+                      <ExclamationCircleFilled v-else-if="item.cloud_sync_status === 'failed'" />
+                      <CloudUploadOutlined v-else />
+                      <span>{{ syncLabel(item) }}</span>
+                    </span>
+                  </a-tooltip>
+                  <button
+                    v-if="item.cloud_sync_status === 'failed'"
+                    type="button"
+                    class="sync-action"
+                    :disabled="Boolean(resyncingUuid)"
+                    @click.stop="resync(item)"
+                  >
+                    {{
+                      resyncingUuid === item.uuid
+                        ? t('workflows.task.sync.retrying')
+                        : t('workflows.task.sync.reupload')
+                    }}
+                  </button>
+                </span>
               </div>
               <button
                 type="button"
@@ -103,6 +131,8 @@
                 <MarkdownPreview
                   :content="userMessageText(item)"
                   :task-uuid="taskUuid"
+                  :session-uuid="item.session_uuid"
+                  :file-roots="fileRoots"
                 />
               </div>
               <!-- 运行中正文区留空：进展统一由执行过程承载，正文只在拿到最终结论后才出现 -->
@@ -113,6 +143,8 @@
                 <MarkdownPreview
                   :content="resultText(item)"
                   :task-uuid="taskUuid"
+                  :session-uuid="item.session_uuid"
+                  :file-roots="fileRoots"
                 />
               </div>
               <!-- 需求 2202 评论 3：消息下方的「最新活动」小字与执行过程说的是同一件事，
@@ -138,7 +170,10 @@
           v-if="!items.length"
           class="empty-conversation"
         >
-          <div class="empty-agent">{{ initials(selectedStepName || fallbackActorName) }}</div>
+          <div
+            v-if="!embedded"
+            class="empty-agent"
+          >{{ initials(selectedStepName || fallbackActorName) }}</div>
           <p>{{ t('workflows.task.progress.noConversation') }}</p>
         </div>
       </div>
@@ -148,9 +183,18 @@
 
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
-import { CopyOutlined, DownOutlined, RightOutlined } from '@ant-design/icons-vue'
+import {
+  CheckCircleFilled,
+  CloudUploadOutlined,
+  CopyOutlined,
+  DownOutlined,
+  ExclamationCircleFilled,
+  RightOutlined,
+} from '@ant-design/icons-vue'
+import { message } from 'ant-design-vue'
 import MarkdownPreview from '@/components/MarkdownPreview.vue'
 import ExecutionProcess from './ExecutionProcess.vue'
+import { retryTaskSync } from '@/api/taskSync'
 import type { PipelineStep, SessionEventItem, TaskProgress } from '@/types/pipeline'
 import { initials, isUserMessage, resultText, userMessageText } from './utils'
 import { useAppI18n, type MessageKey } from '@/i18n'
@@ -169,6 +213,7 @@ const props = withDefaults(
     fallbackActorName?: string
     fallbackActorLogo?: string
     taskUuid?: string
+    fileRoots?: string[]
     embedded?: boolean
     defaultCollapsed?: boolean
     readOnly?: boolean
@@ -181,6 +226,7 @@ const props = withDefaults(
     fallbackActorName: '',
     fallbackActorLogo: '',
     taskUuid: '',
+    fileRoots: () => [],
     embedded: false,
     defaultCollapsed: false,
     readOnly: false,
@@ -190,6 +236,7 @@ const props = withDefaults(
 
 const emit = defineEmits<{
   copy: [item: TaskProgress]
+  resync: []
 }>()
 
 const collapsedUuids = ref(new Set<string>())
@@ -261,7 +308,61 @@ function stepForUuid(uuid?: string) {
   return stepMap.value.get(uuid || '')
 }
 function stepName(uuid?: string) {
-  return stepForUuid(uuid)?.name || props.fallbackActorName || t('workflows.task.common.agentOrchestration')
+  const step = stepForUuid(uuid)
+  // CLI 隐式步骤的存储名称是固定中文，显示时按标识翻译，避免影响用户自定义的 Agent 名称。
+  if (step?.step_key === 'cli-direct') return t('workflows.task.common.directExecution')
+  return step?.name || props.fallbackActorName || t('workflows.task.common.agentOrchestration')
+}
+
+const resyncingUuid = ref('')
+
+/**
+ * 每条记录自己的「上报状态 + 上报时间」，紧跟在作者时间之后展示。
+ * 用户提问和 Agent 结论都展示：历史执行与 Vibe 手动模式下两者各自独立上报，
+ * CLI 会话虽然共用一次上报，但用户需要在这一行也能看到结论。
+ * 运行中内容还在变，展示会不断抖动，等产出结论后再展示。
+ */
+function showSyncState(item: TaskProgress) {
+  return Boolean(item.cloud_sync_status) && !isRunningItem(item)
+}
+
+function syncLabel(item: TaskProgress) {
+  if (item.cloud_sync_status === 'success') {
+    const at = formatTime(item.cloud_synced_at)
+    return at ? `${t('workflows.task.sync.synced')} ${at}` : t('workflows.task.sync.synced')
+  }
+  if (item.cloud_sync_status === 'failed') return t('workflows.task.sync.failed')
+  return t('workflows.task.sync.pending')
+}
+
+function syncTooltip(item: TaskProgress) {
+  if (item.cloud_sync_status === 'failed') {
+    return t('workflows.task.sync.failedTitle', {
+      error: item.cloud_sync_error || t('workflows.task.sync.unknownError'),
+    })
+  }
+  if (item.cloud_sync_status === 'success') return t('workflows.task.sync.syncedTitle')
+  return t('workflows.task.sync.pendingTitle')
+}
+
+/** 手动重报这条沟通：底层按任务整体快照重推一次，成功后刷新列表拿到最新状态 */
+async function resync(item: TaskProgress) {
+  if (!props.taskUuid || resyncingUuid.value) return
+  resyncingUuid.value = item.uuid
+  try {
+    const status = await retryTaskSync(props.taskUuid)
+    // 优先展示后端真实失败原因，而不是笼统的「上报失败」
+    const detail = status.retry_error_detail || status.retry_error || ''
+    if (detail) message.error(detail)
+    else message.success(t('workflows.task.sync.resynced'))
+    emit('resync')
+  } catch (error) {
+    message.error(
+      error instanceof Error ? error.message : t('workflows.task.sync.resyncFailed'),
+    )
+  } finally {
+    resyncingUuid.value = ''
+  }
 }
 
 function displayStatus(status?: string) {
@@ -431,6 +532,57 @@ defineExpose({ scrollToItem })
 .message-card-copy:hover {
   color: #6b7280;
 }
+/* 沟通记录上报状态：已上报 / 待上报 / 上报失败，紧跟作者时间展示 */
+.message-sync {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-self: center;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  line-height: 16px;
+}
+.sync-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 0 6px;
+  border-radius: 8px;
+  color: #8c8c8c;
+  background: #f5f6f8;
+  cursor: default;
+}
+.message-sync.sync-success .sync-label {
+  color: #15803d;
+  background: #ecfdf3;
+}
+.message-sync.sync-failed .sync-label {
+  color: #b42318;
+  background: #fef2f2;
+}
+.sync-action {
+  padding: 0 4px;
+  border: 0;
+  border-radius: 4px;
+  color: #3157e2;
+  background: transparent;
+  font-size: 11px;
+  line-height: 16px;
+  cursor: pointer;
+}
+.sync-action:hover {
+  background: #e5efff;
+}
+.message-sync.sync-failed .sync-action {
+  color: #b42318;
+}
+.message-sync.sync-failed .sync-action:hover {
+  background: #fee4e2;
+}
+.sync-action:disabled {
+  color: #bfbfbf;
+  cursor: not-allowed;
+}
 .message-card-detail {
   overflow: hidden;
 }
@@ -494,5 +646,13 @@ defineExpose({ scrollToItem })
 .empty-conversation p {
   margin-top: 10px;
   font-size: 14px;
+}
+.message-list-card.embedded .empty-conversation {
+  height: auto;
+  padding: 16px 0;
+}
+.message-list-card.embedded .empty-conversation p {
+  margin: 0;
+  line-height: 22px;
 }
 </style>

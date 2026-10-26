@@ -5,6 +5,7 @@ go 1.26.1
 require (
 	github.com/gin-gonic/gin v1.12.0
 	github.com/go-sql-driver/mysql v1.10.0
+	github.com/google/jsonschema-go v0.4.3
 	github.com/google/uuid v1.6.0
 	github.com/gorilla/websocket v1.5.3
 	github.com/lib/pq v1.12.3
@@ -18,8 +19,10 @@ require (
 )
 
 require (
-	github.com/google/jsonschema-go v0.4.3 // indirect
+	github.com/gogo/protobuf v1.3.2 // indirect
+	github.com/larksuite/oapi-sdk-go/v3 v3.12.1
 	github.com/modelcontextprotocol/go-sdk v1.7.0
+	github.com/open-dingtalk/dingtalk-stream-sdk-go v0.9.1
 	github.com/segmentio/asm v1.2.1 // indirect
 	github.com/segmentio/encoding v0.5.4 // indirect
 	github.com/yosida95/uritemplate/v3 v3.0.2 // indirect

@@ -7,9 +7,12 @@ const { contextBridge, ipcRenderer } = require('electron')
 // the preload fails before the bridge can be exposed to the renderer.
 const SELECT_DIRECTORIES_CHANNEL = 'desktop:select-directories'
 const OPEN_DIRECTORY_CHANNEL = 'desktop:open-directory'
+const REVEAL_TASK_FILE_CHANNEL = 'desktop:reveal-task-file'
 const OPEN_TERMINAL_CHANNEL = 'desktop:open-terminal'
 const OPEN_CODEX_THREAD_CHANNEL = 'desktop:open-codex-thread'
+const OPEN_QODER_IDE_CHANNEL = 'desktop:open-qoder-ide'
 const OPEN_VIBE_CLI_CHANNEL = 'desktop:open-vibe-cli'
+const GET_VIBE_MCP_CONFIG_CHANNEL = 'desktop:get-vibe-mcp-config'
 const GET_API_TOKEN_CHANNEL = 'desktop:get-api-token'
 const GET_CLOSE_BEHAVIOR_CHANNEL = 'desktop:get-close-behavior'
 const SET_CLOSE_BEHAVIOR_CHANNEL = 'desktop:set-close-behavior'
@@ -111,14 +114,25 @@ contextBridge.exposeInMainWorld('goteamsDesktop', Object.freeze({
     }
     return ipcRenderer.invoke(OPEN_DIRECTORY_CHANNEL, directoryPath)
   },
+  /** @param {{ taskUuid: string, fileRef: string, sessionUuid?: string, locale?: string }} payload */
+  revealTaskFile(payload) {
+    if (!payload || typeof payload.taskUuid !== 'string' || typeof payload.fileRef !== 'string') {
+      return Promise.reject(new TypeError('Task file reference is invalid'))
+    }
+    return ipcRenderer.invoke(REVEAL_TASK_FILE_CHANNEL, {
+      taskUuid: payload.taskUuid,
+      fileRef: payload.fileRef,
+      sessionUuid: typeof payload.sessionUuid === 'string' ? payload.sessionUuid : '',
+      locale: payload.locale === 'en-US' ? 'en-US' : 'zh-CN',
+    })
+  },
   /** @param {string} directoryPath */
   openTerminal(directoryPath) {
     if (typeof directoryPath !== 'string') return Promise.reject(new TypeError('Directory path must be a string'))
     return ipcRenderer.invoke(OPEN_TERMINAL_CHANNEL, directoryPath)
   },
-  /** @param {{ directoryPath: string, prompt: string, threadId?: string }} payload */
   /**
-   * @param {{ tool: string, execPath: string, directoryPath: string, prompt: string, threadId?: string }} payload
+   * @param {{ tool: string, execPath: string, directoryPath: string, prompt: string, threadId?: string, modelName?: string }} payload
    */
   openVibeCli(payload) {
     if (
@@ -127,7 +141,8 @@ contextBridge.exposeInMainWorld('goteamsDesktop', Object.freeze({
       typeof payload.execPath !== 'string' ||
       typeof payload.directoryPath !== 'string' ||
       typeof payload.prompt !== 'string' ||
-      (payload.threadId !== undefined && typeof payload.threadId !== 'string')
+      (payload.threadId !== undefined && typeof payload.threadId !== 'string') ||
+      (payload.modelName !== undefined && typeof payload.modelName !== 'string')
     ) {
       return Promise.reject(new TypeError('Vibe CLI payload is invalid'))
     }
@@ -137,6 +152,22 @@ contextBridge.exposeInMainWorld('goteamsDesktop', Object.freeze({
       directoryPath: payload.directoryPath,
       prompt: payload.prompt,
       threadId: payload.threadId,
+      modelName: payload.modelName,
+    })
+  },
+/** 手动模式：返回可复制到外部工具的 MCP 配置文本，不写入任何文件。 */
+  getVibeMcpConfig(tool) {
+    return ipcRenderer.invoke(GET_VIBE_MCP_CONFIG_CHANNEL, { tool: typeof tool === 'string' ? tool : '' })
+  },
+  /** @param {{ directoryPath: string, prompt: string, threadId?: string }} payload */
+  openQoderIDE(payload) {
+    if (!payload || typeof payload.directoryPath !== 'string' || typeof payload.prompt !== 'string'
+        || (payload.threadId !== undefined && typeof payload.threadId !== 'string')) {
+      return Promise.reject(new TypeError('Qoder IDE payload is invalid'))
+    }
+    return ipcRenderer.invoke(OPEN_QODER_IDE_CHANNEL, {
+      tool: 'qoder_ide', directoryPath: payload.directoryPath,
+      prompt: payload.prompt, threadId: payload.threadId,
     })
   },
   openCodexThread(payload) {

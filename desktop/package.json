@@ -1,9 +1,9 @@
 {
   "name": "goteams-client-desktop",
-  "version": "0.1.8",
+  "version": "0.1.9",
   "private": true,
   "description": "TeamBuddy Electron desktop shell",
-  "author": "TeamsBoard",
+  "author": "TeamBuddy",
   "main": "main/index.cjs",
   "scripts": {
     "dev": "concurrently -k -s command-DESKTOP -n WEB,DESKTOP -c green,blue \"npm --prefix ../web run dev:web\" \"wait-on tcp:5173 && cross-env GOTEAMS_DESKTOP_RENDERER_URL=http://localhost:5173 electron .\"",

@@ -1,6 +1,6 @@
 import { computed, ref } from 'vue'
 import apiClient, { ApiError } from '@/api/client'
-import { refreshSession } from '@/composables/useCloudSession'
+import { applySession, fetchSession } from '@/composables/useCloudSession'
 import { t } from '@/i18n'
 import { ipcErrorMessage } from '@/utils/ipcError'
 
@@ -24,8 +24,8 @@ interface BrowserLoginStatusResponse {
 const POLL_INTERVAL_MS = 1500
 const POLL_TIMEOUT_MS = 10 * 60 * 1000
 
-// 会话探测比状态轮询低频：每 N 次状态轮询顺带查一次本地会话，避免刷屏式打点。
-const SESSION_PROBE_EVERY = 2
+// 官方和自部署服务共用同一条浏览器登录链路。
+export interface BrowserLoginOptions { serverType?: 'official' | 'custom'; serverUrl?: string }
 
 // 侧边栏账号入口与团队工作登录引导卡片共用同一次登录流程，所以状态放在模块级单例，
 // 而不是每个组件各起一份轮询。
@@ -34,7 +34,8 @@ const errorMessage = ref('')
 const state = ref('')
 let pollTimer: ReturnType<typeof setInterval> | null = null
 let deadline = 0
-let pollTicks = 0
+let generation = 0
+let pollInFlight: number | null = null
 let desktopUnsubscribe: (() => void) | null = null
 let settleResolvers: Array<(ok: boolean) => void> = []
 
@@ -48,6 +49,7 @@ function stopPolling() {
 }
 
 function settle(ok: boolean, message = '') {
+  generation += 1
   stopPolling()
   state.value = ''
   pending.value = false
@@ -63,57 +65,43 @@ function waitForSettle(): Promise<boolean> {
   })
 }
 
-// 以本地会话为最终依据收尾：浏览器里完成的登录可能对应「前端先取消过的那次会话」，
-// 深链接兑换成功后推送未必落在当前这次等待上，此时状态轮询会一直停在 pending。
-// 会话接口一旦显示已登录，就说明登录确实成功了，直接收尾。
-async function settleIfSessionLoggedIn(): Promise<boolean> {
-  try {
-    const session = await refreshSession()
-    if (!session.cloud_logged_in) return false
-    settle(true)
-    return true
-  } catch {
-    return false
-  }
-}
-
+// Only the requested login state can complete a switch. The previous account
+// may remain online while authentication is pending, so a generic session probe is insufficient.
 async function pollOnce() {
   if (!state.value) return
+  const requestGeneration = generation
+  const requestedState = state.value
   if (Date.now() > deadline) {
     settle(false, t('teamwork.login.expired'))
     return
   }
-  pollTicks += 1
-  if (pollTicks % SESSION_PROBE_EVERY === 0 && (await settleIfSessionLoggedIn())) return
+  if (pollInFlight === requestGeneration) return
+  pollInFlight = requestGeneration
   try {
-    const result = await apiClient.get<BrowserLoginStatusResponse>('/auth/browser-login/status', {
-      state: state.value,
-    })
+    const result = await apiClient.get<BrowserLoginStatusResponse>('/auth/browser-login/status', { state: requestedState })
+    if (requestGeneration !== generation || requestedState !== state.value) return
     if (result.status === 'pending') return
     if (result.status === 'succeeded') {
-      await refreshSession()
-      settle(true)
+      const session = await fetchSession()
+      if (requestGeneration === generation && requestedState === state.value) {
+        applySession(session)
+        settle(true)
+      }
       return
     }
-    if (result.status === 'failed') {
-      settle(false, result.error || t('teamwork.login.failed'))
-      return
-    }
-    settle(false, t('teamwork.login.expired'))
+    settle(false, result.status === 'failed' ? result.error || t('teamwork.login.failed') : t('teamwork.login.expired'))
   } catch (error) {
-    // 会话已被清理（后端重启、过期回收）时不再空转到超时，直接提示重新发起。
-    if (error instanceof ApiError && error.status === 404) {
+    if (requestGeneration === generation && error instanceof ApiError && error.status === 404) {
       settle(false, t('teamwork.login.expired'))
-      return
     }
-    // 网络抖动或后端重启时保持轮询，超时由 deadline 兜底。
+  } finally {
+    if (pollInFlight === requestGeneration) pollInFlight = null
   }
 }
 
 function startPolling() {
   stopPolling()
   deadline = Date.now() + POLL_TIMEOUT_MS
-  pollTicks = 0
   pollTimer = setInterval(() => {
     void pollOnce()
   }, POLL_INTERVAL_MS)
@@ -121,13 +109,8 @@ function startPolling() {
 
   // Electron 主进程收到 teamsboard:// 深链接并完成回注后会主动推送，界面无需等下一次轮询。
   // 推送只是提示：登录态以会话接口为准，避免重复投递或时序竞争导致误报成功。
-  desktopUnsubscribe = window.goteamsDesktop?.onBrowserLoginResult?.((result) => {
-    if (result.status !== 'ok') {
-      if (!pending.value) return
-      settle(false, result.error || t('teamwork.login.failed'))
-      return
-    }
-    void settleIfSessionLoggedIn()
+  desktopUnsubscribe = window.goteamsDesktop?.onBrowserLoginResult?.(() => {
+    if (pending.value) void pollOnce()
   }) ?? null
 }
 
@@ -135,43 +118,57 @@ function startPolling() {
  * 发起浏览器登录。返回是否登录成功，便于调用方在成功后继续下一步。
  * 重复调用时复用进行中的流程。
  */
-async function startBrowserLogin(): Promise<boolean> {
+async function startBrowserLogin(options: BrowserLoginOptions = {}): Promise<boolean> {
   if (pending.value) return waitForSettle()
-
   errorMessage.value = ''
   pending.value = true
+  const completion = waitForSettle()
+  const startGeneration = generation
+  let createdState = ''
+  let browserUrl = ''
   try {
     const desktop = window.goteamsDesktop
     if (desktop?.startBrowserLogin) {
-      const result = await desktop.startBrowserLogin()
-      state.value = result.state
+      const result = await desktop.startBrowserLogin(options)
+      createdState = result.state
     } else {
-      // 浏览器直连 dev（无 Electron 桥）：自己申请会话并新开标签页。
-      const result = await apiClient.post<BrowserLoginStartResponse>('/auth/browser-login/start', {})
-      state.value = result.state
-      window.open(result.browser_url, '_blank', 'noopener')
+      const result = await apiClient.post<BrowserLoginStartResponse>('/auth/browser-login/start', {
+        server_type: options.serverType,
+        server_url: options.serverUrl,
+      })
+      createdState = result.state
+      browserUrl = result.browser_url
     }
+    if (startGeneration !== generation) {
+      try { await apiClient.post('/auth/browser-login/cancel', { state: createdState }) } catch { /* The server also enforces expiration. */ }
+      return completion
+    }
+    state.value = createdState
+    if (browserUrl) window.open(browserUrl, '_blank', 'noopener')
+    startPolling()
   } catch (error) {
-    settle(false, ipcErrorMessage(error, t('teamwork.login.failed')))
-    return false
+    if (startGeneration === generation) settle(false, ipcErrorMessage(error, t('teamwork.login.failed')))
   }
-
-  startPolling()
-  return waitForSettle()
+  return completion
 }
 
 /** 取消进行中的浏览器登录（关闭弹窗、切换页面等）。 */
 async function cancelBrowserLogin(): Promise<void> {
   const current = state.value
+  const requestGeneration = generation
   if (!current) {
     if (pending.value) settle(false)
     return
   }
   try {
     const result = await apiClient.post<{ status?: BrowserLoginBackendStatus }>('/auth/browser-login/cancel', { state: current })
+    if (requestGeneration !== generation || current !== state.value) return
     if (result.status === 'succeeded') {
-      await refreshSession()
-      settle(true)
+      const session = await fetchSession()
+      if (requestGeneration === generation && current === state.value) {
+        applySession(session)
+        settle(true)
+      }
       return
     }
     if (result.status === 'pending') {
@@ -181,7 +178,7 @@ async function cancelBrowserLogin(): Promise<void> {
   } catch {
     // 取消失败不影响本地收尾，会话会在后端超时后自动过期。
   }
-  settle(false)
+  if (requestGeneration === generation) settle(false)
 }
 
 export function useBrowserLogin() {

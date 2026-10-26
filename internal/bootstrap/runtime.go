@@ -77,13 +77,6 @@ func NewLocalRuntime(ctx context.Context, dataDir string, cloudClient *cloud.Cli
 		}
 		return "app.cli_count", map[string]interface{}{"count": count}
 	})
-	wsHub.RegisterPushFunc(func() (string, interface{}) {
-		var unread int
-		if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM gt_task_notifications WHERE is_archived = 0 AND is_read = 0`).Scan(&unread); err != nil {
-			return "", nil
-		}
-		return "app.notifications.unread", map[string]interface{}{"count": unread}
-	})
 	wsHub.StartPushLoop(5 * time.Second)
 
 	runtime := &LocalRuntime{

@@ -80,12 +80,8 @@ func newBrowserLoginManager() *browserLoginManager {
 func (m *browserLoginManager) create(sess *browserLoginSession) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	now := time.Now()
-	for state, existing := range m.sessions {
-		if now.After(existing.ExpiresAt) || existing.State == sess.State {
-			delete(m.sessions, state)
-		}
-	}
+	// Only the latest user-selected target may establish a session.
+	clear(m.sessions)
 	m.sessions[sess.State] = sess
 }
 
@@ -106,10 +102,7 @@ func (m *browserLoginManager) get(state string) *browserLoginSnapshot {
 // claim 认领一次回调处理。只有第一个回调拿到 ok=true，重复投递的深链接
 // 会拿到当前快照并按状态直接返回，不会重复兑换票据。
 //
-// 浏览器里用户必须点过确认才会产生深链接，因此「前端先点了取消」不该丢掉这次认证：
-// 取消只代表前端不再等待，cancelled 会话同样允许兑换（状态回到 pending 后写入终态）。
-// 否则用户取消后重新发起登录、却在先前的浏览器页面里完成登录时，回调会被静默丢弃，
-// 前端新会话永远等不到结果，界面停在加载态。
+// 用户取消或重新选择服务后，旧网页的回调不得覆盖新的连接。
 func (m *browserLoginManager) claim(state string) (snap *browserLoginSnapshot, ok bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -117,10 +110,10 @@ func (m *browserLoginManager) claim(state string) (snap *browserLoginSnapshot, o
 	if !found {
 		return nil, false
 	}
-	if (sess.Status == browserLoginPending || sess.Status == browserLoginCancelled) && time.Now().After(sess.ExpiresAt) {
+	if sess.Status == browserLoginPending && time.Now().After(sess.ExpiresAt) {
 		sess.Status = browserLoginExpired
 	}
-	if sess.Claimed || (sess.Status != browserLoginPending && sess.Status != browserLoginCancelled) {
+	if sess.Claimed || sess.Status != browserLoginPending {
 		return sess.snapshot(), false
 	}
 	sess.Status = browserLoginPending
@@ -188,37 +181,10 @@ func (s *Server) startBrowserLogin(c *gin.Context) {
 		serverType = "official"
 	}
 
-	var client *cloud.Client
-	var normalized string
-	switch serverType {
-	case "custom":
-		serverURL := strings.TrimSpace(body.ServerURL)
-		if serverURL == "" {
-			i18n.Error(c, http.StatusBadRequest, "auth_custom_url_required", "custom_url_required")
-			return
-		}
-		norm, err := normalizeServerURL(serverURL)
-		if err != nil {
-			i18n.Error(c, http.StatusBadRequest, "auth_cloud_url_invalid", "cloud_url_invalid")
-			return
-		}
-		normalized = norm
-		client = s.customCloudClient(normalized)
-	default:
-		if s.config.CloudClient == nil || !s.config.CloudClient.IsConfigured() {
-			i18n.Error(c, http.StatusBadRequest, "auth_official_url_missing", "official_url_missing")
-			return
-		}
-		client = s.config.CloudClient
-		if s.config.CloudConfig != nil && s.config.CloudConfig.APIBaseURL != "" {
-			if norm, err := normalizeServerURL(s.config.CloudConfig.APIBaseURL); err == nil {
-				normalized = norm
-			}
-		}
-		if normalized == "" {
-			i18n.Error(c, http.StatusBadRequest, "auth_official_url_invalid", "official_url_invalid")
-			return
-		}
+	client, normalized, key := s.resolveLoginTarget(serverType, body.ServerURL)
+	if key != "" {
+		i18n.Error(c, http.StatusBadRequest, key, strings.TrimPrefix(strings.TrimPrefix(key, "auth_"), "common_"))
+		return
 	}
 
 	state := generateSessionID()
@@ -273,6 +239,8 @@ func (s *Server) browserLoginStatus(c *gin.Context) {
 // browserLoginCallback 由 Electron 主进程在收到 teamsboard:// 深链接后调用。
 // 这里用一次性 ticket 向云端兑换登录态，然后走与账号密码登录相同的本地登录收尾。
 func (s *Server) browserLoginCallback(c *gin.Context) {
+	s.authTransitionMu.Lock()
+	defer s.authTransitionMu.Unlock()
 	var body struct {
 		State  string `json:"state"`
 		Ticket string `json:"ticket"`
@@ -300,10 +268,7 @@ func (s *Server) browserLoginCallback(c *gin.Context) {
 		return
 	}
 
-	client := s.config.CloudClient
-	if sess.ServerType == "custom" && sess.ServerURL != "" {
-		client = s.customCloudClient(sess.ServerURL)
-	}
+	client := s.customCloudClient(sess.ServerURL)
 	if client == nil || !client.IsConfigured() {
 		s.browserLogins.fail(state, "auth_official_url_missing")
 		i18n.Error(c, http.StatusBadRequest, "auth_official_url_missing", "official_url_missing")
@@ -318,7 +283,7 @@ func (s *Server) browserLoginCallback(c *gin.Context) {
 		return
 	}
 
-	deviceRegistered, err := s.completeCloudLogin(c, client, sess.ServerType, sess.ServerURL, loginResp)
+	deviceRegistered, err := s.completeCloudLoginLocked(c, client, sess.ServerType, sess.ServerURL, loginResp)
 	if err != nil {
 		applog.Warn("浏览器登录写入本地会话失败", "error", err.Error())
 		s.browserLogins.fail(state, "auth_session_create_failed")
@@ -357,4 +322,13 @@ func (s *Server) browserLoginCancel(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"status": sess.Status})
+}
+
+func (m *browserLoginManager) invalidate() {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	clear(m.sessions)
 }

@@ -13,6 +13,18 @@ export const useAuthStore = defineStore('auth', () => {
   const cloudToken = ref<string | null>(null)
   const cloudUser = ref<UserInfo | null>(null)
   const cloudSession = ref(false)
+  const sessionReady = ref(false)
+  let resolveSessionReady: () => void
+  const sessionReadyPromise = new Promise<void>((resolve) => { resolveSessionReady = resolve })
+
+  function markSessionReady() {
+    sessionReady.value = true
+    resolveSessionReady()
+  }
+
+  function waitForSessionReady(): Promise<void> {
+    return sessionReady.value ? Promise.resolve() : sessionReadyPromise
+  }
 
   // ---- Getters ----
   const hasLocalSession = computed(() => localSession.value)
@@ -59,6 +71,9 @@ export const useAuthStore = defineStore('auth', () => {
 
   return {
     localSession,
+    sessionReady,
+    markSessionReady,
+    waitForSessionReady,
     cloudToken,
     cloudUser,
     cloudSession,

@@ -19,12 +19,6 @@ type SessionSyncService struct {
 	interval time.Duration
 }
 
-// syncStatus values stored in gt_cli_sessions.cloud_sync_status.
-const (
-	syncStatusSuccess = "success"
-	syncStatusFailed  = "failed"
-)
-
 // maxStepPushesPerTaskPerRound bounds how many step sessions one task may push in a
 // single round, protecting the loop from pathological backlogs.
 const maxStepPushesPerTaskPerRound = 200
@@ -209,6 +203,12 @@ func FlushTaskExecution(ctx context.Context, db *sql.DB, client *cloud.Client, t
 	if err := CaptureTaskExecution(ctx, db, taskUUID); err != nil {
 		return err
 	}
+	// 任务完成收尾时先把产出目录扫一遍再触发上报：最后一批产出文件不能依赖
+	// 下一次任务上报才被发现。扫描失败只记日志，不影响执行记录的上报。
+	if _, err := ScanTaskDocuments(ctx, db, taskUUID); err != nil {
+		applog.Warn("[DocSync] 任务完成前扫描产出文档失败", "task_uuid", taskUUID, "error", err.Error())
+	}
+	DefaultDocumentSyncService().Kick(taskUUID)
 	if client == nil {
 		return nil
 	}
