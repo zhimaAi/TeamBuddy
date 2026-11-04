@@ -8,7 +8,7 @@ export interface VibeToolCapability {
   installed?: boolean
   reason_code?: string
   message?: string
-  launch?: 'app' | 'terminal' | 'clipboard' | 'manual'
+  launch?: 'app' | 'terminal' | 'clipboard'
   exec_path?: string
   binding_kind?: 'native' | 'generic'
   requires_report_id?: boolean
@@ -23,23 +23,9 @@ export interface TaskVibeToolContext {
   tool_name?: string
   thread_id?: string
   tool?: string
-  launch?: 'app' | 'terminal' | 'clipboard' | 'manual'
+  launch?: 'app' | 'terminal' | 'clipboard'
   exec_path?: string
   model_name?: string
-  /** 手动模式：本地 Skill 文件路径，供用户或外部 IDE 读取 */
-  skill_path?: string
-  /** 手动模式：桥接程序是否可用（开发态为 false） */
-  mcp_available?: boolean
-  /** 手动模式：可直接写入外部 IDE 的 MCP 配置文本 */
-  mcp_config?: string
-  /** 手动模式：推荐写入路径，例如 ~/.cursor/mcp.json */
-  mcp_config_path?: string
-  /** 手动模式：桥接程序绝对路径 */
-  mcp_command?: string
-  /** 手动模式：本机是否有可用的 AiBridge 扩展（有则不必手动复制提示词） */
-  aibridge_available?: boolean
-  /** 手动模式：AiBridge 探测到的编辑器类型 */
-  aibridge_editor?: string
 }
 
 export interface VibeToolsCapability {
@@ -56,8 +42,6 @@ export interface VibeToolOpenResult {
   error?: Error
   requiresIDEExit?: boolean
   retry?: () => Promise<VibeToolOpenResult>
-  /** 手动模式：没有可拉起的进程，调用方应改为展示可复制面板。 */
-  manual?: boolean
 }
 
 export async function loadVibeToolsCapability(): Promise<VibeToolsCapability> {
@@ -76,23 +60,6 @@ export async function loadTaskVibeToolContext(taskUuid: string): Promise<TaskVib
   return apiClient.get<TaskVibeToolContext>(`/tasks/${encodeURIComponent(taskUuid)}/codex-context`)
 }
 
-export interface VibeToolInjectResult {
-  injected: boolean
-  /** AiBridge 探测到的编辑器类型（cursor / vscode / windsurf） */
-  editor?: string
-}
-
-/**
- * 把手动模式提示词交给本机 AiBridge 扩展直接下发到编辑器 AI 对话。
- * 未安装扩展或下发失败时接口返回错误，调用方回退为手动复制。
- */
-export async function injectVibeToolPrompt(taskUuid: string): Promise<VibeToolInjectResult> {
-  return apiClient.post<VibeToolInjectResult>(
-    `/tasks/${encodeURIComponent(taskUuid)}/vibe-manual-inject`,
-    {},
-  )
-}
-
 export async function copyTaskVibeToolPrompt(taskUuid: string): Promise<TaskVibeToolContext> {
   const context = await loadTaskVibeToolContext(taskUuid)
   await copyText(context.prompt)
@@ -105,10 +72,6 @@ export async function openTaskVibeTool(taskUuid: string): Promise<VibeToolOpenRe
     context = await loadTaskVibeToolContext(taskUuid)
   } catch (error) {
     return { opened: false, copied: false, error: asError(error) }
-  }
-  // 手动模式不启动任何进程：由调用方展示 MCP 配置、Skill 路径与提示词的复制面板。
-  if (context.launch === 'manual') {
-    return { opened: false, copied: false, manual: true }
   }
   // 通用工具只交付提示词：复制后由用户在目标工具中粘贴发送。
   if (context.launch === 'clipboard') {

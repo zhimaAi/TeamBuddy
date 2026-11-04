@@ -6,6 +6,8 @@ import (
 	"errors"
 	"strings"
 
+	"goteams-client/internal/executor"
+
 	"github.com/google/uuid"
 )
 
@@ -24,17 +26,17 @@ func sessionUUIDForRequest(taskUUID, requestID string) string {
 	return uuid.NewSHA1(uuid.NameSpaceOID, []byte(taskUUID+":"+requestID)).String()
 }
 
-func (o *Orchestrator) existingRequest(ctx context.Context, taskUUID, stepUUID, requestID, displayPrompt, cliType, model string) (string, error) {
+func (o *Orchestrator) existingRequest(ctx context.Context, taskUUID, stepUUID, requestID, displayPrompt, cliType, model string, thinking executor.ThinkingLevelInput) (string, error) {
 	if strings.TrimSpace(requestID) == "" {
 		return "", nil
 	}
 	cliType = strings.TrimSpace(cliType)
 	model = strings.TrimSpace(model)
 	id := sessionUUIDForRequest(taskUUID, requestID)
-	var storedStep, storedPrompt, storedCLI, storedModel string
-	err := o.db.QueryRowContext(ctx, `SELECT step_uuid, cli_type, model_name,
+	var storedStep, storedPrompt, storedCLI, storedModel, storedThinking string
+	err := o.db.QueryRowContext(ctx, `SELECT step_uuid, cli_type, model_name, thinking_level,
 		COALESCE((SELECT user_prompt FROM gt_task_progress WHERE session_uuid=s.uuid AND record_type='user_question' LIMIT 1),'')
-		FROM gt_cli_sessions s WHERE uuid=? AND task_uuid=?`, id, taskUUID).Scan(&storedStep, &storedCLI, &storedModel, &storedPrompt)
+		FROM gt_cli_sessions s WHERE uuid=? AND task_uuid=?`, id, taskUUID).Scan(&storedStep, &storedCLI, &storedModel, &storedThinking, &storedPrompt)
 	if err == sql.ErrNoRows {
 		return "", nil
 	}
@@ -42,7 +44,7 @@ func (o *Orchestrator) existingRequest(ctx context.Context, taskUUID, stepUUID, 
 		return "", err
 	}
 	if storedStep != stepUUID || strings.TrimSpace(storedPrompt) != strings.TrimSpace(displayPrompt) ||
-		(cliType != "" && cliType != storedCLI) || (model != "" && model != storedModel) {
+		(cliType != "" && cliType != storedCLI) || (model != "" && model != storedModel) || (thinking.Present && thinking.Value != storedThinking) {
 		return "", ErrRequestConflict
 	}
 	return id, nil

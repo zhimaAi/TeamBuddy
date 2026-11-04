@@ -185,7 +185,6 @@ func (h *TasksHandler) RegisterRoutes(r *gin.RouterGroup) {
 	r.PUT("/:uuid/execution-mode", h.assignExecutionMode)
 	r.POST("/:uuid/vibe-rebind", h.rebindGenericVibeTool)
 	r.GET("/:uuid/codex-context", h.getCodexContext)
-	r.POST("/:uuid/vibe-manual-inject", h.injectVibeManualPrompt)
 	r.POST("/:uuid/codex-session-watch", h.watchCodexDesktopSession)
 	r.POST("/:uuid/start", h.startTask)
 	r.POST("/:uuid/assign-pipeline", h.assignAndStartTask)
@@ -239,12 +238,13 @@ func (h *TasksHandler) RegisterRoutes(r *gin.RouterGroup) {
 }
 
 type stepExecutionConfig struct {
-	StepUUID     string `json:"step_uuid"`
-	SourceStepID string `json:"source_step_id"`
-	CloudStepID  string `json:"cloud_step_id"`
-	CLIType      string `json:"cli_type"`
-	Model        string `json:"model"`
-	ModelName    string `json:"model_name"`
+	StepUUID      string                      `json:"step_uuid"`
+	SourceStepID  string                      `json:"source_step_id"`
+	CloudStepID   string                      `json:"cloud_step_id"`
+	CLIType       string                      `json:"cli_type"`
+	Model         string                      `json:"model"`
+	ModelName     string                      `json:"model_name"`
+	ThinkingLevel executor.ThinkingLevelInput `json:"thinking_level,omitzero"`
 }
 
 type pipelineAssignmentInput struct {
@@ -302,7 +302,7 @@ func (h *TasksHandler) snapshotFromPipeline(ctx context.Context, input pipelineA
 		}
 		snapshotStep := taskruntime.SnapshotStep{SourceStepID: step.UUID, LocalStepID: step.UUID,
 			Name: step.Name, Description: step.Description, Avatar: step.Avatar, Prompt: step.Prompt,
-			CLIType: cliType, ModelName: model, SortOrder: step.SortOrder}
+			CLIType: cliType, ModelName: model, ThinkingLevel: executor.ResolveThinkingLevel(config.ThinkingLevel, cliType, model, step.CLIType, step.ModelName, step.ThinkingLevel), SortOrder: step.SortOrder}
 		if pipe.SourceType == "cloud" {
 			snapshotStep.SourceStepID = step.CloudStepID
 			snapshotStep.LocalStepID = ""
@@ -355,19 +355,15 @@ func (h *TasksHandler) getTeamPipelineSnapshot(c *gin.Context) {
 
 func (h *TasksHandler) importTeamTask(c *gin.Context) {
 	var body struct {
-		WorkItemType  string          `json:"work_item_type"`
-		WorkItemID    json.RawMessage `json:"work_item_id"`
-		CloudPipeline json.RawMessage `json:"cloud_pipeline_id"`
-		StepConfigs   []struct {
-			CloudStepID string `json:"cloud_step_id"`
-			CLIType     string `json:"cli_type"`
-			Model       string `json:"model"`
-		} `json:"step_configs"`
-		WorkDir         string   `json:"work_dir"`
-		WorkDirs        []string `json:"work_dirs"`
-		ProjectUUID     string   `json:"project_uuid"`
-		SubprojectUUIDs []string `json:"subproject_uuids"`
-		Status          string   `json:"status"`
+		WorkItemType    string                `json:"work_item_type"`
+		WorkItemID      json.RawMessage       `json:"work_item_id"`
+		CloudPipeline   json.RawMessage       `json:"cloud_pipeline_id"`
+		StepConfigs     []stepExecutionConfig `json:"step_configs"`
+		WorkDir         string                `json:"work_dir"`
+		WorkDirs        []string              `json:"work_dirs"`
+		ProjectUUID     string                `json:"project_uuid"`
+		SubprojectUUIDs []string              `json:"subproject_uuids"`
+		Status          string                `json:"status"`
 	}
 	if err := c.ShouldBindJSON(&body); err != nil {
 		i18n.LocalServerError(c, http.StatusBadRequest, err)
@@ -459,10 +455,7 @@ func (h *TasksHandler) importTeamTask(c *gin.Context) {
 		i18n.Error(c, http.StatusInternalServerError, "localserver_cloud_pipeline_cache_failed", "cloud_pipeline_cache_failed")
 		return
 	}
-	configs := make([]stepExecutionConfig, 0, len(body.StepConfigs))
-	for _, item := range body.StepConfigs {
-		configs = append(configs, stepExecutionConfig{CloudStepID: item.CloudStepID, CLIType: item.CLIType, Model: item.Model})
-	}
+	configs := body.StepConfigs
 	// 待开始任务：先验证流水线快照结构，再创建任务。
 	// 直接执行的任务需校验 CLI 和模型；待开始任务只校验结构，CLI 和模型在启动时校验。
 	if selectedPipelineUUID != "" && len(configs) > 0 {
@@ -779,13 +772,33 @@ func (h *TasksHandler) cliDiscoveryModels(c *gin.Context) {
 		i18n.Error(c, http.StatusBadRequest, "localserver_cli_type_required", "cli_type_required")
 		return
 	}
-	var models []string
-	if c.Query("refresh") == "true" {
-		models = executor.RefreshCLIModels(c.Request.Context(), cliType)
-	} else {
-		models = executor.GetCLIModels(c.Request.Context(), cliType)
+	var workDir string
+	if taskUUID := c.Query("task_uuid"); taskUUID != "" {
+		scope, args := taskScopeSQL(h.taskCloudClient(), "t")
+		args = append([]any{taskUUID}, args...)
+		if err := h.taskDB().QueryRowContext(c.Request.Context(), `SELECT t.work_dir FROM gt_tasks t WHERE t.uuid=? AND `+scope, args...).Scan(&workDir); err != nil {
+			if err == sql.ErrNoRows {
+				i18n.Error(c, http.StatusNotFound, "localserver_task_not_found", "task_not_found")
+			} else {
+				i18n.LocalServerError(c, http.StatusInternalServerError, err)
+			}
+			return
+		}
+	} else if channelType := c.Query("channel_type"); channelType != "" {
+		switch channelType {
+		case ChannelTypeWechat, ChannelTypeWecom, ChannelTypeFeishu, ChannelTypeDingtalk:
+		default:
+			i18n.Error(c, http.StatusBadRequest, "common_request_invalid", "invalid_request")
+			return
+		}
+		// 只解析已保存的通道工作区，不接受任意探测目录。
+		if err := h.taskDB().QueryRowContext(c.Request.Context(), `SELECT workspace FROM gt_remote_channel_cli_configs WHERE channel_type=?`, channelType).Scan(&workDir); err != nil && err != sql.ErrNoRows {
+			i18n.LocalServerError(c, http.StatusInternalServerError, err)
+			return
+		}
 	}
-	c.JSON(http.StatusOK, gin.H{"models": models})
+	catalog := executor.GetCLIModelCatalogSnapshot(c.Request.Context(), cliType, workDir, c.Query("refresh") == "true")
+	c.JSON(http.StatusOK, catalog)
 }
 
 // listTasks task list
@@ -807,7 +820,9 @@ func (h *TasksHandler) listTasks(c *gin.Context) {
 	query := `SELECT t.uuid, t.title, t.status, t.execution_status, t.cloud_agent_id, t.work_item_type, t.work_item_id,
 		t.created_at, t.updated_at, t.content_snapshot,
 		t.cloud_agent_name_snapshot, t.project_uuid, COALESCE(pr.name,''), COALESCE(pr.icon,''), t.selected_pipeline_uuid,
-		t.pipeline_snapshot_uuid, t.execution_mode, t.execution_tool, t.vibe_coding_session_json, t.execution_index, t.vibe_coding_model,
+		t.pipeline_snapshot_uuid, t.execution_mode, t.execution_tool, t.vibe_coding_session_json, t.execution_index,
+		CASE WHEN t.execution_mode='cli' THEN COALESCE((SELECT model_name FROM gt_task_steps WHERE uuid=t.current_step_uuid),'') ELSE t.vibe_coding_model END,
+		COALESCE((SELECT thinking_level FROM gt_task_steps WHERE uuid=t.current_step_uuid AND t.execution_mode='cli'),''),
 		COALESCE(NULLIF(ps.name,''), sel.name, ''), COALESCE(NULLIF(ps.avatar,''), sel.avatar, ''),
 		t.selected_expert_group_uuid, t.expert_group_snapshot_uuid, COALESCE(egs.name, eg.name, ''), COALESCE(egs.avatar, eg.avatar, ''),
 		t.priority, t.planned_start_date, t.planned_end_date
@@ -926,6 +941,7 @@ func (h *TasksHandler) listTasks(c *gin.Context) {
 		ExecutionMode             string              `json:"execution_mode"`
 		ExecutionTool             string              `json:"execution_tool"`
 		ExecutionModel            string              `json:"execution_model"`
+		ThinkingLevel             string              `json:"thinking_level"`
 		ExecutionToolName         string              `json:"execution_tool_name,omitempty"`
 		ExecutionBound            bool                `json:"execution_bound"`
 		ExecutionIndex            int                 `json:"execution_index"`
@@ -947,7 +963,7 @@ func (h *TasksHandler) listTasks(c *gin.Context) {
 		//The front end gets the "ghost task" with an empty UUID.
 		if err := rows.Scan(&t.UUID, &t.Title, &t.Status, &t.ExecutionStatus, &t.AgentID, &t.WorkItemType, &t.WorkItemID,
 			&t.CreatedAt, &t.UpdatedAt, &t.ContentSnapshot, &t.AgentNameSnapshot, &t.ProjectUUID, &t.ProjectName, &t.ProjectIcon,
-			&t.SelectedPipelineUUID, &t.PipelineSnapshotUUID, &t.ExecutionMode, &t.ExecutionTool, &sessionJSON, &t.ExecutionIndex, &t.ExecutionModel,
+			&t.SelectedPipelineUUID, &t.PipelineSnapshotUUID, &t.ExecutionMode, &t.ExecutionTool, &sessionJSON, &t.ExecutionIndex, &t.ExecutionModel, &t.ThinkingLevel,
 			&t.PipelineNameSnapshot, &t.PipelineAvatarSnapshot, &t.SelectedExpertGroupUUID, &t.ExpertGroupSnapshotUUID,
 			&t.ExpertGroupNameSnapshot, &t.ExpertGroupAvatarSnapshot, &t.Priority, &t.PlannedStartDate, &t.PlannedEndDate); err != nil {
 			i18n.LocalServerError(c, http.StatusInternalServerError, err)
@@ -1146,13 +1162,14 @@ func (h *TasksHandler) loadTaskDetail(ctx context.Context, taskUUID string) (map
 	task["work_dirs"] = workDirs
 	// CLI 直接执行的模型记录在隐式步骤上，详情页需要它来固定展示「直接执行：CLI · 模型」。
 	if executionMode == taskruntime.ExecutionModeCLI {
-		var cliStepModel string
+		var cliStepModel, cliThinkingLevel string
 		if scanErr := h.taskDB().QueryRowContext(ctx,
-			`SELECT model_name FROM gt_task_steps WHERE task_uuid=? AND step_key=? LIMIT 1`,
-			taskUUID, taskruntime.CLIDirectStepKey).Scan(&cliStepModel); scanErr != nil && scanErr != sql.ErrNoRows {
+			`SELECT model_name, thinking_level FROM gt_task_steps WHERE task_uuid=? AND step_key=? LIMIT 1`,
+			taskUUID, taskruntime.CLIDirectStepKey).Scan(&cliStepModel, &cliThinkingLevel); scanErr != nil && scanErr != sql.ErrNoRows {
 			return nil, fmt.Errorf("读取 CLI 直接执行模型失败: %w", scanErr)
 		}
 		task["execution_model"] = cliStepModel
+		task["thinking_level"] = cliThinkingLevel
 	}
 	projectRows, err := h.taskDB().QueryContext(ctx, `SELECT l.project_uuid, p.name, p.icon, p.main_dir, l.relation_type, l.sort_order
 		FROM gt_task_project_links l JOIN gt_projects p ON p.uuid=l.project_uuid WHERE l.task_uuid=? ORDER BY l.sort_order, l.id`, taskUUID)
@@ -1180,7 +1197,7 @@ func (h *TasksHandler) loadTaskDetail(ctx context.Context, taskUUID string) (map
 
 	// Query steps
 	rows, err := h.taskDB().QueryContext(ctx,
-		`SELECT uuid, step_key, name, description, avatar, step_order, cli_type, model_name, status, execution_status, prompt_snapshot, step_dir, member_role
+		`SELECT uuid, step_key, name, description, avatar, step_order, cli_type, model_name, thinking_level, status, execution_status, prompt_snapshot, step_dir, member_role
 		 FROM gt_task_steps WHERE task_uuid = ? ORDER BY step_order`,
 		taskUUID)
 	if err != nil {
@@ -1190,9 +1207,9 @@ func (h *TasksHandler) loadTaskDetail(ctx context.Context, taskUUID string) (map
 
 	var steps []map[string]interface{}
 	for rows.Next() {
-		var sUUID, stepKey, name, description, avatar, cliType, modelName, stepStatus, stepExecStatus, prompt, stepDir, memberRole string
+		var sUUID, stepKey, name, description, avatar, cliType, modelName, thinkingLevel, stepStatus, stepExecStatus, prompt, stepDir, memberRole string
 		var sortOrder int
-		if err := rows.Scan(&sUUID, &stepKey, &name, &description, &avatar, &sortOrder, &cliType, &modelName, &stepStatus, &stepExecStatus, &prompt, &stepDir, &memberRole); err != nil {
+		if err := rows.Scan(&sUUID, &stepKey, &name, &description, &avatar, &sortOrder, &cliType, &modelName, &thinkingLevel, &stepStatus, &stepExecStatus, &prompt, &stepDir, &memberRole); err != nil {
 			return nil, fmt.Errorf("读取任务步骤失败: %w", err)
 		}
 		steps = append(steps, map[string]interface{}{
@@ -1205,6 +1222,7 @@ func (h *TasksHandler) loadTaskDetail(ctx context.Context, taskUUID string) (map
 			"cli_type":         cliType,
 			"model":            modelName,
 			"model_name":       modelName,
+			"thinking_level":   thinkingLevel,
 			"status":           stepStatus,
 			"execution_status": stepExecStatus,
 			"prompt_snapshot":  prompt,
@@ -1328,29 +1346,30 @@ func (h *TasksHandler) loadTaskWorkDirs(taskUUID, legacyWorkDir string) ([]strin
 func (h *TasksHandler) createTask(c *gin.Context) {
 	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxTaskCreateRequestSize)
 	var body struct {
-		Title                   string                `json:"title"`
-		Description             string                `json:"description"`
-		PipelineUUID            string                `json:"pipeline_uuid"`
-		ExecutionMode           string                `json:"execution_mode"`
-		ExecutionTool           string                `json:"execution_tool"`
-		ModelName               string                `json:"model_name"`
-		ExpertGroupUUID         string                `json:"expert_group_uuid"`
-		StepConfigs             []stepExecutionConfig `json:"step_configs"`
-		ProjectUUID             string                `json:"project_uuid"`
-		SubprojectUUIDs         []string              `json:"subproject_uuids"`
-		ChildProjectUUIDs       []string              `json:"child_project_uuids"`
-		WorkDir                 string                `json:"work_dir"`
-		WorkDirs                []string              `json:"work_dirs"`
-		Priority                string                `json:"priority"`
-		PlannedStartDate        string                `json:"planned_start_date"`
-		PlannedEndDate          string                `json:"planned_end_date"`
-		Status                  string                `json:"status"`
-		WorkItemType            string                `json:"work_item_type"`
-		WorkItemID              json.RawMessage       `json:"work_item_id"`
-		WorkspaceID             int64                 `json:"workspace_id"`
-		CreateNotification      bool                  `json:"create_notification"`
-		CreatedFromConversation bool                  `json:"created_from_conversation"`
-		Attachments             []taskAttachmentInput `json:"attachments"`
+		Title                   string                      `json:"title"`
+		Description             string                      `json:"description"`
+		PipelineUUID            string                      `json:"pipeline_uuid"`
+		ExecutionMode           string                      `json:"execution_mode"`
+		ExecutionTool           string                      `json:"execution_tool"`
+		ModelName               string                      `json:"model_name"`
+		ThinkingLevel           executor.ThinkingLevelInput `json:"thinking_level"`
+		ExpertGroupUUID         string                      `json:"expert_group_uuid"`
+		StepConfigs             []stepExecutionConfig       `json:"step_configs"`
+		ProjectUUID             string                      `json:"project_uuid"`
+		SubprojectUUIDs         []string                    `json:"subproject_uuids"`
+		ChildProjectUUIDs       []string                    `json:"child_project_uuids"`
+		WorkDir                 string                      `json:"work_dir"`
+		WorkDirs                []string                    `json:"work_dirs"`
+		Priority                string                      `json:"priority"`
+		PlannedStartDate        string                      `json:"planned_start_date"`
+		PlannedEndDate          string                      `json:"planned_end_date"`
+		Status                  string                      `json:"status"`
+		WorkItemType            string                      `json:"work_item_type"`
+		WorkItemID              json.RawMessage             `json:"work_item_id"`
+		WorkspaceID             int64                       `json:"workspace_id"`
+		CreateNotification      bool                        `json:"create_notification"`
+		CreatedFromConversation bool                        `json:"created_from_conversation"`
+		Attachments             []taskAttachmentInput       `json:"attachments"`
 		// SyncAgentOutput 任务级「同步 Agent 产出」开关；缺省（nil）按开启处理，
 		// 兼容对话页等未携带该字段的历史入口。
 		SyncAgentOutput *bool `json:"sync_agent_output"`
@@ -1520,6 +1539,7 @@ func (h *TasksHandler) createTask(c *gin.Context) {
 		SelectedPipelineUUID: strings.TrimSpace(body.PipelineUUID), SelectedPipelineConfigJSON: string(selectedConfig),
 		SelectedExpertGroupUUID: strings.TrimSpace(body.ExpertGroupUUID),
 		ExecutionMode:           executionMode, ExecutionTool: executionTool, ExecutionModel: executionModel,
+		ThinkingLevel:   body.ThinkingLevel.Value,
 		SyncAgentOutput: &syncAgentOutput,
 	})
 	if err != nil {
@@ -2045,15 +2065,16 @@ func (h *TasksHandler) ensureTaskPipelineAssigned(ctx context.Context, taskUUID 
 }
 
 type executionModeInput struct {
-	Mode                 string                `json:"mode"`
-	Tool                 string                `json:"tool"`
-	ModelName            string                `json:"model_name"`
-	PipelineUUID         string                `json:"pipeline_uuid"`
-	ExpertGroupUUID      string                `json:"expert_group_uuid"`
-	StepConfigs          []stepExecutionConfig `json:"step_configs"`
-	Start                bool                  `json:"start"`
-	ReplaceExisting      bool                  `json:"replace_existing"`
-	RebindExecutionIndex *int                  `json:"-"`
+	Mode                 string                      `json:"mode"`
+	Tool                 string                      `json:"tool"`
+	ModelName            string                      `json:"model_name"`
+	ThinkingLevel        executor.ThinkingLevelInput `json:"thinking_level"`
+	PipelineUUID         string                      `json:"pipeline_uuid"`
+	ExpertGroupUUID      string                      `json:"expert_group_uuid"`
+	StepConfigs          []stepExecutionConfig       `json:"step_configs"`
+	Start                bool                        `json:"start"`
+	ReplaceExisting      bool                        `json:"replace_existing"`
+	RebindExecutionIndex *int                        `json:"-"`
 }
 
 // assignExecutionMode 是薄 wrapper：解析入参后委托 tasks_core.go 的 gin-free 核心，
@@ -2183,12 +2204,13 @@ func (h *TasksHandler) startTaskExecution(ctx context.Context, taskUUID, request
 
 func (h *TasksHandler) askStepQuestion(c *gin.Context) {
 	var body struct {
-		Question        string `json:"question"`
-		DisplayQuestion string `json:"display_question"`
-		RequestID       string `json:"request_id"`
-		CLIType         string `json:"cli_type"`
-		Model           string `json:"model"`
-		ModelName       string `json:"model_name"`
+		ThinkingLevel   executor.ThinkingLevelInput `json:"thinking_level"`
+		Question        string                      `json:"question"`
+		DisplayQuestion string                      `json:"display_question"`
+		RequestID       string                      `json:"request_id"`
+		CLIType         string                      `json:"cli_type"`
+		Model           string                      `json:"model"`
+		ModelName       string                      `json:"model_name"`
 	}
 	if err := c.ShouldBindJSON(&body); err != nil {
 		i18n.LocalServerError(c, http.StatusBadRequest, err)
@@ -2230,6 +2252,7 @@ func (h *TasksHandler) askStepQuestion(c *gin.Context) {
 		RequestID:         body.RequestID,
 		CLIType:           body.CLIType,
 		Model:             modelName,
+		ThinkingLevel:     body.ThinkingLevel,
 	})
 	if err != nil {
 		h.writeWorkflowError(c, err, http.StatusConflict)
@@ -2290,7 +2313,7 @@ func (h *TasksHandler) listTaskProgress(c *gin.Context) {
 		COALESCE(s.cloud_sync_status, ''), COALESCE(s.cloud_sync_error, ''), COALESCE(s.cloud_sync_at, 0),
 		COALESCE(s.cloud_synced_at, 0), COALESCE(s.updated_at, 0),
 		COALESCE(p.cloud_sync_status, ''), COALESCE(p.cloud_sync_error, ''), COALESCE(p.cloud_synced_at, 0),
-		COALESCE(p.activity_kind, '')
+		COALESCE(p.activity_kind, ''), COALESCE(s.thinking_level,''), COALESCE(s.thinking_level_sent,''), COALESCE(s.thinking_resolution,'inherit')
 		FROM gt_task_progress p LEFT JOIN gt_cli_sessions s ON s.uuid = p.session_uuid
 		WHERE p.task_uuid = ? ORDER BY p.created_at, p.rowid`, c.Param("uuid"))
 	if err != nil {
@@ -2308,13 +2331,13 @@ func (h *TasksHandler) listTaskProgress(c *gin.Context) {
 		var inputTokens, outputTokens, totalTokens, durationMs int64
 		var syncStatus, syncError string
 		var syncAt, syncWatermark, sessionUpdatedAt int64
-		var progressSyncStatus, progressSyncError, activityKind string
+		var progressSyncStatus, progressSyncError, activityKind, thinkingLevel, thinkingSent, thinkingResolution string
 		var progressSyncedAt int64
 		if err := rows.Scan(&id, &taskID, &stepID, &sessionID, &recordType, &prompt, &cliType, &model, &status, &result,
 			&executionMode, &externalSessionID, &dispatchStatus, &dispatchMessage, &createdAt, &startedAt, &finishedAt, &latestEventType, &latestEventContent, &latestEventAt,
 			&inputTokens, &outputTokens, &totalTokens, &durationMs,
 			&syncStatus, &syncError, &syncAt, &syncWatermark, &sessionUpdatedAt,
-			&progressSyncStatus, &progressSyncError, &progressSyncedAt, &activityKind); err != nil {
+			&progressSyncStatus, &progressSyncError, &progressSyncedAt, &activityKind, &thinkingLevel, &thinkingSent, &thinkingResolution); err != nil {
 			i18n.LocalServerError(c, http.StatusInternalServerError, err)
 			return
 		}
@@ -2343,6 +2366,7 @@ func (h *TasksHandler) listTaskProgress(c *gin.Context) {
 		items = append(items, gin.H{"uuid": id, "task_uuid": taskID, "task_step_uuid": stepID,
 			"session_uuid": sessionID, "record_type": recordType, "user_prompt": prompt, "question": prompt,
 			"cli_type": cliType, "model": model, "model_name": model, "status": status,
+			"thinking_level": thinkingLevel, "thinking_level_sent": thinkingSent, "thinking_resolution": thinkingResolution,
 			"execution_mode": executionMode, "external_session_id": externalSessionID,
 			"dispatch_status": dispatchStatus, "dispatch_message": dispatchMessage,
 			"final_result": result, "result": result, "created_at": createdAt, "started_at": startedAt, "finished_at": finishedAt,
@@ -2527,12 +2551,13 @@ func (h *TasksHandler) runStep(c *gin.Context) {
 	stepUUID := c.Param("step_uuid")
 
 	var body struct {
-		Question        string `json:"question"`
-		DisplayQuestion string `json:"display_question"`
-		RequestID       string `json:"request_id"`
-		CLIType         string `json:"cli_type"`
-		Model           string `json:"model"`
-		ModelName       string `json:"model_name"`
+		ThinkingLevel   executor.ThinkingLevelInput `json:"thinking_level"`
+		Question        string                      `json:"question"`
+		DisplayQuestion string                      `json:"display_question"`
+		RequestID       string                      `json:"request_id"`
+		CLIType         string                      `json:"cli_type"`
+		Model           string                      `json:"model"`
+		ModelName       string                      `json:"model_name"`
 	}
 	if err := c.ShouldBindJSON(&body); err != nil {
 		i18n.LocalServerError(c, http.StatusBadRequest, err)
@@ -2581,6 +2606,7 @@ func (h *TasksHandler) runStep(c *gin.Context) {
 		RequestID:     body.RequestID,
 		CLIType:       body.CLIType,
 		Model:         modelName,
+		ThinkingLevel: body.ThinkingLevel,
 		UserPrompt:    prompt,
 		DisplayPrompt: displayQuestion,
 		RecordType:    recordType,
@@ -3395,7 +3421,7 @@ func (h *TasksHandler) listTaskSessions(c *gin.Context) {
 		                  ORDER BY p.created_at ASC LIMIT 1), '') AS display_prompt,
 		        s.input_tokens, s.output_tokens, s.total_tokens,
 		        s.started_at, s.finished_at, s.duration_ms, s.created_at, s.updated_at,
-		        s.error_message
+		        s.error_message, s.model_name, s.thinking_level, s.thinking_level_sent, s.thinking_resolution
 		 FROM gt_cli_sessions s
 		 JOIN gt_task_steps ts ON ts.uuid = s.step_uuid
 		 WHERE s.task_uuid = ?
@@ -3409,29 +3435,33 @@ func (h *TasksHandler) listTaskSessions(c *gin.Context) {
 	defer rows.Close()
 
 	type SessionItem struct {
-		UUID              string `json:"uuid"`
-		TaskUUID          string `json:"task_uuid"`
-		StepUUID          string `json:"step_uuid"`
-		StepKey           string `json:"step_key"`
-		StepName          string `json:"step_name"`
-		ConversationUUID  string `json:"conversation_uuid"`
-		ParentSessionUUID string `json:"parent_session_uuid"`
-		RunNo             int    `json:"run_no"`
-		Status            string `json:"status"`
-		CLIType           string `json:"cli_type"`
-		ExternalSessionID string `json:"external_session_id"`
-		WorkDir           string `json:"work_dir"`
-		PromptSnapshot    string `json:"prompt_snapshot"`
-		DisplayPrompt     string `json:"display_prompt"`
-		InputTokens       int    `json:"input_tokens"`
-		OutputTokens      int    `json:"output_tokens"`
-		TotalTokens       int    `json:"total_tokens"`
-		StartedAt         int64  `json:"started_at"`
-		FinishedAt        int64  `json:"finished_at"`
-		DurationMs        int64  `json:"duration_ms"`
-		CreatedAt         int64  `json:"created_at"`
-		UpdatedAt         int64  `json:"updated_at"`
-		ErrorMessage      string `json:"error_message"`
+		UUID               string `json:"uuid"`
+		TaskUUID           string `json:"task_uuid"`
+		StepUUID           string `json:"step_uuid"`
+		StepKey            string `json:"step_key"`
+		StepName           string `json:"step_name"`
+		ConversationUUID   string `json:"conversation_uuid"`
+		ParentSessionUUID  string `json:"parent_session_uuid"`
+		RunNo              int    `json:"run_no"`
+		Status             string `json:"status"`
+		CLIType            string `json:"cli_type"`
+		ExternalSessionID  string `json:"external_session_id"`
+		WorkDir            string `json:"work_dir"`
+		PromptSnapshot     string `json:"prompt_snapshot"`
+		DisplayPrompt      string `json:"display_prompt"`
+		InputTokens        int    `json:"input_tokens"`
+		OutputTokens       int    `json:"output_tokens"`
+		TotalTokens        int    `json:"total_tokens"`
+		StartedAt          int64  `json:"started_at"`
+		FinishedAt         int64  `json:"finished_at"`
+		DurationMs         int64  `json:"duration_ms"`
+		CreatedAt          int64  `json:"created_at"`
+		UpdatedAt          int64  `json:"updated_at"`
+		ModelName          string `json:"model_name"`
+		ThinkingLevel      string `json:"thinking_level"`
+		ThinkingLevelSent  string `json:"thinking_level_sent"`
+		ThinkingResolution string `json:"thinking_resolution"`
+		ErrorMessage       string `json:"error_message"`
 	}
 
 	items := make([]SessionItem, 0)
@@ -3443,7 +3473,7 @@ func (h *TasksHandler) listTaskSessions(c *gin.Context) {
 			&item.CLIType, &item.ExternalSessionID, &item.WorkDir, &item.PromptSnapshot, &item.DisplayPrompt,
 			&item.InputTokens, &item.OutputTokens, &item.TotalTokens,
 			&item.StartedAt, &item.FinishedAt, &item.DurationMs, &item.CreatedAt, &item.UpdatedAt,
-			&item.ErrorMessage,
+			&item.ErrorMessage, &item.ModelName, &item.ThinkingLevel, &item.ThinkingLevelSent, &item.ThinkingResolution,
 		); err != nil {
 			i18n.LocalServerError(c, http.StatusInternalServerError, err)
 			return
@@ -3547,12 +3577,13 @@ func (h *TasksHandler) getSessionEventFull(c *gin.Context) {
 func (h *TasksHandler) continueSession(c *gin.Context) {
 	parentSessionUUID := c.Param("uuid")
 	var body struct {
-		Content        string `json:"content"`
-		DisplayContent string `json:"display_content"`
-		RequestID      string `json:"request_id"`
-		CLIType        string `json:"cli_type"`
-		Model          string `json:"model"`
-		ModelName      string `json:"model_name"`
+		ThinkingLevel  executor.ThinkingLevelInput `json:"thinking_level"`
+		Content        string                      `json:"content"`
+		DisplayContent string                      `json:"display_content"`
+		RequestID      string                      `json:"request_id"`
+		CLIType        string                      `json:"cli_type"`
+		Model          string                      `json:"model"`
+		ModelName      string                      `json:"model_name"`
 	}
 	if err := c.ShouldBindJSON(&body); err != nil {
 		i18n.LocalServerError(c, http.StatusBadRequest, err)
@@ -3581,6 +3612,7 @@ func (h *TasksHandler) continueSession(c *gin.Context) {
 			RequestID:         body.RequestID,
 			CLIType:           body.CLIType,
 			Model:             modelName,
+			ThinkingLevel:     body.ThinkingLevel,
 		},
 	)
 	if err != nil {

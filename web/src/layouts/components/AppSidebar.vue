@@ -91,6 +91,15 @@
         <span class="nav-label">{{ t('layout.menu.remoteChannels') }}</span>
       </RouterLink>
 
+      <RouterLink
+        to="/skills"
+        class="nav-item"
+        :class="{ active: activeKey === 'skills' }"
+      >
+        <SidebarMenuIcon class="nav-icon" name="skills" :dark="isDark" />
+        <span class="nav-label">{{ t('layout.menu.skills') }}</span>
+      </RouterLink>
+
       <!-- 更多菜单（悬停或点击展示项目、配置中心、命令、接口管理） -->
       <a-dropdown
         v-model:open="moreMenuOpen"
@@ -398,7 +407,7 @@
         </div>
         <div class="user-text">
           <span class="user-title">{{ userNickname }}</span>
-          <span class="user-sub">{{ authStore.cloudLoggedIn ? (authStore.cloudUser?.serverUrl || authStore.cloudUser?.username || 'GoTeams') : (t('layout.sidebar.guestLogin') || '本地 · 点击登录') }}</span>
+          <span class="user-sub">{{ authStore.cloudLoggedIn ? (authStore.cloudUser?.username || 'GoTeams') : (t('layout.sidebar.guestLogin') || '本地 · 点击登录') }}</span>
         </div>
       </div>
 
@@ -435,7 +444,7 @@
               </div>
               <div class="user-text">
                 <span class="user-title">{{ userNickname }}</span>
-                <span class="user-sub">{{ authStore.cloudLoggedIn ? (authStore.cloudUser?.serverUrl || authStore.cloudUser?.username || '') : (t('layout.sidebar.guestLogin') || '本地 · 点击登录') }}</span>
+                <span class="user-sub">{{ authStore.cloudLoggedIn ? (authStore.cloudUser?.username || '') : (t('layout.sidebar.guestLogin') || '本地 · 点击登录') }}</span>
               </div>
             </button>
 

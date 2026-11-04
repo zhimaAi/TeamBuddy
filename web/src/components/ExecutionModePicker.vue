@@ -174,6 +174,7 @@
           />
           <a-select
             v-model:value="selectedCliModel"
+            @change="selectedThinkingLevel = ''"
             class="cli-select"
             :placeholder="selectedCliType ? t('workflows.task.assign.chooseModel') : t('workflows.task.assign.chooseCliFirst')"
             :options="modelSelectOptions"
@@ -181,6 +182,7 @@
             :disabled="!selectedCliType"
             size="small"
           />
+          <CliThinkingSelect v-if="selectedCliType && selectedCliModel" v-model="selectedThinkingLevel" :cli-type="selectedCliType" :model-name="selectedCliModel" />
           <button
             type="button"
             class="cli-confirm-btn"
@@ -198,6 +200,8 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
 import VibeModelPicker from '@/components/VibeModelPicker.vue'
+import CliThinkingSelect from '@/components/CliThinkingSelect.vue'
+import { useCliThinkingSelection } from '@/composables/useCliThinkingSelection'
 import { message } from 'ant-design-vue'
 import { useVibeModelPreferences } from '@/composables/useVibeModelPreferences'
 import {
@@ -214,7 +218,6 @@ import { useCliModelOptions } from '@/composables/useCliModelOptions'
 import { loadVibeToolsCapability, type VibeToolsCapability } from '@/composables/useTaskVibeTool'
 import {
   VIBE_CODING_TOOLS,
-  isManualVibeTool,
   supportsVibeModel,
   isVibeCodingTool,
   vibeToolLabelKey,
@@ -232,6 +235,7 @@ export interface ExecutionModeSelection {
   expertGroupUuid?: string
   executionTool?: string
   modelName?: string
+  thinkingLevel?: string
   displayName: string
   avatar?: string
 }
@@ -276,6 +280,8 @@ const codexCapability = ref<VibeToolsCapability>({ available: true })
 
 const selectedCliType = ref('')
 const selectedCliModel = ref('')
+const selectedThinkingLevel = ref('')
+const { resetThinkingDrafts } = useCliThinkingSelection(() => selectedCliType.value, () => selectedCliModel.value, selectedThinkingLevel)
 
 const pipelines = computed(() => pipelineStore.pipelines)
 const pipelineLoading = computed(() => pipelineStore.loading)
@@ -305,6 +311,8 @@ watch(
     if (val?.mode === 'cli') {
       if (val.executionTool) selectedCliType.value = val.executionTool
       if (val.modelName) selectedCliModel.value = val.modelName
+      selectedThinkingLevel.value = val.thinkingLevel || ''
+      resetThinkingDrafts()
     }
   },
   { immediate: true },
@@ -343,8 +351,6 @@ function vibeToolDisabled(tool: string) {
   const capability = vibeCapability(tool)
   if (!capability) return tool !== 'codex' || !codexCapability.value.available
   if (!capability.available) return true
-  // 手动模式不启动本机进程，没有可执行文件可探测，只要能力可用就允许选择。
-  if (isManualVibeTool(tool)) return false
   return tool !== 'codex' && capability.installed === false
 }
 
@@ -361,7 +367,7 @@ async function selectVibeTool(tool: VibeCodingToolId, model?: string) {
   else if (props.modelValue?.mode === 'vibe_coding' && props.modelValue.executionTool === tool) {
     vibeModels.value[tool] = props.modelValue.modelName || ''
   }
-  let modelName = ''
+  let modelName: string
   try {
     modelName = await resolveVibeModel(tool)
   } catch (error) {
@@ -386,7 +392,7 @@ async function handleCliTypeChange(cliType: unknown) {
   selectedCliModel.value = ''
   if (typeStr) {
     const models = await loadModelOptions(typeStr)
-    if (models.length > 0) {
+    if (selectedCliType.value === typeStr && models.length > 0) {
       selectedCliModel.value = models[0]
     }
   }
@@ -399,6 +405,7 @@ function confirmCliSelection() {
     mode: 'cli',
     executionTool: selectedCliType.value,
     modelName: selectedCliModel.value,
+    thinkingLevel: selectedThinkingLevel.value,
     displayName: `${t('workflows.task.common.directExecution')} · ${cliName} (${selectedCliModel.value})`,
   }
   emit('update:modelValue', selection)

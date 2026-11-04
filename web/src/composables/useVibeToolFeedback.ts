@@ -4,10 +4,6 @@ import type { VibeToolOpenResult } from '@/composables/useTaskVibeTool'
 
 // 各创建、指派和详情入口共享反馈顺序，避免工具分支在页面中扩散。
 export function showVibeToolOpenResult(result: VibeToolOpenResult, toolName: string): void {
-  if (result.manual) {
-    message.info(t('workflows.task.detail.manualPackHint', { tool: toolName }))
-    return
-  }
   if (result.requiresIDEExit && result.retry) {
     const retry = result.retry
     let retrying = false

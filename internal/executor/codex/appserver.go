@@ -48,11 +48,16 @@ type RPCRequest struct {
 
 // ModelInfo is a single model entry returned by model/list.
 type ModelInfo struct {
-	ID          string `json:"id"`
-	Model       string `json:"model,omitempty"`
-	DisplayName string `json:"displayName,omitempty"`
-	Hidden      bool   `json:"hidden,omitempty"`
-	IsDefault   bool   `json:"isDefault,omitempty"`
+	ID                        string `json:"id"`
+	Model                     string `json:"model,omitempty"`
+	DisplayName               string `json:"displayName,omitempty"`
+	Hidden                    bool   `json:"hidden,omitempty"`
+	IsDefault                 bool   `json:"isDefault,omitempty"`
+	SupportedReasoningEfforts []struct {
+		ReasoningEffort string `json:"reasoningEffort"`
+		Description     string `json:"description"`
+	} `json:"supportedReasoningEfforts"`
+	DefaultReasoningEffort string `json:"defaultReasoningEffort"`
 }
 
 // ModelListResult is the result payload of model/list (paginated).
@@ -105,11 +110,16 @@ type AppServerSession struct {
 // handshake, and returns a session for issuing JSON-RPC requests. The caller must
 // call Close to terminate the process.
 func StartAppServer(ctx context.Context, execPath string) (*AppServerSession, error) {
+	return startAppServer(ctx, execPath, "")
+}
+
+func startAppServer(ctx context.Context, execPath, workDir string) (*AppServerSession, error) {
 	cmd, err := executor.NewCLIProbeCommand(ctx, execPath, "app-server")
 	if err != nil {
 		return nil, err
 	}
 
+	cmd.Dir = workDir
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return nil, err
@@ -298,42 +308,69 @@ func (s *AppServerSession) ListModels(ctx context.Context, includeHidden bool) (
 // unsupported, or no provider configured) it falls back to parsing
 // ~/.codex/config.toml so existing behavior is preserved.
 func ResolveModels(ctx context.Context, execPath string) []string {
+	catalog, _ := resolveCatalog(ctx, execPath, "", "")
+	return catalog.Models()
+}
+
+func resolveCatalog(ctx context.Context, execPath, workDir, _ string) (executor.CLIModelCatalog, error) {
 	ctx, cancel := context.WithTimeout(ctx, appServerStartupTimeout)
 	defer cancel()
-
-	session, err := StartAppServer(ctx, execPath)
+	configured := resolveCodexModelsFromConfig()
+	catalog := executor.CLIModelCatalog{Meta: executor.CatalogMeta{State: "unknown"}, Options: []executor.CLIModelOption{}}
+	for _, id := range configured {
+		catalog.Options = append(catalog.Options, executor.CLIModelOption{ID: id, Thinking: executor.ModelThinking{Status: "unknown", Source: "unavailable", State: "unknown"}})
+	}
+	session, err := startAppServer(ctx, execPath, workDir)
 	if err != nil {
-		return resolveCodexModelsFromConfig()
+		return catalog, err
 	}
 	defer session.Close()
-
 	models, err := session.ListModels(ctx, false)
 	if err != nil {
-		return resolveCodexModelsFromConfig()
+		return catalog, err
 	}
-
-	names := make([]string, 0, len(models))
 	for _, m := range models {
-		// model/list returns an id used for `-m`; fall back to the model/model field.
 		name := m.ID
 		if name == "" {
 			name = m.Model
 		}
 		if name == "" {
-			name = m.DisplayName
+			continue
 		}
-		if name != "" {
-			names = append(names, name)
+		thinking := executor.ModelThinking{Status: "unknown", Source: "unavailable", State: "unknown"}
+		if m.SupportedReasoningEfforts != nil {
+			values := []string{}
+			for _, effort := range m.SupportedReasoningEfforts {
+				// ultra 包含自动委派，不是普通强度，不在本功能开放。
+				if effort.ReasoningEffort != "ultra" {
+					values = append(values, effort.ReasoningEffort)
+				}
+			}
+			thinking = executor.ThinkingFromLevels("effort", values, m.DefaultReasoningEffort)
+			for i := range thinking.Levels {
+				for _, effort := range m.SupportedReasoningEfforts {
+					if thinking.Levels[i].Value == effort.ReasoningEffort {
+						thinking.Levels[i].Description = effort.Description
+					}
+				}
+			}
+		}
+		found := false
+		for i := range catalog.Options {
+			if catalog.Options[i].ID == name {
+				catalog.Options[i].Thinking = thinking
+				found = true
+				break
+			}
+		}
+		if !found {
+			catalog.Options = append(catalog.Options, executor.CLIModelOption{ID: name, Thinking: thinking})
 		}
 	}
-
-	if len(names) == 0 {
-		// app-server answered but listed nothing (e.g. no provider configured);
-		// fall back to explicitly configured models in config.toml.
-		return resolveCodexModelsFromConfig()
+	if len(models) == 0 {
+		return catalog, executor.ErrThinkingUnavailable
 	}
-	// 自定义 provider 的已配置模型可能不在官方列表中，但仍可通过 -m 使用。
-	return dedupStrings(append(resolveCodexModelsFromConfig(), names...))
+	return catalog, nil
 }
 
 // resolveCodexModelsFromConfig reads configured models from ~/.codex/config.toml.
@@ -387,4 +424,5 @@ func dedupStrings(items []string) []string {
 // an import cycle (executor cannot import codex, but codex can import executor).
 func init() {
 	executor.RegisterCodexModelResolver(ResolveModels)
+	executor.RegisterModelCatalogResolver(executor.CLITypeCodex, resolveCatalog)
 }

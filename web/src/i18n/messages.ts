@@ -1,3 +1,5 @@
+import skillsEnUS from '@/locales/en-US/skills.json'
+import skillsZhCN from '@/locales/zh-CN/skills.json'
 import commonEnUS from '@/locales/en-US/common.json'
 import agentsEnUS from '@/locales/en-US/agents.json'
 import expertGroupsEnUS from '@/locales/en-US/expert-groups.json'
@@ -34,6 +36,7 @@ import workflowBoardZhCN from '@/locales/zh-CN/workflows.board.json'
 import workflowTaskZhCN from '@/locales/zh-CN/workflows.task.json'
 
 export const zhCNMessages = {
+  skills: skillsZhCN,
   agents: agentsZhCN,
   expertGroups: expertGroupsZhCN,
   apis: apisZhCN,
@@ -58,6 +61,7 @@ export const zhCNMessages = {
 export type MessageSchema = typeof zhCNMessages
 
 export const enUSMessages = {
+  skills: skillsEnUS,
   agents: agentsEnUS,
   expertGroups: expertGroupsEnUS,
   apis: apisEnUS,

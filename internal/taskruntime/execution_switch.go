@@ -15,6 +15,7 @@ import (
 	"github.com/google/uuid"
 
 	"goteams-client/internal/cloudsync"
+	"goteams-client/internal/executor"
 	"goteams-client/internal/expertgroup"
 )
 
@@ -32,6 +33,7 @@ type SwitchExecutionInput struct {
 	RebindExecutionIndex       *int
 	Tool                       string
 	ModelName                  string
+	ThinkingLevel              string
 	SelectedPipelineUUID       string
 	SelectedPipelineConfigJSON string
 	Pipeline                   *Snapshot
@@ -47,6 +49,8 @@ type currentExecution struct {
 	expertSnapshotUUID   string
 	currentStepUUID      string
 	cliModel             string
+	thinkingLevel        string
+	workDir              string
 	taskDir              string
 	executionIndex       int
 }
@@ -85,6 +89,31 @@ func (s *Service) ValidateExecutionSwitch(ctx context.Context, taskUUID string, 
 	current, err := s.loadCurrentExecution(ctx, taskUUID)
 	if err != nil {
 		return err
+	}
+	if input.Mode == ExecutionModeCLI {
+		if err := executor.ValidateThinkingLevel(ctx, input.Tool, input.ModelName, current.workDir, input.ThinkingLevel); err != nil {
+			return err
+		}
+	} else if input.ThinkingLevel != "" {
+		return executor.ErrThinkingInvalid
+	}
+	if input.Pipeline != nil {
+		for _, step := range input.Pipeline.Steps {
+			if err := executor.ValidateThinkingLevel(ctx, step.CLIType, step.ModelName, current.workDir, step.ThinkingLevel); err != nil {
+				return err
+			}
+		}
+	}
+	if input.ExpertGroup != nil {
+		members := append([]expertgroup.Member{}, input.ExpertGroup.Members...)
+		if input.ExpertGroup.Leader != nil {
+			members = append(members, *input.ExpertGroup.Leader)
+		}
+		for _, member := range members {
+			if err := executor.ValidateThinkingLevel(ctx, member.CLIType, member.ModelName, current.workDir, member.ThinkingLevel); err != nil {
+				return err
+			}
+		}
 	}
 	if current.mode == "" {
 		return ErrExecutionModeRequired
@@ -235,14 +264,14 @@ func (s *Service) ResetSwitchedExecutionStart(ctx context.Context, taskUUID stri
 func (s *Service) loadCurrentExecution(ctx context.Context, taskUUID string) (currentExecution, error) {
 	return loadCurrentExecutionRow(s.db.QueryRowContext(ctx, `SELECT execution_mode, execution_tool,
 		selected_pipeline_uuid, pipeline_snapshot_uuid, selected_expert_group_uuid,
-		expert_group_snapshot_uuid, current_step_uuid, task_dir, execution_index
+		expert_group_snapshot_uuid, current_step_uuid, task_dir, work_dir, execution_index
 		FROM gt_tasks WHERE uuid=?`, taskUUID), s.db, taskUUID)
 }
 
 func loadCurrentExecutionTx(ctx context.Context, tx *sql.Tx, taskUUID string) (currentExecution, error) {
 	return loadCurrentExecutionRow(tx.QueryRowContext(ctx, `SELECT execution_mode, execution_tool,
 		selected_pipeline_uuid, pipeline_snapshot_uuid, selected_expert_group_uuid,
-		expert_group_snapshot_uuid, current_step_uuid, task_dir, execution_index
+		expert_group_snapshot_uuid, current_step_uuid, task_dir, work_dir, execution_index
 		FROM gt_tasks WHERE uuid=?`, taskUUID), tx, taskUUID)
 }
 
@@ -256,7 +285,7 @@ type queryRower interface {
 
 func loadCurrentExecutionRow(row rowScanner, query queryRower, taskUUID string) (current currentExecution, err error) {
 	err = row.Scan(&current.mode, &current.tool, &current.selectedPipelineUUID, &current.pipelineSnapshotUUID,
-		&current.selectedExpertUUID, &current.expertSnapshotUUID, &current.currentStepUUID, &current.taskDir, &current.executionIndex)
+		&current.selectedExpertUUID, &current.expertSnapshotUUID, &current.currentStepUUID, &current.taskDir, &current.workDir, &current.executionIndex)
 	if err == sql.ErrNoRows {
 		return current, ErrNotFound
 	}
@@ -264,8 +293,8 @@ func loadCurrentExecutionRow(row rowScanner, query queryRower, taskUUID string) 
 		return current, err
 	}
 	if current.mode == ExecutionModeCLI {
-		_ = query.QueryRowContext(context.Background(), `SELECT model_name FROM gt_task_steps
-			WHERE task_uuid=? AND step_key=? LIMIT 1`, taskUUID, CLIDirectStepKey).Scan(&current.cliModel)
+		_ = query.QueryRowContext(context.Background(), `SELECT model_name, thinking_level FROM gt_task_steps
+			WHERE task_uuid=? AND step_key=? LIMIT 1`, taskUUID, CLIDirectStepKey).Scan(&current.cliModel, &current.thinkingLevel)
 	}
 	return current, nil
 }
@@ -282,7 +311,7 @@ func sameExecutionTarget(current currentExecution, input SwitchExecutionInput) b
 	case ExecutionModeVibeCoding:
 		return current.tool == input.Tool
 	case ExecutionModeCLI:
-		return current.tool == input.Tool && current.cliModel == input.ModelName
+		return current.tool == input.Tool && current.cliModel == input.ModelName && current.thinkingLevel == input.ThinkingLevel
 	default:
 		return false
 	}
@@ -292,7 +321,7 @@ func sameCurrentExecution(left, right currentExecution) bool {
 	return left.mode == right.mode && left.tool == right.tool &&
 		left.selectedPipelineUUID == right.selectedPipelineUUID && left.pipelineSnapshotUUID == right.pipelineSnapshotUUID &&
 		left.selectedExpertUUID == right.selectedExpertUUID && left.expertSnapshotUUID == right.expertSnapshotUUID &&
-		left.currentStepUUID == right.currentStepUUID && left.cliModel == right.cliModel &&
+		left.currentStepUUID == right.currentStepUUID && left.cliModel == right.cliModel && left.thinkingLevel == right.thinkingLevel &&
 		left.executionIndex == right.executionIndex
 }
 
@@ -395,12 +424,12 @@ func (prepared preparedSwitchTarget) insert(ctx context.Context, tx *sql.Tx, tas
 			stepKey := fmt.Sprintf("step-%02d", index+1)
 			if _, err = tx.ExecContext(ctx, `INSERT INTO gt_task_steps
 				(uuid, task_uuid, task_pipeline_snapshot_uuid, source_type, source_step_id, local_step_uuid, cloud_step_id,
-				 step_key, step_order, name, description, avatar, prompt_snapshot, cli_type, model_name, step_dir,
+				 step_key, step_order, name, description, avatar, prompt_snapshot, cli_type, model_name, thinking_level, step_dir,
 				 status, execution_status, execution_mode, created_at, updated_at)
-				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'idle', 'pipeline', ?, ?)`,
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'idle', 'pipeline', ?, ?)`,
 				stepUUID, taskUUID, pipelineSnapshotUUID, prepared.input.Pipeline.SourceType, step.SourceStepID,
 				step.LocalStepID, step.CloudStepID, stepKey, index, step.Name, step.Description,
-				step.Avatar, step.Prompt, step.CLIType, step.ModelName, prepared.stepDirs[index], stepStatus, now, now); err != nil {
+				step.Avatar, step.Prompt, step.CLIType, step.ModelName, step.ThinkingLevel, prepared.stepDirs[index], stepStatus, now, now); err != nil {
 				return err
 			}
 		}
@@ -423,11 +452,11 @@ func (prepared preparedSwitchTarget) insert(ctx context.Context, tx *sql.Tx, tas
 			}
 			if _, err := tx.ExecContext(ctx, `INSERT INTO gt_task_steps
 				(uuid, task_uuid, source_type, source_step_id, local_step_uuid, step_key, step_order, name, description,
-				 avatar, prompt_snapshot, cli_type, model_name, step_dir, status, execution_status, execution_mode,
+				 avatar, prompt_snapshot, cli_type, model_name, thinking_level, step_dir, status, execution_status, execution_mode,
 				 member_role, task_expert_group_snapshot_uuid, created_at, updated_at)
-				VALUES (?, ?, 'local', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', 'idle', 'expert_group', ?, ?, ?, ?)`,
+				VALUES (?, ?, 'local', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', 'idle', 'expert_group', ?, ?, ?, ?)`,
 				stepUUID, taskUUID, member.UUID, member.UUID, stepKey, index, member.Name, member.Description,
-				member.Avatar, member.Prompt, member.CLIType, member.ModelName, prepared.stepDirs[index], member.MemberRole,
+				member.Avatar, member.Prompt, member.CLIType, member.ModelName, member.ThinkingLevel, prepared.stepDirs[index], member.MemberRole,
 				expertSnapshotUUID, now, now); err != nil {
 				return err
 			}
@@ -443,9 +472,9 @@ func (prepared preparedSwitchTarget) insert(ctx context.Context, tx *sql.Tx, tas
 		currentStepUUID = uuid.NewString()
 		if _, err := tx.ExecContext(ctx, `INSERT INTO gt_task_steps
 			(uuid, task_uuid, task_pipeline_snapshot_uuid, source_type, step_key, step_order, name, description, avatar,
-			 prompt_snapshot, cli_type, model_name, step_dir, status, execution_status, execution_mode, created_at, updated_at)
-			VALUES (?, ?, '', 'local', ?, 0, ?, '', '', '', ?, ?, '', 'active', 'idle', 'cli', ?, ?)`,
-			currentStepUUID, taskUUID, CLIDirectStepKey, CLIDirectStepName, prepared.input.Tool, prepared.input.ModelName, now, now); err != nil {
+			 prompt_snapshot, cli_type, model_name, thinking_level, step_dir, status, execution_status, execution_mode, created_at, updated_at)
+			VALUES (?, ?, '', 'local', ?, 0, ?, '', '', '', ?, ?, ?, '', 'active', 'idle', 'cli', ?, ?)`,
+			currentStepUUID, taskUUID, CLIDirectStepKey, CLIDirectStepName, prepared.input.Tool, prepared.input.ModelName, prepared.input.ThinkingLevel, now, now); err != nil {
 			return err
 		}
 	case ExecutionModeVibeCoding:

@@ -33,6 +33,7 @@ type ExecutionHistorySummary struct {
 	ExecutionTool string `json:"execution_tool"`
 	TargetName    string `json:"target_name"`
 	ModelName     string `json:"model_name"`
+	ThinkingLevel string `json:"thinking_level"`
 	StartedAt     int64  `json:"started_at"`
 	ArchivedAt    int64  `json:"archived_at"`
 }
@@ -46,6 +47,7 @@ type ExecutionHistoryStep struct {
 	SortOrder       int    `json:"sort_order"`
 	CLIType         string `json:"cli_type"`
 	ModelName       string `json:"model_name"`
+	ThinkingLevel   string `json:"thinking_level"`
 	Status          string `json:"status"`
 	ExecutionStatus string `json:"execution_status"`
 	PromptSnapshot  string `json:"prompt_snapshot"`
@@ -63,6 +65,9 @@ type ExecutionHistoryProgress struct {
 	UserPrompt         string `json:"user_prompt"`
 	CLIType            string `json:"cli_type"`
 	ModelName          string `json:"model"`
+	ThinkingLevel      string `json:"thinking_level"`
+	ThinkingLevelSent  string `json:"thinking_level_sent"`
+	ThinkingResolution string `json:"thinking_resolution"`
 	Status             string `json:"status"`
 	FinalResult        string `json:"final_result"`
 	ExecutionMode      string `json:"execution_mode"`
@@ -82,27 +87,30 @@ type ExecutionHistoryProgress struct {
 }
 
 type ExecutionHistorySession struct {
-	UUID              string `json:"uuid"`
-	StepUUID          string `json:"step_uuid"`
-	ConversationUUID  string `json:"conversation_uuid"`
-	ParentSessionUUID string `json:"parent_session_uuid"`
-	RunNo             int    `json:"run_no"`
-	Status            string `json:"status"`
-	CLIType           string `json:"cli_type"`
-	ModelName         string `json:"model_name"`
-	ExternalSessionID string `json:"external_session_id"`
-	ResultStatus      string `json:"result_status"`
-	FinalResult       string `json:"final_result"`
-	ErrorCode         string `json:"error_code"`
-	ErrorMessage      string `json:"error_message"`
-	InputTokens       int64  `json:"input_tokens"`
-	OutputTokens      int64  `json:"output_tokens"`
-	TotalTokens       int64  `json:"total_tokens"`
-	StartedAt         int64  `json:"started_at"`
-	FinishedAt        int64  `json:"finished_at"`
-	DurationMs        int64  `json:"duration_ms"`
-	CreatedAt         int64  `json:"created_at"`
-	UpdatedAt         int64  `json:"updated_at"`
+	UUID               string `json:"uuid"`
+	StepUUID           string `json:"step_uuid"`
+	ConversationUUID   string `json:"conversation_uuid"`
+	ParentSessionUUID  string `json:"parent_session_uuid"`
+	RunNo              int    `json:"run_no"`
+	Status             string `json:"status"`
+	CLIType            string `json:"cli_type"`
+	ModelName          string `json:"model_name"`
+	ThinkingLevel      string `json:"thinking_level"`
+	ThinkingLevelSent  string `json:"thinking_level_sent"`
+	ThinkingResolution string `json:"thinking_resolution"`
+	ExternalSessionID  string `json:"external_session_id"`
+	ResultStatus       string `json:"result_status"`
+	FinalResult        string `json:"final_result"`
+	ErrorCode          string `json:"error_code"`
+	ErrorMessage       string `json:"error_message"`
+	InputTokens        int64  `json:"input_tokens"`
+	OutputTokens       int64  `json:"output_tokens"`
+	TotalTokens        int64  `json:"total_tokens"`
+	StartedAt          int64  `json:"started_at"`
+	FinishedAt         int64  `json:"finished_at"`
+	DurationMs         int64  `json:"duration_ms"`
+	CreatedAt          int64  `json:"created_at"`
+	UpdatedAt          int64  `json:"updated_at"`
 }
 
 type ExecutionHistoryEvent struct {
@@ -158,7 +166,7 @@ func (s *Service) ListExecutionHistory(ctx context.Context, taskUUID string) ([]
 		return nil, err
 	}
 	rows, err := s.db.QueryContext(ctx, `SELECT uuid, task_uuid, execution_no, execution_mode, execution_tool,
-		target_name, model_name, started_at, archived_at
+		target_name, model_name, thinking_level, started_at, archived_at
 		FROM gt_task_execution_history WHERE task_uuid=? ORDER BY execution_no`, taskUUID)
 	if err != nil {
 		return nil, err
@@ -168,7 +176,7 @@ func (s *Service) ListExecutionHistory(ctx context.Context, taskUUID string) ([]
 	for rows.Next() {
 		var item ExecutionHistorySummary
 		if err := rows.Scan(&item.UUID, &item.TaskUUID, &item.ExecutionNo, &item.ExecutionMode,
-			&item.ExecutionTool, &item.TargetName, &item.ModelName, &item.StartedAt, &item.ArchivedAt); err != nil {
+			&item.ExecutionTool, &item.TargetName, &item.ModelName, &item.ThinkingLevel, &item.StartedAt, &item.ArchivedAt); err != nil {
 			return nil, err
 		}
 		items = append(items, item)
@@ -180,10 +188,10 @@ func (s *Service) GetExecutionHistory(ctx context.Context, taskUUID, historyUUID
 	var detail ExecutionHistoryDetail
 	var payloadJSON string
 	err := s.db.QueryRowContext(ctx, `SELECT uuid, task_uuid, execution_no, execution_mode, execution_tool,
-		target_name, model_name, started_at, archived_at, payload_json
+		target_name, model_name, thinking_level, started_at, archived_at, payload_json
 		FROM gt_task_execution_history WHERE task_uuid=? AND uuid=?`, taskUUID, historyUUID).Scan(
 		&detail.UUID, &detail.TaskUUID, &detail.ExecutionNo, &detail.ExecutionMode,
-		&detail.ExecutionTool, &detail.TargetName, &detail.ModelName, &detail.StartedAt,
+		&detail.ExecutionTool, &detail.TargetName, &detail.ModelName, &detail.ThinkingLevel, &detail.StartedAt,
 		&detail.ArchivedAt, &payloadJSON)
 	if err == sql.ErrNoRows {
 		return detail, ErrExecutionHistoryNotFound
@@ -274,15 +282,15 @@ func captureExecutionTx(ctx context.Context, tx *sql.Tx, taskUUID string, output
 		}
 	}
 	if summary.ExecutionMode == ExecutionModeCLI {
-		_ = tx.QueryRowContext(ctx, `SELECT model_name FROM gt_task_steps WHERE task_uuid=? AND step_key=? LIMIT 1`,
-			taskUUID, CLIDirectStepKey).Scan(&summary.ModelName)
+		_ = tx.QueryRowContext(ctx, `SELECT model_name, thinking_level FROM gt_task_steps WHERE task_uuid=? AND step_key=? LIMIT 1`,
+			taskUUID, CLIDirectStepKey).Scan(&summary.ModelName, &summary.ThinkingLevel)
 	}
 	if summary.TargetName == "" && (summary.ExecutionMode == ExecutionModeCLI || summary.ExecutionMode == ExecutionModeVibeCoding) {
 		summary.TargetName = summary.ExecutionTool
 	}
 
 	stepRows, err := tx.QueryContext(ctx, `SELECT uuid, step_key, name, description, avatar, step_order,
-		cli_type, model_name, status, execution_status, prompt_snapshot, step_dir, member_role, created_at
+		cli_type, model_name, thinking_level, status, execution_status, prompt_snapshot, step_dir, member_role, created_at
 		FROM gt_task_steps WHERE task_uuid=? ORDER BY step_order`, taskUUID)
 	if err != nil {
 		return err
@@ -290,7 +298,7 @@ func captureExecutionTx(ctx context.Context, tx *sql.Tx, taskUUID string, output
 	for stepRows.Next() {
 		var item ExecutionHistoryStep
 		if err := stepRows.Scan(&item.UUID, &item.StepKey, &item.Name, &item.Description, &item.Avatar,
-			&item.SortOrder, &item.CLIType, &item.ModelName, &item.Status, &item.ExecutionStatus,
+			&item.SortOrder, &item.CLIType, &item.ModelName, &item.ThinkingLevel, &item.Status, &item.ExecutionStatus,
 			&item.PromptSnapshot, &item.StepDir, &item.MemberRole, &item.CreatedAt); err != nil {
 			stepRows.Close()
 			return err
@@ -310,7 +318,8 @@ func captureExecutionTx(ctx context.Context, tx *sql.Tx, taskUUID string, output
 		p.execution_mode, p.external_session_id, p.dispatch_status, p.dispatch_message,
 		p.created_at, p.started_at, p.finished_at,
 		COALESCE(s.latest_event_type,''), COALESCE(s.latest_event_content,''), COALESCE(s.latest_event_at,0),
-		COALESCE(s.input_tokens,0), COALESCE(s.output_tokens,0), COALESCE(s.total_tokens,0), COALESCE(s.duration_ms,0)
+		COALESCE(s.input_tokens,0), COALESCE(s.output_tokens,0), COALESCE(s.total_tokens,0), COALESCE(s.duration_ms,0),
+		COALESCE(s.thinking_level,''), COALESCE(s.thinking_level_sent,''), COALESCE(s.thinking_resolution,'inherit')
 		FROM gt_task_progress p LEFT JOIN gt_cli_sessions s ON s.uuid=p.session_uuid
 		WHERE p.task_uuid=? ORDER BY p.created_at, p.rowid`, taskUUID)
 	if err != nil {
@@ -323,7 +332,7 @@ func captureExecutionTx(ctx context.Context, tx *sql.Tx, taskUUID string, output
 			&item.FinalResult, &item.ExecutionMode, &item.ExternalSessionID, &item.DispatchStatus,
 			&item.DispatchMessage, &item.CreatedAt, &item.StartedAt, &item.FinishedAt,
 			&item.LatestEventType, &item.LatestEventContent, &item.LatestEventAt,
-			&item.InputTokens, &item.OutputTokens, &item.TotalTokens, &item.DurationMs); err != nil {
+			&item.InputTokens, &item.OutputTokens, &item.TotalTokens, &item.DurationMs, &item.ThinkingLevel, &item.ThinkingLevelSent, &item.ThinkingResolution); err != nil {
 			progressRows.Close()
 			return err
 		}
@@ -338,7 +347,7 @@ func captureExecutionTx(ctx context.Context, tx *sql.Tx, taskUUID string, output
 	}
 
 	sessionRows, err := tx.QueryContext(ctx, `SELECT uuid, step_uuid, conversation_uuid, parent_session_uuid, run_no,
-		status, cli_type, model_name, external_session_id, result_status, final_result, error_code, error_message,
+		status, cli_type, model_name, thinking_level, thinking_level_sent, thinking_resolution, external_session_id, result_status, final_result, error_code, error_message,
 		input_tokens, output_tokens, total_tokens, started_at, finished_at, duration_ms, created_at, updated_at
 		FROM gt_cli_sessions WHERE task_uuid=? ORDER BY created_at, rowid`, taskUUID)
 	if err != nil {
@@ -347,7 +356,7 @@ func captureExecutionTx(ctx context.Context, tx *sql.Tx, taskUUID string, output
 	for sessionRows.Next() {
 		var item ExecutionHistorySession
 		if err := sessionRows.Scan(&item.UUID, &item.StepUUID, &item.ConversationUUID,
-			&item.ParentSessionUUID, &item.RunNo, &item.Status, &item.CLIType, &item.ModelName,
+			&item.ParentSessionUUID, &item.RunNo, &item.Status, &item.CLIType, &item.ModelName, &item.ThinkingLevel, &item.ThinkingLevelSent, &item.ThinkingResolution,
 			&item.ExternalSessionID, &item.ResultStatus, &item.FinalResult, &item.ErrorCode,
 			&item.ErrorMessage, &item.InputTokens, &item.OutputTokens, &item.TotalTokens,
 			&item.StartedAt, &item.FinishedAt, &item.DurationMs, &item.CreatedAt, &item.UpdatedAt); err != nil {
@@ -436,9 +445,9 @@ func captureExecutionTx(ctx context.Context, tx *sql.Tx, taskUUID string, output
 		return err
 	}
 	_, err = tx.ExecContext(ctx, `INSERT INTO gt_task_execution_history
-		(uuid, task_uuid, execution_no, execution_mode, execution_tool, target_name, model_name, started_at, archived_at, payload_json)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, summary.UUID, summary.TaskUUID, summary.ExecutionNo,
-		summary.ExecutionMode, summary.ExecutionTool, strings.TrimSpace(summary.TargetName), strings.TrimSpace(summary.ModelName),
+		(uuid, task_uuid, execution_no, execution_mode, execution_tool, target_name, model_name, thinking_level, started_at, archived_at, payload_json)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, summary.UUID, summary.TaskUUID, summary.ExecutionNo,
+		summary.ExecutionMode, summary.ExecutionTool, strings.TrimSpace(summary.TargetName), strings.TrimSpace(summary.ModelName), summary.ThinkingLevel,
 		summary.StartedAt, summary.ArchivedAt, string(payloadJSON))
 	return err
 }
@@ -466,14 +475,14 @@ func (s *Service) ConversationRecords(ctx context.Context, taskUUID string) (str
 		return "", nil, err
 	}
 	items := []ExecutionHistoryDetail{}
-	rows, err := tx.QueryContext(ctx, `SELECT uuid,task_uuid,execution_no,execution_mode,execution_tool,target_name,model_name,started_at,archived_at,payload_json FROM gt_task_execution_history WHERE task_uuid=? ORDER BY execution_no`, taskUUID)
+	rows, err := tx.QueryContext(ctx, `SELECT uuid,task_uuid,execution_no,execution_mode,execution_tool,target_name,model_name,thinking_level,started_at,archived_at,payload_json FROM gt_task_execution_history WHERE task_uuid=? ORDER BY execution_no`, taskUUID)
 	if err != nil {
 		return "", nil, err
 	}
 	for rows.Next() {
 		var item ExecutionHistoryDetail
 		var raw string
-		if err = rows.Scan(&item.UUID, &item.TaskUUID, &item.ExecutionNo, &item.ExecutionMode, &item.ExecutionTool, &item.TargetName, &item.ModelName, &item.StartedAt, &item.ArchivedAt, &raw); err != nil {
+		if err = rows.Scan(&item.UUID, &item.TaskUUID, &item.ExecutionNo, &item.ExecutionMode, &item.ExecutionTool, &item.TargetName, &item.ModelName, &item.ThinkingLevel, &item.StartedAt, &item.ArchivedAt, &raw); err != nil {
 			rows.Close()
 			return "", nil, err
 		}

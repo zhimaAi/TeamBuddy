@@ -2,6 +2,7 @@ package executor
 
 import (
 	"context"
+	"strings"
 	"sync"
 	"time"
 )
@@ -23,7 +24,7 @@ var (
 type cliDiscoveryCache struct {
 	mu           sync.RWMutex
 	items        []DiscoveredCLI
-	models       map[string][]string
+	models       map[string]CLIModelCatalog
 	lastSync     time.Time
 	refresh      *cliDiscoveryCall
 	modelFlights map[string]*modelDiscoveryCall
@@ -39,11 +40,11 @@ type cliDiscoveryCall struct {
 
 type modelDiscoveryCall struct {
 	done       chan struct{}
-	models     []string
+	models     CLIModelCatalog
 	generation uint64
 }
 
-var defaultCLIDiscovery = &cliDiscoveryCache{models: map[string][]string{}}
+var defaultCLIDiscovery = &cliDiscoveryCache{models: map[string]CLIModelCatalog{}}
 
 // refreshMu 防止周期任务重叠；手动检测共享同一轮实际探测。
 var refreshMu sync.Mutex
@@ -116,62 +117,150 @@ func GetCLIDiscovery(ctx context.Context) []DiscoveredCLI {
 }
 
 func GetCLIModels(ctx context.Context, cliType string) []string {
-	return defaultCLIDiscovery.probeModels(ctx, cliType, false)
+	return GetCLIModelCatalog(ctx, cliType, "", "", false).Models()
 }
 
-// RefreshCLIModels 绕过缓存；暂时探测失败时保留同一安装版本的可用列表。
+// RefreshCLIModels 保留旧调用方；目录和旧字符串列表来自同一份快照。
 func RefreshCLIModels(ctx context.Context, cliType string) []string {
-	return defaultCLIDiscovery.probeModels(ctx, cliType, true)
+	return GetCLIModelCatalog(ctx, cliType, "", "", true).Models()
 }
 
-func (c *cliDiscoveryCache) probeModels(ctx context.Context, cliType string, force bool) []string {
-	ctx, cancel := context.WithTimeout(ctx, 45*time.Second)
-	defer cancel()
-	c.mu.Lock()
-	if !force && len(c.models[cliType]) > 0 {
-		models := cloneModels(c.models[cliType])
-		c.mu.Unlock()
-		return models
+// GetCLIModelCatalogSnapshot serves the whole cached directory without waiting for
+// freshness. UI callers refresh stale snapshots in the background; save/start still
+// use GetCLIModelCatalog and synchronous validation.
+func GetCLIModelCatalogSnapshot(ctx context.Context, cliType, workDir string, force bool) CLIModelCatalog {
+	if !force {
+		key := modelCatalogKey(cliType, workDir)
+		defaultCLIDiscovery.mu.RLock()
+		cached := catalogView(defaultCLIDiscovery.models[key])
+		defaultCLIDiscovery.mu.RUnlock()
+		if len(cached.Options) > 0 {
+			// Legacy name-only snapshots need one background capability refresh,
+			// not a fresh three-minute UI lease for unverified directory data.
+			if cached.Meta.UpdatedAt.IsZero() {
+				cached.Meta.State = "stale"
+			}
+			return cached
+		}
 	}
-	if call := c.modelFlights[cliType]; call != nil {
+	return GetCLIModelCatalog(ctx, cliType, workDir, "", force)
+}
+
+func GetCLIModelCatalog(ctx context.Context, cliType, workDir, model string, force bool) CLIModelCatalog {
+	return defaultCLIDiscovery.probeCatalog(ctx, cliType, workDir, model, force)
+}
+
+func (c *cliDiscoveryCache) probeCatalog(ctx context.Context, cliType, workDir, model string, force bool) CLIModelCatalog {
+	ctx, cancel := context.WithTimeout(ctx, cliDiscoveryBudget)
+	defer cancel()
+	GetCLIDiscovery(ctx)
+	key := modelCatalogKey(cliType, workDir)
+	flightKey := key
+	if cliType == CLITypePi {
+		flightKey += "\x00" + model
+	}
+	c.mu.Lock()
+	cached := catalogView(c.models[key])
+	ready := len(cached.Options) > 0
+	if model != "" && cliType == CLITypePi {
+		ready = false
+		for _, option := range cached.Options {
+			if option.ID == model && option.Thinking.State == "fresh" {
+				ready = true
+				break
+			}
+		}
+	}
+	if !force && ready && cached.Meta.State != "stale" && !cached.Meta.UpdatedAt.IsZero() && time.Since(cached.Meta.UpdatedAt) < cliDiscoveryRefreshInterval {
+		c.mu.Unlock()
+		return cached
+	}
+	if call := c.modelFlights[flightKey]; call != nil {
 		c.mu.Unlock()
 		select {
 		case <-ctx.Done():
-			models, _ := c.getModel(cliType)
-			return models
+			return cached
 		case <-call.done:
-			return cloneModels(call.models)
+			return catalogView(call.models)
 		}
 	}
 	if ctx.Err() != nil {
-		models := cloneModels(c.models[cliType])
 		c.mu.Unlock()
-		return models
+		return cached
 	}
 	if c.modelFlights == nil {
 		c.modelFlights = make(map[string]*modelDiscoveryCall)
 	}
 	call := &modelDiscoveryCall{done: make(chan struct{}), generation: c.generations[cliType]}
-	c.modelFlights[cliType] = call
+	c.modelFlights[flightKey] = call
+	var execPath, version string
+	for _, item := range c.items {
+		if item.Type == cliType && item.Installed {
+			execPath, version = item.ExecPath, item.Version
+			break
+		}
+	}
 	c.mu.Unlock()
 
-	models := DiscoverCLIModels(ctx, cliType)
-	c.mu.Lock()
-	// 安装状态/版本变更或请求取消后，不让旧探测覆盖新的缓存。
-	if ctx.Err() == nil && call.generation == c.generations[cliType] && len(models) > 0 {
-		if c.models == nil {
-			c.models = make(map[string][]string)
-		}
-		c.models[cliType] = cloneModels(models)
+	next, err := discoverModelCatalog(ctx, cliType, execPath, workDir, model)
+	if ctx.Err() != nil {
+		err = ctx.Err()
 	}
-	call.models = cloneModels(c.models[cliType])
-	if c.modelFlights[cliType] == call {
-		delete(c.modelFlights, cliType)
+	c.mu.Lock()
+	if call.generation == c.generations[cliType] {
+		if err == nil {
+			state := "fresh"
+			if catalogResolvers[cliType] == nil {
+				state = "unknown"
+			}
+			next.Meta = CatalogMeta{State: state, CLIVersion: version, UpdatedAt: time.Now()}
+			// Pi 仅核验选中模型；保留同一上下文中其他模型已成功核验的能力。
+			previous := c.models[key]
+			if cliType == CLITypePi {
+				next = appendCatalogNames(next, previous.Models())
+			}
+			for i := range next.Options {
+				if next.Options[i].Thinking.State != "unknown" {
+					continue
+				}
+				for _, old := range previous.Options {
+					if old.ID == next.Options[i].ID && old.Thinking.Status != "unknown" {
+						next.Options[i].Thinking = old.Thinking
+						// A targeted Pi query did not recheck unrelated models. Other
+						// failed/missing controls retain their last choices as stale.
+						if cliType != CLITypePi || model == "" || old.ID == model {
+							next.Options[i].Thinking.State = "stale"
+						}
+						break
+					}
+				}
+			}
+			if c.models == nil {
+				c.models = make(map[string]CLIModelCatalog)
+			}
+			c.models[key] = cloneCatalog(next)
+		} else if len(cached.Options) == 0 && len(next.Options) > 0 {
+			c.models[key] = unknownCatalog(next.Models())
+		} else {
+			// 其他 Pi 模型可能在本次探测期间完成，不用起始快照覆盖其新结果。
+			cached = catalogView(c.models[key])
+			cached.Meta.State = "stale"
+			for i := range cached.Options {
+				if model == "" || cached.Options[i].ID == model {
+					cached.Options[i].Thinking.State = "stale"
+				}
+			}
+			c.models[key] = cached
+		}
+	}
+	call.models = cloneCatalog(c.models[key])
+	if c.modelFlights[flightKey] == call {
+		delete(c.modelFlights, flightKey)
 	}
 	close(call.done)
 	c.mu.Unlock()
 	c.persistSnapshot()
-	return cloneModels(call.models)
+	return catalogView(call.models)
 }
 
 // RefreshCLIDiscovery 完成实际检测后才返回；并发调用等待同一轮结果。
@@ -288,31 +377,37 @@ func (c *cliDiscoveryCache) setItems(items []DiscoveredCLI) {
 }
 
 func (c *cliDiscoveryCache) invalidateModelLocked(cliType string) {
-	delete(c.models, cliType)
+	for key := range c.models {
+		if strings.HasPrefix(key, cliType+"\x00") {
+			delete(c.models, key)
+		}
+	}
 	// 新安装不能等待旧安装的在途请求；旧请求仍按自己的 context 有界退出。
-	delete(c.modelFlights, cliType)
+	for key := range c.modelFlights {
+		if strings.HasPrefix(key, cliType+"\x00") {
+			delete(c.modelFlights, key)
+		}
+	}
 	if c.generations == nil {
 		c.generations = make(map[string]uint64)
 	}
 	c.generations[cliType]++
 }
 
-func (c *cliDiscoveryCache) setModels(models map[string][]string) {
+func (c *cliDiscoveryCache) setModels(models map[string]CLIModelCatalog) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.models = make(map[string][]string, len(models))
-	for cliType, list := range models {
-		if len(list) > 0 {
-			c.models[cliType] = cloneModels(list)
-		}
+	c.models = make(map[string]CLIModelCatalog, len(models))
+	for key, catalog := range models {
+		c.models[key] = cloneCatalog(catalog)
 	}
 }
 
 func (c *cliDiscoveryCache) getModel(cliType string) ([]string, bool) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	models, ok := c.models[cliType]
-	return cloneModels(models), ok
+	catalog, ok := c.models[modelCatalogKey(cliType, "")]
+	return catalog.Models(), ok
 }
 
 func (c *cliDiscoveryCache) persistSnapshot() {
@@ -322,9 +417,9 @@ func (c *cliDiscoveryCache) persistSnapshot() {
 	}
 	c.mu.RLock()
 	items := cloneCLIList(c.items)
-	models := make(map[string][]string, len(c.models))
+	models := make(map[string]CLIModelCatalog, len(c.models))
 	for k, v := range c.models {
-		models[k] = cloneModels(v)
+		models[k] = cloneCatalog(v)
 	}
 	// 排队动作也在快照锁内，防止旧快照延迟入队覆盖较新的快照。
 	p.saveLatest(items, models)

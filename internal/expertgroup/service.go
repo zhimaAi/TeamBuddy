@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"goteams-client/internal/executor"
 	"strings"
 	"time"
 
@@ -33,6 +34,7 @@ type Member struct {
 	Prompt          string `json:"prompt"`
 	CLIType         string `json:"cli_type"`
 	ModelName       string `json:"model_name"`
+	ThinkingLevel   string `json:"thinking_level"`
 	CreatedAt       int64  `json:"created_at"`
 	UpdatedAt       int64  `json:"updated_at"`
 }
@@ -58,19 +60,21 @@ type GroupInput struct {
 }
 
 type MemberInput struct {
-	MemberRole  string `json:"member_role"`
-	Name        string `json:"name"`
-	Description string `json:"description"`
-	Avatar      string `json:"avatar"`
-	Prompt      string `json:"prompt"`
-	CLIType     string `json:"cli_type"`
-	ModelName   string `json:"model_name"`
+	MemberRole    string                      `json:"member_role"`
+	Name          string                      `json:"name"`
+	Description   string                      `json:"description"`
+	Avatar        string                      `json:"avatar"`
+	Prompt        string                      `json:"prompt"`
+	CLIType       string                      `json:"cli_type"`
+	ModelName     string                      `json:"model_name"`
+	ThinkingLevel executor.ThinkingLevelInput `json:"thinking_level"`
 }
 
 type BatchMemberExecutionInput struct {
-	MemberUUIDs []string `json:"member_uuids"`
-	CLIType     string   `json:"cli_type"`
-	ModelName   string   `json:"model_name"`
+	MemberUUIDs   []string                    `json:"member_uuids"`
+	CLIType       string                      `json:"cli_type"`
+	ModelName     string                      `json:"model_name"`
+	ThinkingLevel executor.ThinkingLevelInput `json:"thinking_level"`
 }
 
 type Service struct{ db *sql.DB }
@@ -185,9 +189,9 @@ func (s *Service) Copy(ctx context.Context, groupUUID string) (*Group, error) {
 	all = append(all, source.Members...)
 	for _, member := range all {
 		if _, err = tx.ExecContext(ctx, `INSERT INTO gt_expert_group_members
-			(uuid, expert_group_uuid, member_role, name, description, avatar, prompt, cli_type, model_name, created_at, updated_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, uuid.NewString(), newUUID, member.MemberRole,
-			member.Name, member.Description, member.Avatar, member.Prompt, member.CLIType, member.ModelName, now, now); err != nil {
+			(uuid, expert_group_uuid, member_role, name, description, avatar, prompt, cli_type, model_name, thinking_level, created_at, updated_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, uuid.NewString(), newUUID, member.MemberRole,
+			member.Name, member.Description, member.Avatar, member.Prompt, member.CLIType, member.ModelName, member.ThinkingLevel, now, now); err != nil {
 			return nil, fmt.Errorf("复制专家团成员失败: %w", err)
 		}
 	}
@@ -217,6 +221,9 @@ func (s *Service) Delete(ctx context.Context, groupUUID string) error {
 }
 
 func (s *Service) AddMember(ctx context.Context, groupUUID string, input MemberInput) (*Member, error) {
+	if err := executor.ValidateThinkingLevel(ctx, input.CLIType, input.ModelName, "", input.ThinkingLevel.Value); err != nil {
+		return nil, err
+	}
 	if err := validateMemberInput(input); err != nil {
 		return nil, err
 	}
@@ -238,10 +245,10 @@ func (s *Service) AddMember(ctx context.Context, groupUUID string, input MemberI
 	id := uuid.NewString()
 	now := time.Now().UnixMilli()
 	if _, err = tx.ExecContext(ctx, `INSERT INTO gt_expert_group_members
-		(uuid, expert_group_uuid, member_role, name, description, avatar, prompt, cli_type, model_name, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, id, groupUUID, role, strings.TrimSpace(input.Name),
+		(uuid, expert_group_uuid, member_role, name, description, avatar, prompt, cli_type, model_name, thinking_level, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, id, groupUUID, role, strings.TrimSpace(input.Name),
 		strings.TrimSpace(input.Description), strings.TrimSpace(input.Avatar), strings.TrimSpace(input.Prompt),
-		strings.TrimSpace(input.CLIType), strings.TrimSpace(input.ModelName), now, now); err != nil {
+		strings.TrimSpace(input.CLIType), strings.TrimSpace(input.ModelName), input.ThinkingLevel.Value, now, now); err != nil {
 		return nil, fmt.Errorf("新增专家团成员失败: %w", err)
 	}
 	if _, err = tx.ExecContext(ctx, `UPDATE gt_expert_groups SET updated_at=? WHERE uuid=?`, now, groupUUID); err != nil {
@@ -254,9 +261,33 @@ func (s *Service) AddMember(ctx context.Context, groupUUID string, input MemberI
 }
 
 func (s *Service) UpdateMember(ctx context.Context, groupUUID, memberUUID string, input MemberInput) (*Member, error) {
+	group, err := s.Get(ctx, groupUUID)
+	if err != nil {
+		return nil, err
+	}
+	var previous *Member
+	if group.Leader != nil && group.Leader.UUID == memberUUID {
+		previous = group.Leader
+	}
+	for i := range group.Members {
+		if group.Members[i].UUID == memberUUID {
+			previous = &group.Members[i]
+			break
+		}
+	}
+	if previous == nil {
+		return nil, ErrMemberNotFound
+	}
+	level := executor.ResolveThinkingLevel(input.ThinkingLevel, input.CLIType, input.ModelName, previous.CLIType, previous.ModelName, previous.ThinkingLevel)
+	if input.ThinkingLevel.Present || level != previous.ThinkingLevel || input.CLIType != previous.CLIType || input.ModelName != previous.ModelName {
+		if err := executor.ValidateThinkingLevel(ctx, input.CLIType, input.ModelName, "", level); err != nil {
+			return nil, err
+		}
+	}
+	input.ThinkingLevel.Value = level
 	// 云端团队专家团：仅允许本地配置执行方式（CLI/模型），编排字段由云端管理。
 	if _, ok := DefaultCloudStore().Get(groupUUID); ok {
-		return DefaultCloudStore().UpdateMemberExecution(groupUUID, memberUUID, input.CLIType, input.ModelName)
+		return DefaultCloudStore().UpdateMemberExecution(groupUUID, memberUUID, input.CLIType, input.ModelName, input.ThinkingLevel)
 	}
 	if err := validateMemberInput(input); err != nil {
 		return nil, err
@@ -273,9 +304,9 @@ func (s *Service) UpdateMember(ctx context.Context, groupUUID, memberUUID string
 			return nil, err
 		}
 	}
-	result, err := tx.ExecContext(ctx, `UPDATE gt_expert_group_members SET member_role=?, name=?, description=?, avatar=?, prompt=?, cli_type=?, model_name=?, updated_at=?
+	result, err := tx.ExecContext(ctx, `UPDATE gt_expert_group_members SET member_role=?, name=?, description=?, avatar=?, prompt=?, cli_type=?, model_name=?, thinking_level=?, updated_at=?
 		WHERE uuid=? AND expert_group_uuid=?`, role, strings.TrimSpace(input.Name), strings.TrimSpace(input.Description),
-		strings.TrimSpace(input.Avatar), strings.TrimSpace(input.Prompt), strings.TrimSpace(input.CLIType), strings.TrimSpace(input.ModelName),
+		strings.TrimSpace(input.Avatar), strings.TrimSpace(input.Prompt), strings.TrimSpace(input.CLIType), strings.TrimSpace(input.ModelName), level,
 		time.Now().UnixMilli(), memberUUID, groupUUID)
 	if err != nil {
 		return nil, fmt.Errorf("更新专家团成员失败: %w", err)
@@ -295,6 +326,27 @@ func (s *Service) UpdateMember(ctx context.Context, groupUUID, memberUUID string
 // BatchUpdateMemberExecution applies the same CLI and model to the selected
 // leader and members. It validates every target before changing any row.
 func (s *Service) BatchUpdateMemberExecution(ctx context.Context, groupUUID string, input BatchMemberExecutionInput) (*Group, error) {
+	group, err := s.Get(ctx, groupUUID)
+	if err != nil {
+		return nil, err
+	}
+	members := append([]Member{}, group.Members...)
+	if group.Leader != nil {
+		members = append(members, *group.Leader)
+	}
+	levels := make(map[string]string)
+	for _, member := range members {
+		level := executor.ResolveThinkingLevel(input.ThinkingLevel, input.CLIType, input.ModelName, member.CLIType, member.ModelName, member.ThinkingLevel)
+		for _, id := range input.MemberUUIDs {
+			if id != member.UUID {
+				continue
+			}
+			if err := executor.ValidateThinkingLevel(ctx, input.CLIType, input.ModelName, "", level); err != nil {
+				return nil, err
+			}
+			levels[id] = level
+		}
+	}
 	groupUUID = strings.TrimSpace(groupUUID)
 	input.CLIType = strings.TrimSpace(input.CLIType)
 	input.ModelName = strings.TrimSpace(input.ModelName)
@@ -322,7 +374,7 @@ func (s *Service) BatchUpdateMemberExecution(ctx context.Context, groupUUID stri
 	// 云端专家团只存在于内存缓存，不在 gt_expert_groups。单个成员配置已走这条路径，
 	// 批量配置必须同样先命中缓存，否则会误报「专家团不存在」。
 	if _, ok := DefaultCloudStore().Get(groupUUID); ok {
-		return DefaultCloudStore().BatchUpdateMemberExecution(groupUUID, memberUUIDs, input.CLIType, input.ModelName)
+		return DefaultCloudStore().BatchUpdateMemberExecution(groupUUID, memberUUIDs, input.CLIType, input.ModelName, input.ThinkingLevel)
 	}
 
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -368,8 +420,8 @@ func (s *Service) BatchUpdateMemberExecution(ctx context.Context, groupUUID stri
 	now := time.Now().UnixMilli()
 	for _, memberUUID := range memberUUIDs {
 		result, err := tx.ExecContext(ctx, `UPDATE gt_expert_group_members
-			SET cli_type=?, model_name=?, updated_at=? WHERE uuid=? AND expert_group_uuid=?`,
-			input.CLIType, input.ModelName, now, memberUUID, groupUUID)
+			SET cli_type=?, model_name=?, thinking_level=?, updated_at=? WHERE uuid=? AND expert_group_uuid=?`,
+			input.CLIType, input.ModelName, levels[memberUUID], now, memberUUID, groupUUID)
 		if err != nil {
 			return nil, fmt.Errorf("批量配置专家团成员失败: %w", err)
 		}
@@ -403,10 +455,10 @@ func (s *Service) DeleteMember(ctx context.Context, groupUUID, memberUUID string
 
 func (s *Service) GetMember(ctx context.Context, groupUUID, memberUUID string) (*Member, error) {
 	var item Member
-	err := s.db.QueryRowContext(ctx, `SELECT uuid, expert_group_uuid, member_role, name, description, avatar, prompt, cli_type, model_name, created_at, updated_at
+	err := s.db.QueryRowContext(ctx, `SELECT uuid, expert_group_uuid, member_role, name, description, avatar, prompt, cli_type, model_name, thinking_level, created_at, updated_at
 		FROM gt_expert_group_members WHERE uuid=? AND expert_group_uuid=?`, memberUUID, groupUUID).Scan(
 		&item.UUID, &item.ExpertGroupUUID, &item.MemberRole, &item.Name, &item.Description, &item.Avatar,
-		&item.Prompt, &item.CLIType, &item.ModelName, &item.CreatedAt, &item.UpdatedAt)
+		&item.Prompt, &item.CLIType, &item.ModelName, &item.ThinkingLevel, &item.CreatedAt, &item.UpdatedAt)
 	if err == sql.ErrNoRows {
 		return nil, ErrMemberNotFound
 	}
@@ -425,7 +477,7 @@ func (s *Service) ValidateReady(ctx context.Context, groupUUID string) (*Group, 
 }
 
 func (s *Service) loadMembers(ctx context.Context, item *Group) error {
-	rows, err := s.db.QueryContext(ctx, `SELECT uuid, expert_group_uuid, member_role, name, description, avatar, prompt, cli_type, model_name, created_at, updated_at
+	rows, err := s.db.QueryContext(ctx, `SELECT uuid, expert_group_uuid, member_role, name, description, avatar, prompt, cli_type, model_name, thinking_level, created_at, updated_at
 		FROM gt_expert_group_members WHERE expert_group_uuid=?
 		ORDER BY CASE member_role WHEN 'leader' THEN 0 ELSE 1 END, created_at, rowid`, item.UUID)
 	if err != nil {
@@ -436,7 +488,7 @@ func (s *Service) loadMembers(ctx context.Context, item *Group) error {
 	for rows.Next() {
 		var member Member
 		if err := rows.Scan(&member.UUID, &member.ExpertGroupUUID, &member.MemberRole, &member.Name, &member.Description,
-			&member.Avatar, &member.Prompt, &member.CLIType, &member.ModelName, &member.CreatedAt, &member.UpdatedAt); err != nil {
+			&member.Avatar, &member.Prompt, &member.CLIType, &member.ModelName, &member.ThinkingLevel, &member.CreatedAt, &member.UpdatedAt); err != nil {
 			return err
 		}
 		if member.MemberRole == RoleLeader {

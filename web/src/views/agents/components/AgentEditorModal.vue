@@ -177,6 +177,9 @@
           </a-select-option>
         </a-select>
       </a-form-item>
+      <a-form-item v-if="form.cli_type && form.model" :label="t('components.cliThinking.title')">
+        <CliThinkingSelect v-model="form.thinking_level" :cli-type="form.cli_type" :model-name="form.model" />
+      </a-form-item>
     </a-form>
 
     <template #footer>
@@ -195,10 +198,13 @@
 </template>
 
 <script setup lang="ts">
-import { computed, reactive, ref, watch } from 'vue'
+import { computed, reactive, ref, toRef, watch } from 'vue'
 import { CloudDownloadOutlined } from '@ant-design/icons-vue'
 import { message } from 'ant-design-vue'
 import apiClient from '@/api/client'
+import CliThinkingSelect from '@/components/CliThinkingSelect.vue'
+import { useCliThinkingSelection } from '@/composables/useCliThinkingSelection'
+import { useCLIModelCatalogStore } from '@/stores/cli-models'
 import agentCliReloadIcon from '@/assets/icons/agent-cli-reload.svg'
 import projectModalCameraIcon from '@/assets/icons/project-modal-camera.svg'
 import { ICON_FILE_ACCEPT, useIconFile } from '@/composables/useIconFile'
@@ -213,6 +219,7 @@ import {
 import { useAppI18n } from '@/i18n'
 
 const { t } = useAppI18n()
+const modelDirectories = useCLIModelCatalogStore()
 
 const props = defineProps<{
   open: boolean
@@ -244,7 +251,9 @@ const form = reactive({
   prompt: '',
   cli_type: '',
   model: '',
+  thinking_level: '',
 })
+const { resetThinkingDrafts } = useCliThinkingSelection(() => form.cli_type, () => form.model, toRef(form, 'thinking_level'))
 const { file: avatarFile, previewUrl, selectFile, reset: resetAvatarFile } = useIconFile()
 // 设计稿约束：Agent 头像大小不超过 100KB，比共享图标校验（2MB）更严格，仅作用于本弹窗
 const MAX_AVATAR_FILE_SIZE = 100 * 1024
@@ -280,6 +289,8 @@ async function initialiseForm() {
 	form.prompt = agent?.prompt || props.step?.prompt_snapshot || ''
 	form.cli_type = agent?.cli_type || ''
 	form.model = props.expertMember?.model_name || (props.step ? stepModel(props.step) : '')
+  form.thinking_level = agent?.thinking_level || ''
+  resetThinkingDrafts()
   await detectCli(false)
 }
 
@@ -332,7 +343,7 @@ async function detectCli(showSuccess = true) {
 
 async function loadModels(cliType: string, keepModel = '', refresh = false) {
   const requestId = ++modelRequestId
-  modelOptions.value = []
+  modelOptions.value = modelDirectories.catalog(cliType)?.models || []
   form.model = keepModel
   if (!cliType) {
     modelLoading.value = false
@@ -341,10 +352,7 @@ async function loadModels(cliType: string, keepModel = '', refresh = false) {
 
   modelLoading.value = true
   try {
-    const result = await apiClient.get<{ models: string[] }>('/tasks/cli-models', {
-      cli_type: cliType,
-      refresh,
-    })
+    const result = await modelDirectories.load(cliType, {}, refresh)
     if (requestId !== modelRequestId || cliType !== form.cli_type) return
     modelOptions.value = result.models || []
     if (!form.model) form.model = modelOptions.value[0] || ''
@@ -364,6 +372,7 @@ function buildStepPayload(): StepInput {
     prompt: form.prompt.trim(),
     cli_type: form.cli_type,
     model_name: form.model.trim(),
+    thinking_level: form.thinking_level,
   }
 }
 
@@ -375,6 +384,7 @@ function buildStepFormData(payload: StepInput) {
   formData.append('prompt', payload.prompt)
   formData.append('cli_type', payload.cli_type)
   formData.append('model_name', payload.model_name)
+  formData.append('thinking_level', payload.thinking_level || '')
   if (avatarFile.value) formData.append('avatar_file', avatarFile.value)
   return formData
 }
@@ -406,6 +416,7 @@ async function save() {
       const executionPayload: CloudStepExecutionInput = {
         cli_type: payload.cli_type,
         model_name: payload.model_name,
+        thinking_level: payload.thinking_level,
       }
       await apiClient.put<PipelineStep | ExpertMember>(path, executionPayload)
 	} else if (avatarFile.value) {

@@ -337,7 +337,7 @@ function toggleMemberSelection(memberUuid: string) {
     : [...selectedMemberUuids.value, memberUuid]
 }
 
-async function applyBatchConfiguration(payload: { cliType: string; modelName: string }) {
+async function applyBatchConfiguration(payload: { cliType: string; modelName: string; thinkingLevel?: string }) {
   if (!selectedGroup.value || !selectedMemberUuids.value.length || batchSaving.value) return
   const groupUuid = selectedGroup.value.uuid
   const memberUuids = [...selectedMemberUuids.value]
@@ -350,6 +350,7 @@ async function applyBatchConfiguration(payload: { cliType: string; modelName: st
         member_uuids: memberUuids,
         cli_type: payload.cliType,
         model_name: payload.modelName,
+        thinking_level: payload.thinkingLevel,
       },
     )
     store.upsert(updated)

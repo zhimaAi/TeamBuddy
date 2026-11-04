@@ -110,26 +110,6 @@ export async function openVibeCli(payload: {
   await bridge.openVibeCli(payload)
 }
 
-export interface VibeMcpConfig {
-  available: boolean
-  config: string
-  configPath: string
-  command: string
-}
-
-/**
- * 读取手动模式的 MCP 配置文本，供用户复制到外部工具的 mcp.json。
- * 客户端只展示、不写入任何用户配置；非桌面运行时返回 available:false。
- * tool 决定推荐写入路径（cursor / workbuddy / dsh），未知工具由调用方兜底展示。
- */
-export async function loadVibeMcpConfig(tool?: string): Promise<VibeMcpConfig> {
-  const bridge = window.goteamsDesktop
-  if (!bridge?.getVibeMcpConfig) {
-    return { available: false, config: '', configPath: '', command: '' }
-  }
-  return bridge.getVibeMcpConfig(tool)
-}
-
 export async function openQoderIDE(payload: {
   directoryPath: string
   prompt: string

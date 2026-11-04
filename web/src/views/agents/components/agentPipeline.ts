@@ -25,11 +25,13 @@ export interface StepInput {
   prompt: string
   cli_type: string
   model_name: string
+  thinking_level?: string
 }
 
 export interface CloudStepExecutionInput {
   cli_type: string
   model_name: string
+  thinking_level?: string
 }
 
 export interface DeleteResponse {
@@ -67,6 +69,7 @@ export function deduplicateReusableSteps(steps: ReusablePipelineStep[]) {
       step.prompt || step.prompt_snapshot || '',
       step.cli_type || '',
       stepModel(step),
+      step.thinking_level || '',
     ])
     if (seen.has(fingerprint)) return false
     seen.add(fingerprint)

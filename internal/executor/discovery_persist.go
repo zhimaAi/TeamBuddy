@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -22,8 +23,10 @@ type clisFile struct {
 // modelsFile is the on-disk shape of the cached model lists
 // (~/.goteams/config/models.json), keyed by CLI type.
 type modelsFile struct {
-	UpdatedAt time.Time           `json:"updated_at"`
-	Models    map[string][]string `json:"models"`
+	UpdatedAt     time.Time                  `json:"updated_at"`
+	SchemaVersion int                        `json:"schema_version"`
+	Models        map[string][]string        `json:"models"`
+	Catalogs      map[string]json.RawMessage `json:"catalogs,omitempty"`
 }
 
 // discoveryPersist persists the CLI/model discovery results to
@@ -73,7 +76,7 @@ func (p *discoveryPersist) loadCLIs() (items []DiscoveredCLI, ok bool) {
 // loadModels reads the cached per-CLI model lists from disk. ok is false when
 // the file is missing or corrupt, in which case callers fall back to live
 // detection.
-func (p *discoveryPersist) loadModels() (models map[string][]string, ok bool) {
+func (p *discoveryPersist) loadModels() (models map[string]CLIModelCatalog, ok bool) {
 	data, err := os.ReadFile(p.modelsPath())
 	if err != nil {
 		return nil, false
@@ -82,10 +85,25 @@ func (p *discoveryPersist) loadModels() (models map[string][]string, ok bool) {
 	if json.Unmarshal(data, &f) != nil {
 		return nil, false
 	}
-	if f.Models == nil {
-		f.Models = map[string][]string{}
+	models = make(map[string]CLIModelCatalog)
+	for cliType, names := range f.Models {
+		models[modelCatalogKey(cliType, "")] = unknownCatalog(names)
 	}
-	return f.Models, true
+	if f.SchemaVersion == 2 {
+		for key, raw := range f.Catalogs {
+			var catalog CLIModelCatalog
+			if json.Unmarshal(raw, &catalog) != nil || len(catalog.Options) == 0 {
+				continue
+			}
+			// 磁盘能力不是当前环境的核验，重启后显式运行必须重新探测。
+			catalog.Meta.State = "stale"
+			for i := range catalog.Options {
+				catalog.Options[i].Thinking.State = "stale"
+			}
+			models[key] = catalog
+		}
+	}
+	return models, true
 }
 
 // saveLatest submits the given snapshots for a single coalesced disk write.
@@ -93,7 +111,7 @@ func (p *discoveryPersist) loadModels() (models map[string][]string, ok bool) {
 // submissions (background refresh vs HTTP probe) only cause the most recent
 // snapshot to be written; nothing is lost because every submission is a full
 // snapshot of both files.
-func (p *discoveryPersist) saveLatest(items []DiscoveredCLI, models map[string][]string) {
+func (p *discoveryPersist) saveLatest(items []DiscoveredCLI, models map[string]CLIModelCatalog) {
 	p.queue.submit(func() {
 		p.writeCLIs(items)
 		p.writeModels(models)
@@ -110,11 +128,20 @@ func (p *discoveryPersist) writeCLIs(items []DiscoveredCLI) {
 	}
 }
 
-func (p *discoveryPersist) writeModels(models map[string][]string) {
-	if models == nil {
-		models = map[string][]string{}
+func (p *discoveryPersist) writeModels(models map[string]CLIModelCatalog) {
+	f := modelsFile{UpdatedAt: time.Now(), SchemaVersion: 2, Models: map[string][]string{}, Catalogs: map[string]json.RawMessage{}}
+	for key, catalog := range models {
+		raw, err := json.Marshal(catalog)
+		if err != nil {
+			continue
+		}
+		f.Catalogs[key] = raw
+		cliType, _, _ := strings.Cut(key, "\x00")
+		if key == modelCatalogKey(cliType, "") {
+			f.Models[cliType] = catalog.Models()
+		}
 	}
-	data, err := json.MarshalIndent(modelsFile{UpdatedAt: time.Now(), Models: models}, "", "  ")
+	data, err := json.MarshalIndent(f, "", "  ")
 	if err != nil {
 		return
 	}

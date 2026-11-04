@@ -159,7 +159,6 @@
               v-if="isVibeCoding"
               :tool-name="vibeCodingToolName"
               :tool-id="task?.execution_tool || ''"
-              :task-uuid="selectedTaskUuid"
               show-open-button
               :open-label="t('workflows.task.detail.openInTool', { tool: vibeCodingToolName })"
               :opening="codexBusy"
@@ -175,6 +174,7 @@
               :stopping="stoppingSessionUuid === activeSelectedProgress?.session_uuid"
               :cli-type="composerCliType"
               :model-name="composerModelName"
+              :thinking-level="latestSelectedAgentProgress?.thinking_level ?? selectedStep?.thinking_level ?? ''"
               :start-mode="!isExpertGroup && !isCLI && selectedStepAwaitingStart"
               :advance-action="composerAdvanceAction"
               :placeholder="composerPlaceholder"
@@ -1348,6 +1348,7 @@ async function submitQuestion(submission: ChatComposerSubmission) {
       request_id: crypto.randomUUID(),
       cli_type: submission.config.cli_type,
       model_name: submission.config.model_name,
+      thinking_level: submission.config.thinking_level,
     })
     if (readComposerDraft(draftKey) === draftText) writeComposerDraft(draftKey, '')
     composerRef.value?.resetAfterSubmit(draftKey)

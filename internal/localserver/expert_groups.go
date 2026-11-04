@@ -12,6 +12,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"goteams-client/internal/cloud"
+	"goteams-client/internal/executor"
 	"goteams-client/internal/expertgroup"
 	"goteams-client/internal/i18n"
 	"goteams-client/internal/pipeline"
@@ -280,15 +281,16 @@ func (h *ExpertGroupsHandler) listReusableAgents(c *gin.Context) {
 		return
 	}
 	type reusableAgent struct {
-		UUID        string `json:"uuid"`
-		Source      string `json:"source"`
-		SourceName  string `json:"source_name"`
-		Name        string `json:"name"`
-		Description string `json:"description"`
-		Avatar      string `json:"avatar"`
-		Prompt      string `json:"prompt"`
-		CLIType     string `json:"cli_type"`
-		ModelName   string `json:"model_name"`
+		UUID          string `json:"uuid"`
+		Source        string `json:"source"`
+		SourceName    string `json:"source_name"`
+		Name          string `json:"name"`
+		Description   string `json:"description"`
+		Avatar        string `json:"avatar"`
+		Prompt        string `json:"prompt"`
+		CLIType       string `json:"cli_type"`
+		ModelName     string `json:"model_name"`
+		ThinkingLevel string `json:"thinking_level"`
 	}
 	items := make([]reusableAgent, 0)
 	pipelines, err := pipeline.NewService(h.db()).List(c.Request.Context())
@@ -300,7 +302,7 @@ func (h *ExpertGroupsHandler) listReusableAgents(c *gin.Context) {
 		for _, step := range item.Steps {
 			items = append(items, reusableAgent{UUID: step.UUID, Source: "pipeline", SourceName: item.Name,
 				Name: step.Name, Description: step.Description, Avatar: step.Avatar, Prompt: step.Prompt,
-				CLIType: step.CLIType, ModelName: step.ModelName})
+				CLIType: step.CLIType, ModelName: step.ModelName, ThinkingLevel: step.ThinkingLevel})
 		}
 	}
 	groups, err := expertgroup.NewService(h.db()).List(c.Request.Context())
@@ -316,7 +318,7 @@ func (h *ExpertGroupsHandler) listReusableAgents(c *gin.Context) {
 		for _, member := range members {
 			items = append(items, reusableAgent{UUID: member.UUID, Source: "expert_group", SourceName: group.Name,
 				Name: member.Name, Description: member.Description, Avatar: member.Avatar, Prompt: member.Prompt,
-				CLIType: member.CLIType, ModelName: member.ModelName})
+				CLIType: member.CLIType, ModelName: member.ModelName, ThinkingLevel: member.ThinkingLevel})
 		}
 	}
 	c.JSON(http.StatusOK, gin.H{"items": items})
@@ -346,6 +348,8 @@ func (h *ExpertGroupsHandler) bindMemberInput(c *gin.Context) (expertgroup.Membe
 	input = expertgroup.MemberInput{MemberRole: c.PostForm("member_role"), Name: c.PostForm("name"),
 		Description: c.PostForm("description"), Avatar: c.PostForm("avatar"), Prompt: c.PostForm("prompt"),
 		CLIType: c.PostForm("cli_type"), ModelName: c.PostForm("model_name")}
+	level, present := c.GetPostForm("thinking_level")
+	input.ThinkingLevel = executor.ThinkingLevelInput{Value: level, Present: present}
 	avatar, err := h.saveOptionalIcon(c)
 	if err != nil {
 		return input, "", err

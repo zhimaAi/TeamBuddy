@@ -15,6 +15,7 @@
     "commands": { "label": "Commands", "description": "Run common commands and shortcuts", "detail": "Use command history, Docker management, Git actions, process management, terminal output, and custom web links with completion and keyboard shortcuts." },
     "knowledge": { "label": "Knowledge base", "description": "Documentation and intelligent search", "detail": "Organize and search team documents so knowledge remains easy to find and reference." },
     "remoteChannels": { "label": "Remote channels", "description": "View and operate tasks from WeChat", "detail": "Connect a WeChat ChatBot to list tasks, send instructions, and receive execution results." },
+    "skills": { "label": "Skills", "description": "Browse and share skills", "detail": "Browse and share skills" },
     "apis": { "label": "API management", "description": "API collection management and debugging", "detail": "Manage collections, environments, and requests, send requests online, and maintain API documentation." },
     "settings": { "label": "Settings", "description": "Centralized client configuration", "detail": "Manage Git, SSH, Docker, database, and model settings used by commands, the knowledge base, and other local features." }
   }

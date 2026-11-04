@@ -291,7 +291,7 @@ func (h *TasksHandler) assignExecutionModeCore(ctx context.Context, taskUUID str
 		return ExecutionModeResult{Response: gin.H{"assigned": true, "execution_mode": input.Mode, "execution_tool": input.Tool}}, nil
 	case taskruntime.ExecutionModeCLI:
 		if err := taskruntime.NewService(h.taskDB(), h.taskRoot).AssignCLI(
-			ctx, taskUUID, input.Tool, input.ModelName, input.Start,
+			ctx, taskUUID, input.Tool, input.ModelName, input.Start, input.ThinkingLevel,
 		); err != nil {
 			return ExecutionModeResult{}, annotateExecutionModeError(err)
 		}
@@ -337,8 +337,12 @@ func (h *TasksHandler) switchExecutionModeCore(ctx context.Context, taskUUID str
 	before, _ := h.executionModeState(ctx, taskUUID)
 	replacement := taskruntime.SwitchExecutionInput{
 		Mode: input.Mode, Tool: input.Tool, ModelName: input.ModelName,
+		ThinkingLevel:        input.ThinkingLevel.Value,
 		RebindExecutionIndex: input.RebindExecutionIndex,
 		SelectedPipelineUUID: input.PipelineUUID,
+	}
+	if !input.ThinkingLevel.Present && input.Mode == taskruntime.ExecutionModeCLI && before["execution_tool"] == input.Tool && before["model_name"] == input.ModelName {
+		replacement.ThinkingLevel, _ = before["thinking_level"].(string)
 	}
 	switch input.Mode {
 	case taskruntime.ExecutionModePipeline:
@@ -444,7 +448,7 @@ func (h *TasksHandler) switchExecutionModeCore(ctx context.Context, taskUUID str
 // 供 ExecutionModeResult.Before / After best-effort 填充。
 func (h *TasksHandler) executionModeState(ctx context.Context, taskUUID string) (gin.H, error) {
 	var mode, tool, status string
-	var modelName sql.NullString
+	var modelName, thinkingLevel sql.NullString
 	if err := h.taskDB().QueryRowContext(ctx,
 		`SELECT execution_mode, execution_tool, status FROM gt_tasks WHERE uuid=?`, taskUUID).
 		Scan(&mode, &tool, &status); err != nil {
@@ -452,14 +456,15 @@ func (h *TasksHandler) executionModeState(ctx context.Context, taskUUID string) 
 	}
 	if strings.EqualFold(mode, taskruntime.ExecutionModeCLI) {
 		_ = h.taskDB().QueryRowContext(ctx,
-			`SELECT model_name FROM gt_task_steps WHERE task_uuid=? AND step_key=? LIMIT 1`,
-			taskUUID, taskruntime.CLIDirectStepKey).Scan(&modelName)
+			`SELECT model_name, thinking_level FROM gt_task_steps WHERE task_uuid=? AND step_key=? LIMIT 1`,
+			taskUUID, taskruntime.CLIDirectStepKey).Scan(&modelName, &thinkingLevel)
 	}
 	return gin.H{
 		"task_uuid":      taskUUID,
 		"execution_mode": mode,
 		"execution_tool": tool,
 		"model_name":     modelName.String,
+		"thinking_level": thinkingLevel.String,
 		"status":         status,
 	}, nil
 }

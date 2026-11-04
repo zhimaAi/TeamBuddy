@@ -1,6 +1,7 @@
 export interface ChatRuntimeSelection {
   cli_type: string
   model_name: string
+  thinking_level?: string
 }
 
 const STORAGE_KEY = 'goteams.chatComposer.lastRuntime'
@@ -17,6 +18,7 @@ function readStore(): Record<string, ChatRuntimeSelection> {
       store[key] = {
         cli_type: typeof value.cli_type === 'string' ? value.cli_type : '',
         model_name: typeof value.model_name === 'string' ? value.model_name : '',
+        thinking_level: typeof value.thinking_level === 'string' ? value.thinking_level : undefined,
       }
     }
     return store
@@ -48,6 +50,7 @@ export function useChatRuntimeDefaults() {
       store[selectionKey(taskUuid, stepUuid)] = {
         cli_type: selection.cli_type,
         model_name: selection.model_name || '',
+        thinking_level: selection.thinking_level,
       }
       localStorage.setItem(STORAGE_KEY, JSON.stringify(store))
     } catch {

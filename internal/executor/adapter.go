@@ -104,12 +104,13 @@ type ExecutorEvent struct {
 
 // RunOptions New dialog execution options
 type RunOptions struct {
-	ExecPath     string            // CLI executable file path
-	Prompt       string            // prompt word
-	WorkDir      string            // working directory
-	ModelProfile string            //Model name
-	ExtraArgs    []string          // Additional command line parameters
-	EnvVars      map[string]string // environment variables
+	ExecPath      string            // CLI executable file path
+	Prompt        string            // prompt word
+	WorkDir       string            // working directory
+	ModelProfile  string            //Model name
+	ThinkingLevel string            // 模型目录预检后的原生档位，空值不覆盖
+	ExtraArgs     []string          // Additional command line parameters
+	EnvVars       map[string]string // environment variables
 	// PresetSessionID 是首轮由调用方指定的会话 ID。续跑仍走 ResumeOptions.ExternalSessionID。
 	PresetSessionID string
 	// Watchdog 为空时使用 DefaultWatchdogConfig。

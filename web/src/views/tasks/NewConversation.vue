@@ -169,19 +169,13 @@
           </div>
 
           <div class="toolbar-right">
-            <!-- 发送按钮 -->
-            <button
-              type="button"
-              class="send-btn"
+            <MessageSendButton
               :class="{ 'is-onboarding-pulse': onboardingTarget === 'send' }"
               :disabled="!canSubmit"
-              :title="t('workflows.task.progress.send')"
-              :aria-label="t('workflows.task.progress.send')"
-              @click="handleSubmit"
-            >
-              <LoadingOutlined v-if="submitting" spin />
-              <span v-else class="send-button-text">{{ t('workflows.task.progress.send') }}</span>
-            </button>
+              :loading="submitting"
+              :label="t('workflows.task.progress.send')"
+              @submit="handleSubmit"
+            />
           </div>
         </div>
         </div>
@@ -203,6 +197,7 @@
       :preferred-expert-group-uuid="executionMode?.expertGroupUuid || ''"
       :initial-cli-type="executionMode?.mode === 'cli' ? executionMode.executionTool || '' : ''"
       :initial-model-name="executionMode?.modelName || ''"
+      :initial-thinking-level="executionMode?.thinkingLevel || ''"
       :initial-vibe-tool="executionMode?.mode === 'vibe_coding' ? executionMode.executionTool || '' : ''"
       @selected="onExecutionModeSelected"
     />
@@ -217,7 +212,6 @@ import { message } from 'ant-design-vue'
 import {
   TeamOutlined,
   CloseOutlined,
-  LoadingOutlined,
 } from '@ant-design/icons-vue'
 import apiClient from '@/api/client'
 import { getKnowledgeDocumentPath, type KnowledgeDocument } from '@/api/knowledge'
@@ -237,6 +231,8 @@ import cliTriggerIcon from '@/assets/icons/task-composer-cli-trigger.svg'
 import directoryIcon from '@/assets/icons/task-header-directory.svg'
 import { cliLogo } from '@/composables/useCliLogo'
 import WorkDirectoryPicker from '@/components/WorkDirectoryPicker.vue'
+import MessageSendButton from '@/components/task-progress/MessageSendButton.vue'
+import { useComposerPreferencesStore } from '@/stores/composer-preferences'
 import AssignExecutionModeModal, {
   type ExecutionModeSelection as AssignedExecutionMode,
 } from '@/components/AssignExecutionModeModal.vue'
@@ -275,6 +271,7 @@ const {
   skip: dismissOnboarding,
   complete: completeOnboarding,
 } = useOnboardingGuide()
+const composerPreferences = useComposerPreferencesStore()
 const conversationStore = useConversationStore()
 const pipelineStore = usePipelineStore()
 const expertGroupStore = useExpertGroupStore()
@@ -482,6 +479,7 @@ function serializeExecutionMode(mode: ExecutionModeSelection) {
     expertGroupUuid: mode.expertGroupUuid,
     executionTool: mode.executionTool,
     modelName: mode.modelName,
+    thinkingLevel: mode.thinkingLevel,
   })
 }
 
@@ -493,6 +491,7 @@ async function onExecutionModeSelected(selection: AssignedExecutionMode) {
     expertGroupUuid: selection.expertGroupUuid || undefined,
     executionTool: selection.tool || undefined,
     modelName: selection.modelName || undefined,
+    thinkingLevel: selection.mode === 'cli' ? selection.thinkingLevel || '' : undefined,
     displayName: selectionDisplayName(selection),
   }
   executionMode.value = mode
@@ -579,7 +578,7 @@ function handleDrop(e: DragEvent) {
 }
 
 function handleKeydown(e: KeyboardEvent) {
-  if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
+  if (composerPreferences.shouldSend(e)) {
     e.preventDefault()
     if (canSubmit.value) {
       void handleSubmit()
@@ -645,6 +644,7 @@ async function handleSubmit() {
         cli_type: step.cli_type || '',
         model: step.model || '',
         model_name: step.model_name || '',
+        thinking_level: step.thinking_level || '',
       }))
     } else if (mode.mode === 'expert_group') {
       payload.execution_mode = 'expert_group'
@@ -657,6 +657,7 @@ async function handleSubmit() {
       payload.execution_mode = 'cli'
       payload.execution_tool = mode.executionTool
       payload.model_name = mode.modelName
+      payload.thinking_level = mode.thinkingLevel || ''
     }
 
     const created = await apiClient.post<{ uuid: string; title: string }>('/tasks', payload)
@@ -896,48 +897,6 @@ onUnmounted(() => {
   display: flex;
   flex: 0 0 auto;
   align-items: center;
-}
-
-.send-btn {
-  display: inline-flex;
-  width: auto;
-  min-width: 32px;
-  height: 24px;
-  align-items: center;
-  justify-content: center;
-  border: 0;
-  border-radius: 6px;
-  padding: 2px 4px;
-  color: #ffffff;
-  background: #262626;
-  cursor: pointer;
-  white-space: nowrap;
-  transition: background-color 180ms ease;
-}
-
-.send-btn:hover:not(:disabled) {
-  background: #434343;
-}
-
-.send-btn:active:not(:disabled) {
-  background: #141414;
-}
-
-.send-btn:disabled {
-  color: #aeb4be;
-  background: #eceef2;
-  cursor: not-allowed;
-}
-
-.send-btn:focus-visible {
-  outline: 2px solid #3157e2;
-  outline-offset: 2px;
-}
-
-.send-button-text {
-  font-size: 12px;
-  line-height: 20px;
-  white-space: nowrap;
 }
 
 .tool-icon {

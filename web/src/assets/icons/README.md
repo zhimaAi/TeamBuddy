@@ -70,6 +70,7 @@
 | [`team-login-feature-collaborate.svg`](./team-login-feature-collaborate.svg) | 两个并排人像（蓝 #5B8DEF） | 团队连接能力：团队协作 | 团队工作登录引导卡片的能力标签 | TeamWorkLoginCard |
 | [`team-login-feature-agent.svg`](./team-login-feature-agent.svg) | 带天线的机器人头部（蓝 #5B8DEF） | 团队连接能力：Agent 协同 | 团队工作登录引导卡片的能力标签 | TeamWorkLoginCard |
 | [`onboarding-spark.svg`](./onboarding-spark.svg) | 四角星光（#262626） | 新手指引开场标题标记 | 新增对话新手指引的开场卡片 | OnboardingGuide |
+| [`sidebar-nav-skills.svg`](./sidebar-nav-skills.svg) | 16px 大小双四角星，1.2px 描边（#262626） | 技能导航入口 | 应用侧栏技能菜单，深色主题沿用 CSS Mask | SidebarMenuIcon |
 | [`sidebar-nav-light-new-conversation.svg`](./sidebar-nav-light-new-conversation.svg) | 方框加笔（#262626） | 侧栏「新对话」 | 浅色侧栏主导航 | AppSidebar |
 | [`sidebar-nav-light-dashboard.svg`](./sidebar-nav-light-dashboard.svg) | 双列看板（#262626） | 侧栏「看板」 | 侧栏主导航 | SidebarMenuIcon |
 | [`sidebar-nav-light-agent.svg`](./sidebar-nav-light-agent.svg) | 带天线的机器人（#262626） | 侧栏「Agent」 | 侧栏主导航 | SidebarMenuIcon |
@@ -129,3 +130,33 @@
 | `conversation-status-error.svg` | 执行异常，橙色警示灯，原始 16×16px | I4094:77259;3487:19298 |
 
 普通与已归档会话共用 `ConversationHoverCard`，保留图标固有尺寸。
+
+## CLI 配置中的模型品牌图标
+
+`AssignExecutionModeModal` 的 CLI 配置区和 `CliRuntimePicker` 的双栏模型列表共用 `useModelLogo`；CLI 标识继续使用 `useCliLogo` 中现有资产。模型图标只标识已知模型家族，不表示实际代理提供方，也不用于推断思考能力。Claude 的 `opus/sonnet/haiku` 别名按 CLI 上下文识别；无法识别的自定义模型统一复用 `pipeline-agent-model.svg` 芯片图标。
+
+Claude、Qwen、Kimi 复用现有 `vibe-claude.svg`、`cli-qwen.svg`、`cli-kimi.svg`。以下静态品牌资源来自 `@lobehub/icons-static-svg@1.101.0`，上游仓库 `lobehub/lobe-icons`，源版本 `aea0ecb0fe1439467219197c52ffaeb579dfe33f`；仅提取 SVG，未引入 npm 依赖。MIT 许可及归属见 [`model-icons-LICENSE.txt`](./model-icons-LICENSE.txt)，品牌商标归原权利人所有。
+
+| 本地文件 | 上游文件 | 模型家族 |
+| --- | --- | --- |
+| `model-openai.svg` | `icons/openai.svg` | GPT、OpenAI o 系列 |
+| `model-deepseek.svg` | `icons/deepseek-color.svg` | DeepSeek |
+| `model-gemini.svg` | `icons/gemini-color.svg` | Gemini |
+| `model-minimax.svg` | `icons/minimax-color.svg` | MiniMax |
+| `model-zai.svg` | `icons/zai.svg` | GLM |
+| `model-grok.svg` | `icons/grok.svg` | Grok |
+| `model-moonshot.svg` | `icons/moonshot.svg` | Moonshot |
+
+## 默认技能图标
+
+保留提供的 SVG 原始内容，通过 `@/assets/icons/...` 导入使用。技能新增弹窗与列表共用 `views/skills/icons.ts` 和 `SkillIcon` 的预设映射。
+
+| 文件 | 对应技能 |
+| --- | --- |
+| `skill-sql-optimizer.svg` | SQL 优化助手 |
+| `skill-code-review.svg` | 代码评审助手 |
+| `skill-unit-test-generator.svg` | 单元测试生成 |
+| `skill-api-doc-generator.svg` | 接口文档生成 |
+| `skill-dashboard-generator.svg` | 数据看板生成 |
+| `skill-resume-screening.svg` | 简历筛选 |
+| `skill-requirement-breakdown.svg` | 需求拆解 |

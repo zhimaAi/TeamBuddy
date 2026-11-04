@@ -85,7 +85,8 @@
     "knowledge": "Knowledge base",
     "remoteChannels": "Remote channels",
     "apis": "API management",
-    "settings": "Settings"
+    "settings": "Settings",
+    "skills": "Skills"
   },
   "notifications": {
     "readyTitle": "{step} is ready",

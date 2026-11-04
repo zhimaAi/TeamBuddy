@@ -343,6 +343,7 @@
       :preferred-expert-group-uuid="form.expert_group_uuid"
       :initial-cli-type="form.execution_mode === 'cli' ? form.execution_tool : ''"
       :initial-model-name="form.model_name"
+      :initial-thinking-level="form.thinking_level"
       :initial-vibe-tool="form.execution_mode === 'vibe_coding' ? form.execution_tool : ''"
       @selected="applyExecutionSelection"
     />
@@ -443,6 +444,7 @@ const form = reactive({
   execution_mode: '' as TaskExecutionMode,
   execution_tool: '',
   model_name: '',
+  thinking_level: '',
   expert_group_uuid: '',
 })
 
@@ -535,6 +537,7 @@ function reset() {
     execution_mode: '',
     execution_tool: '',
     model_name: '',
+    thinking_level: '',
     expert_group_uuid: '',
   })
   showChildren.value = false
@@ -601,6 +604,7 @@ function applyCreateTaskDefaults() {
     form.execution_mode = 'cli'
     form.execution_tool = defaults.execution_tool
     form.model_name = defaults.model_name
+    form.thinking_level = defaults.thinking_level || ''
   }
 }
 
@@ -610,6 +614,7 @@ function applyExecutionSelection(selection: ExecutionModeSelection) {
   form.expert_group_uuid = selection.expertGroupUuid
   form.execution_tool = selection.tool
   form.model_name = selection.modelName
+  form.thinking_level = selection.mode === 'cli' ? selection.thinkingLevel || '' : ''
 }
 
 async function load() {
@@ -728,6 +733,7 @@ async function confirm() {
       execution_mode: form.execution_mode || undefined,
       execution_tool: form.execution_tool || undefined,
       model_name: form.model_name || undefined,
+      thinking_level: form.execution_mode === 'cli' ? form.thinking_level : undefined,
       expert_group_uuid: form.expert_group_uuid || undefined,
       // 关闭后该任务的产出文件不自动上报线上，需要在文件抽屉里手动上报
       sync_agent_output: syncAgentOutput.value,
@@ -750,6 +756,7 @@ async function confirm() {
       execution_mode: form.execution_mode,
       execution_tool: form.execution_tool,
       model_name: form.model_name,
+      thinking_level: form.thinking_level,
       expert_group_uuid: form.expert_group_uuid,
       // 记住本次勾选，下个团队任务配置自动沿用
       sync_agent_output: syncAgentOutput.value,

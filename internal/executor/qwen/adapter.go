@@ -13,9 +13,11 @@ const fullPermissionArg = "--yolo"
 // NewAdapter 创建 Qwen Code 适配器。
 func NewAdapter() executor.Adapter {
 	return executor.NewStreamAdapter(executor.AdapterSpec{
-		DisplayName:     displayName,
-		BuildInvocation: buildInvocation,
-		NewDecoder:      executor.NewStreamJSONDecoder,
+		DisplayName:       displayName,
+		SupportsThinking:  true,
+		PrepareInvocation: prepareThinkingInvocation,
+		BuildInvocation:   buildInvocation,
+		NewDecoder:        executor.NewStreamJSONDecoder,
 	})
 }
 

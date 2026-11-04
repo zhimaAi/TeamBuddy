@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import skillIcon from '@/assets/icons/onboarding-spark.svg'
 /**
  * Left navigation menu icon (line style, color follows currentColor)
  * Shared by the sidebar and tool center to keep icons consistent.
@@ -10,8 +11,9 @@ defineProps<{ name: string }>()
 
 <template>
   <span class="menu-icon">
+    <img v-if="name === 'skills'" :src="skillIcon" width="18" height="18" alt="" aria-hidden="true" />
     <!-- Workbench -->
-    <svg v-if="name === 'dashboard'" width="18" height="18" viewBox="0 0 18 18" fill="none">
+    <svg v-else-if="name === 'dashboard'" width="18" height="18" viewBox="0 0 18 18" fill="none">
       <rect x="2" y="2" width="6" height="6" rx="1.2" stroke="currentColor" stroke-width="1.3"/>
       <rect x="10" y="2" width="6" height="6" rx="1.2" stroke="currentColor" stroke-width="1.3"/>
       <rect x="2" y="10" width="6" height="6" rx="1.2" stroke="currentColor" stroke-width="1.3"/>
@@ -87,7 +89,8 @@ defineProps<{ name: string }>()
   vertical-align: middle;
 }
 
-.menu-icon svg {
+.menu-icon svg,
+.menu-icon img {
   display: block;
 }
 </style>

@@ -46,6 +46,8 @@
         {{ model }}
       </a-select-option>
     </a-select>
+    <a-checkbox v-model:checked="configureThinking" :disabled="saving">{{ t('components.cliThinking.configure') }}</a-checkbox>
+    <CliThinkingSelect v-if="configureThinking && batchCliType && batchModelName" v-model="thinkingLevel" :cli-type="batchCliType" :model-name="batchModelName" />
     <a-button
       type="primary"
       size="small"
@@ -69,6 +71,8 @@
 
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
+import CliThinkingSelect from '@/components/CliThinkingSelect.vue'
+import { useCliThinkingSelection } from '@/composables/useCliThinkingSelection'
 import { message } from 'ant-design-vue'
 import batchSelectedCountIcon from '@/assets/icons/batch-selected-count.svg'
 import { useCliModelOptions } from '@/composables/useCliModelOptions'
@@ -80,13 +84,16 @@ const props = defineProps<{
 }>()
 
 const emit = defineEmits<{
-  apply: [payload: { cliType: string; modelName: string }]
+  apply: [payload: { cliType: string; modelName: string; thinkingLevel?: string }]
   cancel: []
 }>()
 
 const { t } = useAppI18n()
 const batchCliType = ref('')
 const batchModelName = ref('')
+const configureThinking = ref(false)
+const thinkingLevel = ref('')
+const { resetThinkingDrafts } = useCliThinkingSelection(() => batchCliType.value, () => batchModelName.value, thinkingLevel)
 const {
   cliLoading,
   cliOptions,
@@ -116,13 +123,15 @@ async function handleCliChange(cliType: string) {
 
 function apply() {
   if (!canApply.value) return
-  emit('apply', { cliType: batchCliType.value, modelName: batchModelName.value })
+  emit('apply', { cliType: batchCliType.value, modelName: batchModelName.value, thinkingLevel: configureThinking.value ? thinkingLevel.value : undefined })
 }
 
 function cancel() {
   if (props.saving) return
   batchCliType.value = ''
   batchModelName.value = ''
+  configureThinking.value = false
+  resetThinkingDrafts()
   resetModelOptions()
   emit('cancel')
 }

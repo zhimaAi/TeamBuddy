@@ -9,6 +9,7 @@ export interface TaskExecutionHistorySummary {
   execution_tool: string
   target_name: string
   model_name: string
+  thinking_level?: string
   started_at: number
   archived_at: number
 }

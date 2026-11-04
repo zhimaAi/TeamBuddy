@@ -231,7 +231,14 @@ const listRows = computed<BoardListRow[]>(() => lanes.value.flatMap((lane) => (
       workItemKey: card.key,
     }
   })
-)))
+)).sort((a, b) => listRowTimestamp(b.updatedAt) - listRowTimestamp(a.updatedAt)))
+
+function listRowTimestamp(value?: number | string): number {
+  const timestamp = Number(value || 0)
+  if (!Number.isFinite(timestamp) || timestamp <= 0) return 0
+  // 与时间列保持相同的秒/毫秒口径，避免绑定本地任务后显示时间与顺序脱节。
+  return timestamp < 1e12 ? timestamp * 1000 : timestamp
+}
 
 onMounted(load)
 

@@ -2,7 +2,6 @@
 export {
   assignTaskToCodex,
   copyTaskVibeToolPrompt as copyTaskCodexPrompt,
-  injectVibeToolPrompt,
   loadTaskVibeToolContext as loadTaskCodexContext,
   loadVibeToolsCapability as loadCodexCapability,
   openTaskVibeTool,
@@ -11,7 +10,6 @@ export {
 export type {
   VibeToolCapability,
   TaskVibeToolContext as TaskCodexContext,
-  VibeToolInjectResult,
   VibeToolsCapability as CodexCapability,
   VibeToolOpenResult as CodexOpenResult,
 } from './useTaskVibeTool'

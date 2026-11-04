@@ -59,17 +59,28 @@
         </div>
         <div class="cli-picker-models" role="listbox" :aria-label="t('workflows.task.progress.modelList')">
           <a-spin :spinning="modelLoading">
-            <button
-              v-for="model in modelOptions"
+            <div
+              v-for="model in visibleModelOptions"
               :key="model"
-              type="button"
               class="cli-picker-model"
               :class="{ 'is-selected': model === selectedModelName }"
               role="option"
               :aria-selected="model === selectedModelName"
-              @click="selectModel(model)"
             >
-              <span class="cli-picker-model-name">{{ model }}</span>
+              <button type="button" class="cli-picker-model-name" :title="model" @click="selectModel(model)">
+                <img class="cli-picker-model-logo" :src="modelLogo(model, selectedCliType)" alt="" aria-hidden="true" />
+                <span class="cli-picker-model-label">{{ model }}</span>
+              </button>
+              <CliThinkingSelect
+                v-if="model === selectedModelName"
+                :cli-type="selectedCliType"
+                :model-name="model"
+                :model-value="thinkingLevel || ''"
+                :task-uuid="taskUuid"
+                :popup-z-index="1200"
+                compact
+                @update:model-value="emit('select-thinking', $event)"
+              />
               <img
                 v-if="model === selectedModelName"
                 class="cli-picker-check"
@@ -77,7 +88,7 @@
                 alt=""
                 aria-hidden="true"
               />
-            </button>
+            </div>
             <p
               v-if="!selectedCliType"
               class="cli-picker-empty"
@@ -85,7 +96,7 @@
               {{ t('workflows.task.progress.chooseCli') }}
             </p>
             <p
-              v-else-if="!modelLoading && !modelOptions.length"
+              v-else-if="!modelLoading && !visibleModelOptions.length"
               class="cli-picker-empty"
             >
               {{ t('workflows.task.progress.noModels') }}
@@ -100,9 +111,11 @@
 
 <script setup lang="ts">
 import { computed } from 'vue'
+import CliThinkingSelect from '@/components/CliThinkingSelect.vue'
 import { SwapOutlined } from '@ant-design/icons-vue'
 import cliPickerCheckIcon from '@/assets/icons/cli-picker-check.svg'
 import { cliLogo } from '@/composables/useCliLogo'
+import { modelLogo } from '@/composables/useModelLogo'
 import type { DiscoveredCLI } from '@/views/agents/components/agentPipeline'
 import { useAppI18n } from '@/i18n'
 
@@ -114,6 +127,8 @@ const props = defineProps<{
   cliLoading: boolean
   selectedCliType: string
   selectedModelName: string
+  thinkingLevel?: string
+  taskUuid?: string
   modelOptions: string[]
   modelLoading: boolean
   modelCounts?: Record<string, number>
@@ -124,6 +139,7 @@ const emit = defineEmits<{
   'update:open': [open: boolean]
   'select-cli': [cliType: string]
   'select-model': [model: string]
+  'select-thinking': [level: string]
   'switch-execution': []
 }>()
 
@@ -137,6 +153,15 @@ const visibleCliOptions = computed(() => {
     })
   }
   return items
+})
+
+const visibleModelOptions = computed(() => {
+  const models = [...props.modelOptions]
+  // 已保存模型暂时离开目录时仍可查看/清空其强度，不用其他模型替换它。
+  if (props.selectedCliType && props.selectedModelName && !models.includes(props.selectedModelName)) {
+    models.unshift(props.selectedModelName)
+  }
+  return models
 })
 
 function modelCount(cli: DiscoveredCLI) {
@@ -302,7 +327,7 @@ function selectModel(model: string) {
   min-height: 36px;
   justify-content: space-between;
   gap: 8px;
-  padding: 8px 12px;
+  padding: 6px 12px;
   border-radius: 8px;
   color: #1d293d;
   font-size: 14px;
@@ -318,6 +343,33 @@ function selectModel(model: string) {
 }
 
 .cli-picker-model-name {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
+  min-height: 32px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cli-picker-model-logo {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 16px;
+  object-fit: contain;
+}
+
+.cli-picker-model-label {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -339,7 +391,7 @@ function selectModel(model: string) {
 }
 
 .cli-picker-item:focus-visible,
-.cli-picker-model:focus-visible {
+.cli-picker-model-name:focus-visible {
   outline: 2px solid #3157e2;
   outline-offset: -2px;
 }

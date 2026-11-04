@@ -13,12 +13,7 @@
 </template>
 
 <script setup lang="ts">
-import { useAppI18n } from '@/i18n'
-
 defineProps<{ title: string }>()
-
-const { t } = useAppI18n()
-void t
 </script>
 
 <style scoped>

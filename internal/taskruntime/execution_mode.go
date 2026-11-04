@@ -21,12 +21,7 @@ const (
 	ExecutionToolQoderIDE    = "qoder_ide"
 	ExecutionToolPi          = "pi"
 	ExecutionToolAntigravity = "antigravity"
-	// 手动模式工具：客户端不启动任何进程，只生成可复制包（MCP 配置 + Skill 路径 +
-	// 任务提示词），用户在外部工具中粘贴执行，并通过 Skill + MCP 回传动态与状态。
-	ExecutionToolCursor    = "cursor"
-	ExecutionToolWorkBuddy = "workbuddy"
-	ExecutionToolDSH       = "dsh"
-	ExecutionToolGeneric   = "generic"
+	ExecutionToolGeneric     = "generic"
 
 	// CLIDirectStepKey 是 CLI 直接执行模式的隐式步骤标识。该模式没有 Agent
 	// 编排，但仍复用 gt_task_steps 承载用户选定的 CLI 与模型，使会话、动态、
@@ -58,13 +53,7 @@ var vibeToolDefinitions = [...]VibeToolDefinition{
 	{ID: ExecutionToolCodeBuddy, Launch: "terminal", BindingKind: "native", SupportsResume: true, SkillDirectory: ".codebuddy/skills", InstallIMBot: true},
 	{ID: ExecutionToolClaude, Launch: "terminal", BindingKind: "native", SupportsResume: true, SkillDirectory: ".claude/skills", InstallIMBot: true},
 	{ID: ExecutionToolQoderIDE, Launch: "app", BindingKind: "native", SupportsResume: true, SkillDirectory: ".qoder/skills", InstallIMBot: true},
-	// 手动模式不启动本机进程，也不探测可执行文件；Skill 安装到外部工具的用户级目录。
-	{ID: ExecutionToolCursor, Launch: "manual", BindingKind: "native", SkillDirectory: ".cursor/skills"},
 	{ID: ExecutionToolGeneric, Launch: "clipboard", BindingKind: "generic", RequiresReportID: true, SupportsRebind: true, SkillDirectory: ".teambuddy/skills"},
-	// 新增手动工具一律追加到末尾：VibeCodingTools 的下标即远程工具序号（1-based），
-	// 插入中间会让既有 `<Vibe工具序号>` 指令指向错误的工具。
-	{ID: ExecutionToolWorkBuddy, Launch: "manual", BindingKind: "native", SkillDirectory: ".workbuddy/skills"},
-	{ID: ExecutionToolDSH, Launch: "manual", BindingKind: "native", SkillDirectory: ".dsh/skills"},
 }
 
 func VibeTool(tool string) (VibeToolDefinition, bool) {

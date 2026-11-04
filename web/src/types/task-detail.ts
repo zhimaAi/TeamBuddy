@@ -17,6 +17,7 @@ export type TaskWithDetails = LocalTask & {
   execution_tool?: string
   // CLI 直接执行来自隐式步骤；Vibe Coding 来自独立保存的启动模型配置。
   execution_model?: string
+  thinking_level?: string
   selected_pipeline_uuid?: string
   pipeline_avatar_snapshot?: string
   selected_expert_group_uuid?: string

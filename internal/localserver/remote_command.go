@@ -1212,6 +1212,7 @@ func (s *RemoteCommandService) dispatchToCLI(ctx context.Context, channelType, m
 		ExecutionMode:  taskruntime.ExecutionModeCLI,
 		ExecutionTool:  cliType,
 		ExecutionModel: cliModel,
+		ThinkingLevel:  executor.ResolveThinkingLevel(executor.ThinkingLevelInput{}, cliType, cliModel, cliConfig.CLICType, cliConfig.CLIModel, cliConfig.ThinkingLevel),
 	})
 	if err != nil {
 		return "", "", fmt.Errorf("创建兜底任务失败: %w", err)
@@ -2037,17 +2038,18 @@ func (s *RemoteCommandService) tr(ctx context.Context, channelType, key string, 
 }
 
 type remoteCLIConfigResult struct {
-	CLICType  string
-	CLIModel  string
-	Workspace string
-	Enabled   bool
+	CLICType      string
+	CLIModel      string
+	ThinkingLevel string
+	Workspace     string
+	Enabled       bool
 }
 
 func (s *RemoteCommandService) readChannelCLIConfig(ctx context.Context, channelType string) remoteCLIConfigResult {
 	var cfg remoteCLIConfigResult
 	err := s.db.QueryRowContext(ctx, `
-		SELECT cli_type, cli_model, workspace, enabled FROM gt_remote_channel_cli_configs WHERE channel_type=?`, channelType).Scan(
-		&cfg.CLICType, &cfg.CLIModel, &cfg.Workspace, &cfg.Enabled)
+		SELECT cli_type, cli_model, thinking_level, workspace, enabled FROM gt_remote_channel_cli_configs WHERE channel_type=?`, channelType).Scan(
+		&cfg.CLICType, &cfg.CLIModel, &cfg.ThinkingLevel, &cfg.Workspace, &cfg.Enabled)
 	if err != nil {
 		cfg.Enabled = true
 	}

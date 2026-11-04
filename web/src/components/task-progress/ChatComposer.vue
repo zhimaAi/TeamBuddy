@@ -176,6 +176,8 @@
             :cli-loading="cliLoading"
             :selected-cli-type="selectedCliType"
             :selected-model-name="selectedModelName"
+            :thinking-level="selectedThinkingLevel"
+            :task-uuid="taskUuid"
             :model-options="availableModels"
             :model-loading="modelLoading"
             :model-counts="modelCounts"
@@ -183,6 +185,7 @@
             @switch-execution="switchExecution"
             @select-cli="handleCliChange"
             @select-model="handleModelChange"
+            @select-thinking="handleThinkingChange"
           >
             <button
               type="button"
@@ -249,25 +252,13 @@
               aria-hidden="true"
             />
           </button>
-          <button
+          <MessageSendButton
             v-else
-            type="button"
-            class="send-button submit-button"
             :disabled="!canSubmit"
-            :title="resolvedSubmitButtonLabel"
-            @click="handleSubmit"
-          >
-            <LoadingOutlined
-              v-if="submitting || preparingSubmission || (showAdvanceAction && advanceAction?.loading)"
-              spin
-            />
-            <span
-              v-else
-              class="send-button-text"
-            >
-              {{ resolvedSubmitButtonLabel }}
-            </span>
-          </button>
+            :loading="submitting || preparingSubmission || (showAdvanceAction && advanceAction?.loading)"
+            :label="resolvedSubmitButtonLabel"
+            @submit="handleSubmit"
+          />
         </div>
       </div>
     </div>
@@ -322,6 +313,7 @@ import { resolveAgentAvatar } from '@/config/agentAvatars'
 import type { TaskWithDetails } from '@/types/task-detail'
 import { cliLogo } from '@/composables/useCliLogo'
 import { useChatRuntimeDefaults } from '@/composables/useChatRuntimeDefaults'
+import { useCliThinkingSelection } from '@/composables/useCliThinkingSelection'
 import { useCliModelOptions } from '@/composables/useCliModelOptions'
 import { useTaskImageAttachments } from '@/composables/useTaskImageAttachments'
 import { readComposerDraftReferences, writeComposerDraftReferences } from '@/composables/useComposerDraft'
@@ -342,6 +334,8 @@ import type { KnowledgeDocumentReference, KnowledgeReferenceDraft, KnowledgeRefe
 import type { KnowledgeDocument } from '@/api/knowledge'
 import { listKnowledgeFolders } from '@/api/knowledge'
 import { useKnowledgeReferenceStore } from '@/stores/knowledge-reference'
+import { useComposerPreferencesStore } from '@/stores/composer-preferences'
+import MessageSendButton from './MessageSendButton.vue'
 import AgentPromptDrawer from './AgentPromptDrawer.vue'
 import CliRuntimePicker from './CliRuntimePicker.vue'
 import ComposerPlusMenu from './ComposerPlusMenu.vue'
@@ -381,6 +375,7 @@ const props = withDefaults(
     executingStepUuid?: string
     cliType?: string
     modelName?: string
+    thinkingLevel?: string
     startMode?: boolean
     showWorkDirectory?: boolean
     workDirectory?: string
@@ -427,6 +422,7 @@ const emit = defineEmits<{
   'select-step': [uuid: string]
 }>()
 
+const composerPreferences = useComposerPreferencesStore()
 const agentPromptOpen = ref(false)
 const executionMenuOpen = ref(false)
 const executionSteps = computed(() => [...(props.executionTask?.steps || [])].sort((a, b) => a.sort_order - b.sort_order))
@@ -465,6 +461,8 @@ const selectedExpertMember = ref<{ uuid: string; name: string; avatar?: string; 
 const filteredExpertMembers = computed(() => props.expertMembers.filter((member) => member.name.toLowerCase().includes(expertMentionQuery.value.toLowerCase())))
 const selectedCliType = ref('')
 const selectedModelName = ref('')
+const selectedThinkingLevel = ref('')
+const { resetThinkingDrafts } = useCliThinkingSelection(() => selectedCliType.value, () => selectedModelName.value, selectedThinkingLevel)
 const runtimeTouched = ref(false)
 const cliPickerOpen = ref(false)
 const preparingSubmission = ref(false)
@@ -509,7 +507,7 @@ const {
   modelOptions,
   prefetchModelCounts,
   resetModelOptions,
-} = useCliModelOptions()
+} = useCliModelOptions(true, () => ({ taskUuid: props.taskUuid || undefined }))
 const { getChatRuntimeSelection, saveChatRuntimeSelection } = useChatRuntimeDefaults()
 const runtimeEnabled = computed(() => Boolean(props.taskUuid && (props.currentStep || props.executionTask?.execution_mode === 'cli')))
 const documentsStep = computed(() => props.documentStep || props.currentStep)
@@ -1052,9 +1050,7 @@ function handleComposerKeydown(event: KeyboardEvent) {
   if (documentMentionMenuRef.value?.handleKeydown(event)) return
   if (handleMarkerCaretMove(event)) return
   if (handleMarkerDeletion(event)) return
-  if (event.key !== 'Enter') return
-  const plainEnter = !event.shiftKey && !event.altKey && !event.metaKey && !event.ctrlKey
-  if (!plainEnter && !event.ctrlKey) return
+  if (!composerPreferences.shouldSend(event)) return
   event.preventDefault()
   handleSubmit()
 }
@@ -1617,6 +1613,7 @@ async function handleSubmit() {
       config: {
         cli_type: selectedCliType.value,
         model_name: selectedModelName.value,
+        thinking_level: selectedThinkingLevel.value,
       },
 	  member_uuid: selectedExpertMember.value?.uuid,
     })
@@ -1637,6 +1634,7 @@ function persistRuntimeSelection() {
   saveChatRuntimeSelection(props.taskUuid, stepUuid, {
     cli_type: selectedCliType.value,
     model_name: selectedModelName.value,
+    thinking_level: selectedThinkingLevel.value,
   })
 }
 
@@ -1650,14 +1648,15 @@ async function initialiseRuntimeConfig() {
   const requestId = ++runtimeRequestId
   runtimeTouched.value = false
   const cached = getChatRuntimeSelection(props.taskUuid, props.currentStep?.uuid || '')
-  selectedCliType.value = cached?.cli_type || props.cliType || props.currentStep?.cli_type || props.executionTask?.execution_tool || ''
-  selectedModelName.value =
-    cached?.model_name ||
-    props.modelName ||
-    props.currentStep?.model_name ||
-    props.currentStep?.model ||
-    props.executionTask?.execution_model ||
-    ''
+  const snapshotCLI = props.currentStep?.cli_type || props.executionTask?.execution_tool || ''
+  const snapshotModel = props.currentStep?.model_name || props.currentStep?.model || props.executionTask?.execution_model || ''
+  const defaultCLI = props.cliType || snapshotCLI
+  const defaultModel = props.modelName || snapshotModel
+  const defaultThinking = props.thinkingLevel ?? (defaultCLI === snapshotCLI && defaultModel === snapshotModel ? props.currentStep?.thinking_level ?? props.executionTask?.thinking_level ?? '' : '')
+  selectedCliType.value = cached?.cli_type || defaultCLI
+  selectedModelName.value = cached?.model_name || defaultModel
+  selectedThinkingLevel.value = cached?.thinking_level ?? (selectedCliType.value === defaultCLI && selectedModelName.value === defaultModel ? defaultThinking : '')
+  resetThinkingDrafts()
   if (!runtimeEnabled.value) {
     resetModelOptions()
     return
@@ -1667,9 +1666,9 @@ async function initialiseRuntimeConfig() {
     if (!cliOptions.value.length) await loadCliOptions()
     if (requestId !== runtimeRequestId) return
     if (cached?.cli_type && !cliStillAvailable(cached.cli_type)) {
-      selectedCliType.value = props.cliType || props.currentStep?.cli_type || ''
-      selectedModelName.value =
-        props.modelName || props.currentStep?.model_name || props.currentStep?.model || ''
+      selectedCliType.value = defaultCLI
+      selectedModelName.value = defaultModel
+      selectedThinkingLevel.value = defaultThinking
     }
     void prefetchModelCounts(cliOptions.value.map((item) => item.type))
     if (!selectedCliType.value) {
@@ -1678,9 +1677,7 @@ async function initialiseRuntimeConfig() {
     }
     const models = await loadModelOptions(selectedCliType.value)
     if (requestId !== runtimeRequestId) return
-    if (selectedModelName.value && models.length && !models.includes(selectedModelName.value)) {
-      selectedModelName.value = models[0] || ''
-    } else if (!selectedModelName.value) {
+    if (!selectedModelName.value) {
       selectedModelName.value = models[0] || ''
     }
   } catch (error) {
@@ -1718,7 +1715,12 @@ function handleModelChange(model: string) {
   runtimeTouched.value = true
   selectedModelName.value = model
   persistRuntimeSelection()
-  cliPickerOpen.value = false
+}
+
+function handleThinkingChange(level: string) {
+  runtimeTouched.value = true
+  selectedThinkingLevel.value = level
+  persistRuntimeSelection()
 }
 
 onMounted(() => {
@@ -1800,9 +1802,9 @@ watch(cliPickerOpen, (open) => {
 })
 
 watch(
-  () => [props.cliType, props.modelName] as const,
-  ([cliType, modelName], [previousCLIType, previousModelName]) => {
-    if (runtimeTouched.value || (cliType === previousCLIType && modelName === previousModelName))
+  () => [props.cliType, props.modelName, props.thinkingLevel] as const,
+  ([cliType, modelName, thinkingLevel], [previousCLIType, previousModelName, previousThinkingLevel]) => {
+    if (runtimeTouched.value || (cliType === previousCLIType && modelName === previousModelName && thinkingLevel === previousThinkingLevel))
       return
     void initialiseRuntimeConfig()
   },
@@ -2290,11 +2292,6 @@ defineExpose({ resetAfterSubmit, openDocuments })
   background: #262626;
   cursor: pointer;
 }
-.send-button:not(.stop-button) {
-  width: auto;
-  min-width: 24px;
-  white-space: nowrap;
-}
 .send-button:disabled {
   color: #aeb4be;
   background: #eceef2;
@@ -2313,29 +2310,10 @@ defineExpose({ resetAfterSubmit, openDocuments })
   border-radius: 1px;
   background: currentColor;
 }
-.submit-button {
-  width: auto;
-  min-width: 32px;
-  padding: 2px 4px;
-  border-radius: 6px;
-  background: #262626;
-  transition: background-color 180ms ease;
-}
-.submit-button:hover:not(:disabled) {
-  background: #434343;
-}
-.submit-button:active:not(:disabled) {
-  background: #141414;
-}
 .send-button:focus-visible,
 .tool-button:focus-visible {
   outline: 2px solid #3157e2;
   outline-offset: 2px;
-}
-.send-button-text {
-  font-size: 12px;
-  line-height: 20px;
-  white-space: nowrap;
 }
 .composer-hint {
   margin-top: 6px;
@@ -2369,7 +2347,6 @@ defineExpose({ resetAfterSubmit, openDocuments })
 }
 @media (prefers-reduced-motion: reduce) {
   .composer-shell,
-  .submit-button,
   .tool-button {
     transition: none;
   }

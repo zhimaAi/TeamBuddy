@@ -13,6 +13,7 @@ export const MANAGEABLE_MENU_KEYS = [
   'commands',
   'knowledge',
   'remote-channels',
+  'skills',
   'apis',
   'settings',
 ] as const

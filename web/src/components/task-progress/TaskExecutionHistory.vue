@@ -298,8 +298,9 @@ function executionTitle(item: TaskExecutionHistorySummary) {
   }
   if (item.execution_mode === 'cli') {
     const cli = cliDisplayName(item.execution_tool || item.target_name)
-    return item.model_name
-      ? t('workflows.task.executionHistory.cliTitle', { cli, model: item.model_name })
+    const model = [item.model_name, item.thinking_level ? t('components.cliThinking.requested', { level: item.thinking_level }) : ''].filter(Boolean).join(' · ')
+    return model
+      ? t('workflows.task.executionHistory.cliTitle', { cli, model })
       : t('workflows.task.executionHistory.directTitle', { tool: cli })
   }
   const toolKey = item.execution_tool || ''

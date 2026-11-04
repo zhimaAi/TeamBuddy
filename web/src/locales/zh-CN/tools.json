@@ -15,6 +15,7 @@
     "commands": { "label": "命令", "description": "快速执行常用命令和快捷操作", "detail": "提供命令快捷操作功能，包括历史命令查看、Docker 容器管理、Git 操作、进程管理、终端输出查看和自定义网页链接等功能。支持命令自动补全和快捷键操作。" },
     "knowledge": { "label": "知识库", "description": "文档沉淀与智能检索", "detail": "集中管理团队知识文档，支持目录组织、全文搜索与引用，让知识随时可用。" },
     "remoteChannels": { "label": "远程通道", "description": "通过微信远程查看和操作任务", "detail": "连接微信 ChatBot，使用 /task 查询任务、切换任务并下发指令，执行结果会回到微信。" },
+    "skills": { "label": "技能", "description": "浏览和分享技能", "detail": "浏览和分享技能" },
     "apis": { "label": "接口管理", "description": "接口集合管理与调试", "detail": "支持集合、环境与请求配置，可在线发送请求并沉淀接口文档。" },
     "settings": { "label": "配置中心", "description": "集中管理客户端配置", "detail": "集中管理 Git、SSH、Docker、数据库与模型等客户端配置，为命令、知识库和其他本地能力提供统一配置入口。" }
   }

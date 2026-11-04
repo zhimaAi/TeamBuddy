@@ -8,7 +8,6 @@ module.exports = Object.freeze({
   OPEN_CODEX_THREAD: 'desktop:open-codex-thread',
   OPEN_QODER_IDE: 'desktop:open-qoder-ide',
   OPEN_VIBE_CLI: 'desktop:open-vibe-cli',
-  GET_VIBE_MCP_CONFIG: 'desktop:get-vibe-mcp-config',
   GET_API_TOKEN: 'desktop:get-api-token',
   GET_CLOSE_BEHAVIOR: 'desktop:get-close-behavior',
   SET_CLOSE_BEHAVIOR: 'desktop:set-close-behavior',

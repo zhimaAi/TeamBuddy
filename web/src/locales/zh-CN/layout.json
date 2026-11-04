@@ -85,7 +85,8 @@
     "knowledge": "知识库",
     "remoteChannels": "远程通道",
     "apis": "接口管理",
-    "settings": "配置中心"
+    "settings": "配置中心",
+    "skills": "技能"
   },
   "notifications": {
     "readyTitle": "{step}已就绪",

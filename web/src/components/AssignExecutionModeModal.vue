@@ -87,7 +87,6 @@
                 />
                 <img
                   class="assign-choice__logo"
-                  :class="{ 'is-brand-icon': isManualVibeTool(tool.id) }"
                   :src="vibeToolLogo(tool.id)"
                   alt=""
                 />
@@ -116,54 +115,98 @@
       </section>
 
       <section class="assign-section">
-        <p class="assign-section__title">
-          <img class="assign-section__logo" :src="cliExecutionLogo" alt="" />
-          {{ t('workflows.task.common.directExecution') }}
-        </p>
-        <p class="assign-section__hint">{{ t('workflows.task.assign.directExecutionHint') }}</p>
-        <div class="assign-runtime" :class="{ 'is-disabled': cliModeLocked }">
-          <a-select
-            class="assign-runtime__select"
-            :value="selectedMode === 'cli' ? selectedTarget : undefined"
-            :placeholder="t('workflows.task.assign.chooseCli')"
-            :options="cliSelectOptions"
-            :loading="cliLoading"
-            :disabled="saving || cliModeLocked"
-            :dropdown-style="selectDropdownStyle"
-            @change="chooseCLIType"
-          >
-            <template #option="{ label, value, modelCount }">
-              <span class="assign-cli-option">
-                <span class="assign-cli-option__name">{{ label ?? value }}</span>
-                <span class="assign-cli-option__count">{{ modelCount ?? '…' }}</span>
-              </span>
-            </template>
-          </a-select>
-          <a-select
-            class="assign-runtime__select"
-            :value="selectedMode === 'cli' ? selectedModelName || undefined : undefined"
-            :placeholder="selectedMode === 'cli' && selectedTarget ? t('workflows.task.assign.chooseModel') : t('workflows.task.assign.chooseCliFirst')"
-            :options="modelSelectOptions"
-            :loading="modelLoading"
-            :disabled="saving || cliModeLocked || selectedMode !== 'cli' || !selectedTarget"
-            :dropdown-style="selectDropdownStyle"
-            @change="chooseCLIModel"
-          >
-            <template #option="{ label, value }">
-              <a-tooltip
-                :title="String(label ?? value ?? '')"
-                placement="right"
-                :mouse-enter-delay="0"
-                :overlay-style="modelNameTooltipStyle"
-              >
-                <span class="assign-model-option">{{ label ?? value }}</span>
-              </a-tooltip>
-            </template>
-          </a-select>
+        <div class="assign-section__head">
+          <p class="assign-section__title">
+            <img class="assign-section__logo" :src="cliExecutionLogo" alt="" />
+            {{ t('workflows.task.common.directExecution') }}
+          </p>
+          <span v-if="selectedMode === 'cli'" class="assign-cli-selected">
+            <CheckCircleFilled aria-hidden="true" />
+            {{ t('components.cliSelect.selected') }}
+          </span>
         </div>
-        <p v-if="!cliLoading && !availableCliOptions.length" class="field-help">
-          {{ t('workflows.task.assign.noCli') }}
-        </p>
+        <p class="assign-section__hint">{{ t('workflows.task.assign.directExecutionHint') }}</p>
+        <div class="assign-cli-config" :class="{ 'is-selected': selectedMode === 'cli' }">
+          <div class="assign-runtime">
+            <div class="assign-runtime__field">
+              <label :for="`${executionModeRadioName}-cli`" class="assign-runtime__label">{{ t('components.cliSelect.cliTool') }}</label>
+              <a-select
+                :id="`${executionModeRadioName}-cli`"
+                class="assign-runtime__select"
+                :value="selectedMode === 'cli' ? selectedTarget : undefined"
+                :placeholder="t('workflows.task.assign.chooseCli')"
+                :options="cliSelectOptions"
+                :loading="cliLoading"
+                :disabled="saving || cliModeLocked"
+                :dropdown-style="selectDropdownStyle"
+                @change="chooseCLIType"
+              >
+                <template #optionLabel>
+                  <span class="assign-runtime__value" :title="selectedCliLabel">
+                    <img class="assign-runtime__logo" :src="cliLogo(selectedTarget)" alt="" />
+                    <span class="assign-runtime__name">{{ selectedCliLabel }}</span>
+                  </span>
+                </template>
+                <template #option="{ label, value, modelCount }">
+                  <span class="assign-cli-option">
+                    <img class="assign-runtime__logo" :src="cliLogo(String(value))" alt="" />
+                    <span class="assign-cli-option__name">{{ label ?? value }}</span>
+                    <span class="assign-cli-option__count">{{ modelCount ?? '…' }}</span>
+                  </span>
+                </template>
+              </a-select>
+            </div>
+            <div class="assign-runtime__field">
+              <label :for="`${executionModeRadioName}-model`" class="assign-runtime__label">{{ t('components.cliSelect.model') }}</label>
+              <div class="assign-runtime__model-control">
+                <a-select
+                  :id="`${executionModeRadioName}-model`"
+                  class="assign-runtime__select"
+                  :value="selectedMode === 'cli' ? selectedModelName || undefined : undefined"
+                  :placeholder="selectedMode === 'cli' && selectedTarget ? t('workflows.task.assign.chooseModel') : t('workflows.task.assign.chooseCliFirst')"
+                  :options="modelSelectOptions"
+                  :loading="modelLoading"
+                  :disabled="saving || cliModeLocked || selectedMode !== 'cli' || !selectedTarget"
+                  :dropdown-style="selectDropdownStyle"
+                  @change="chooseCLIModel"
+                >
+                  <template #optionLabel>
+                    <span class="assign-runtime__value" :title="selectedModelName">
+                      <img class="assign-runtime__logo" :src="modelLogo(selectedModelName, selectedTarget)" alt="" />
+                      <span class="assign-runtime__name">{{ selectedModelName }}</span>
+                    </span>
+                  </template>
+                  <template #option="{ label, value }">
+                    <a-tooltip
+                      :title="String(label ?? value ?? '')"
+                      placement="right"
+                      :mouse-enter-delay="0"
+                      :overlay-style="modelNameTooltipStyle"
+                    >
+                      <span class="assign-runtime__value">
+                        <img class="assign-runtime__logo" :src="modelLogo(String(value), selectedTarget)" alt="" />
+                        <span class="assign-model-option">{{ label ?? value }}</span>
+                      </span>
+                    </a-tooltip>
+                  </template>
+                </a-select>
+                <CliThinkingSelect
+                  v-if="open && selectedMode === 'cli' && selectedTarget && selectedModelName"
+                  v-model="selectedThinkingLevel"
+                  :cli-type="selectedTarget"
+                  :model-name="selectedModelName"
+                  :task-uuid="taskUuid"
+                  :popup-z-index="selectDropdownStyle.zIndex"
+                  :disabled="saving || cliModeLocked"
+                  compact
+                />
+              </div>
+            </div>
+          </div>
+          <p v-if="!cliLoading && !availableCliOptions.length" class="field-help">
+            {{ t('workflows.task.assign.noCli') }}
+          </p>
+        </div>
       </section>
 
       <section class="assign-section">
@@ -324,8 +367,12 @@ import {
 import { storeToRefs } from 'pinia'
 import { useRouter } from 'vue-router'
 import apiClient from '@/api/client'
+import CliThinkingSelect from '@/components/CliThinkingSelect.vue'
+import { useCliThinkingSelection } from '@/composables/useCliThinkingSelection'
 import cliExecutionLogo from '@/assets/icons/task-composer-cli.svg'
 import vibeCodingLogo from '@/assets/icons/vibe-coding-logo.svg'
+import { cliLogo } from '@/composables/useCliLogo'
+import { modelLogo } from '@/composables/useModelLogo'
 import {
   loadVibeToolsCapability,
   openTaskVibeTool,
@@ -335,7 +382,6 @@ import {
   VIBE_CODING_TOOLS,
   supportsVibeModel,
   vibeToolLogo,
-  isManualVibeTool,
   isVibeCodingTool,
   readRecentVibeTool,
   writeRecentVibeTool,
@@ -354,6 +400,7 @@ export interface ExecutionModeSelection {
   pipelineUuid: string
   expertGroupUuid: string
   modelName: string
+  thinkingLevel?: string
 }
 
 const props = withDefaults(
@@ -367,6 +414,7 @@ const props = withDefaults(
     preferredExpertGroupUuid?: string
     initialCliType?: string
     initialModelName?: string
+    initialThinkingLevel?: string
     initialVibeTool?: string
     replaceExisting?: boolean
     intent?: 'assign' | 'create'
@@ -382,6 +430,7 @@ const props = withDefaults(
     preferredExpertGroupUuid: '',
     initialCliType: '',
     initialModelName: '',
+    initialThinkingLevel: '',
     initialVibeTool: '',
     replaceExisting: false,
     intent: 'assign',
@@ -422,6 +471,8 @@ const selectedMode = ref<Extract<TaskExecutionMode, 'pipeline' | 'expert_group' 
 const selectedTarget = ref<string>()
 // CLI 直接执行没有 Agent 编排，模型选择与 CLI 一起构成完整的执行目标。
 const selectedModelName = ref('')
+const selectedThinkingLevel = ref('')
+const { resetThinkingDrafts } = useCliThinkingSelection(() => selectedMode.value === 'cli' ? selectedTarget.value || '' : '', () => selectedModelName.value, selectedThinkingLevel)
 const { vibeModels, resolving: vibeModelResolving, resetVibeModels, setVibeModel, resolveVibeModel } = useVibeModelPreferences()
 
 interface ExecutionModeAssignmentResult {
@@ -439,7 +490,7 @@ const {
   modelLoading,
   modelOptions,
   prefetchModelCounts,
-} = useCliModelOptions()
+} = useCliModelOptions(true, () => ({ taskUuid: props.taskUuid || undefined }))
 
 const availableCliOptions = computed(() => cliOptions.value.filter((cli) => cli.installed))
 const cliSelectOptions = computed(() => {
@@ -461,6 +512,7 @@ const cliSelectOptions = computed(() => {
   }
   return items
 })
+const selectedCliLabel = computed(() => cliSelectOptions.value.find(cli => cli.value === selectedTarget.value)?.label || selectedTarget.value || '')
 const modelSelectOptions = computed(() =>
   modelOptions.value.map((model) => ({ value: model, label: model, title: '' })),
 )
@@ -515,7 +567,7 @@ const selectionChanged = computed(() => {
   if (selectedMode.value === 'pipeline') return selectedTarget.value !== props.preferredPipelineUuid
   if (selectedMode.value === 'expert_group') return selectedTarget.value !== props.preferredExpertGroupUuid
   if (selectedMode.value === 'cli') {
-    return selectedTarget.value !== props.initialCliType || selectedModelName.value !== props.initialModelName
+    return selectedTarget.value !== props.initialCliType || selectedModelName.value !== props.initialModelName || selectedThinkingLevel.value !== props.initialThinkingLevel
   }
   if (selectedMode.value === 'vibe_coding') return selectedTarget.value !== props.initialVibeTool
   return false
@@ -554,6 +606,7 @@ function choosePipeline(uuid: string) {
 }
 
 function chooseCLIType(cliType: string) {
+  if (selectedMode.value === 'cli' && selectedTarget.value === cliType) return
   selectedMode.value = 'cli'
   selectedTarget.value = cliType
   selectedModelName.value = ''
@@ -569,8 +622,6 @@ function vibeToolDisabled(tool: string) {
   const capability = vibeCapability(tool)
   if (!capability) return tool !== 'codex' || !codexCapability.value.available
   if (!capability.available) return true
-  // 手动模式不启动本机进程，没有可执行文件可探测，只要能力可用就允许选择。
-  if (isManualVibeTool(tool)) return false
   return tool !== 'codex' && capability.installed === false
 }
 
@@ -613,6 +664,7 @@ function currentSelection(): ExecutionModeSelection | null {
   if (!selectedMode.value) return null
   return {
     mode: selectedMode.value,
+    thinkingLevel: selectedMode.value === 'cli' ? selectedThinkingLevel.value : undefined,
     tool: selectedMode.value === 'cli' || selectedMode.value === 'vibe_coding' ? selectedTarget.value || '' : '',
     pipelineUuid: selectedMode.value === 'pipeline' ? selectedTarget.value || '' : '',
     expertGroupUuid: selectedMode.value === 'expert_group' ? selectedTarget.value || '' : '',
@@ -676,6 +728,7 @@ async function confirm() {
         mode: 'cli',
         tool: selectedTarget.value,
         model_name: selectedModelName.value,
+        thinking_level: selectedThinkingLevel.value,
         start: !props.replaceExisting,
         replace_existing: props.replaceExisting,
       })
@@ -739,11 +792,13 @@ watch(
     selectedMode.value = props.initialMode || undefined
     selectedTarget.value =
       props.initialMode === 'vibe_coding'
-        ? (isVibeCodingTool(props.initialVibeTool) ? props.initialVibeTool : 'codex')
+        ? (isVibeCodingTool(props.initialVibeTool) ? props.initialVibeTool : undefined)
         : props.initialMode === 'cli'
           ? props.initialCliType || undefined
           : undefined
     selectedModelName.value = props.initialMode === 'cli' ? props.initialModelName : ''
+    selectedThinkingLevel.value = props.initialMode === 'cli' ? props.initialThinkingLevel : ''
+    resetThinkingDrafts()
     resetVibeModels(props.initialMode === 'vibe_coding' ? props.initialVibeTool : '', props.initialModelName)
     if (selectedMode.value === 'vibe_coding' && selectedTarget.value
       && (props.selectOnly || props.initialMode !== 'vibe_coding' || props.initialVibeTool !== selectedTarget.value)) {
@@ -967,11 +1022,6 @@ watch(
   object-fit: cover;
 }
 
-/* 手动工具直接用官方应用图标（自带圆角方形或透明底），不能再被裁成圆形。 */
-.assign-choice__logo.is-brand-icon {
-  border-radius: 5px;
-}
-
 .assign-choice__avatar {
   display: inline-flex;
   align-items: center;
@@ -1027,11 +1077,87 @@ watch(
   cursor: pointer;
 }
 
+.assign-cli-config {
+  margin-top: 12px;
+  border: 1px solid #d9d9d9;
+  border-radius: 12px;
+  padding: 16px;
+  background: #fbfbfc;
+}
+
+.assign-cli-config.is-selected {
+  border-color: #3157e2;
+  background: #fff;
+}
+
+.assign-cli-selected {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 4px;
+  border-radius: 999px;
+  padding: 2px 8px;
+  background: #e5efff;
+  color: #3157e2;
+  font-size: 12px;
+  line-height: 20px;
+}
+
 .assign-runtime {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 12px;
-  margin-top: 12px;
+}
+
+.assign-runtime__field {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.assign-runtime__label {
+  color: #595959;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 22px;
+}
+
+.assign-runtime__select {
+  width: 100%;
+}
+
+.assign-runtime__model-control {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+}
+
+.assign-runtime__model-control > .assign-runtime__select {
+  min-width: 0;
+  flex: 1;
+}
+
+.assign-runtime__value {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+}
+
+.assign-runtime__logo {
+  width: 20px;
+  height: 20px;
+  flex: 0 0 auto;
+  object-fit: contain;
+}
+
+.assign-runtime__name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .assign-cli-option {
@@ -1044,6 +1170,7 @@ watch(
 
 .assign-cli-option__name {
   min-width: 0;
+  flex: 1;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1059,6 +1186,7 @@ watch(
 
 .assign-model-option {
   display: block;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1082,9 +1210,14 @@ watch(
   clip: rect(0, 0, 0, 0);
 }
 
-@media (max-width: 640px) {
-  .assign-grid,
+@media (max-width: 760px) {
   .assign-runtime {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 640px) {
+  .assign-grid {
     grid-template-columns: 1fr;
   }
 }

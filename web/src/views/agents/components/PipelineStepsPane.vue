@@ -158,7 +158,7 @@ function toggleStepSelection(stepUuid: string) {
     : [...selectedStepUuids.value, stepUuid]
 }
 
-async function applyBatchConfiguration(payload: { cliType: string; modelName: string }) {
+async function applyBatchConfiguration(payload: { cliType: string; modelName: string; thinkingLevel?: string }) {
   if (!props.pipeline || !selectedStepUuids.value.length || batchSaving.value) return
   batchSaving.value = true
   try {
@@ -168,6 +168,7 @@ async function applyBatchConfiguration(payload: { cliType: string; modelName: st
         step_uuids: selectedStepUuids.value,
         cli_type: payload.cliType,
         model_name: payload.modelName,
+        thinking_level: payload.thinkingLevel,
       },
     )
     emit('updated', updated)

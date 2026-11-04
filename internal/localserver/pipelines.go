@@ -15,6 +15,7 @@ import (
 	"goteams-client/internal/applog"
 	"goteams-client/internal/cloud"
 	"goteams-client/internal/cloudscope"
+	"goteams-client/internal/executor"
 	"goteams-client/internal/i18n"
 	"goteams-client/internal/pipeline"
 )
@@ -441,6 +442,8 @@ func (h *PipelinesHandler) bindStepInput(c *gin.Context) (pipeline.StepInput, st
 		CLIType:     c.PostForm("cli_type"),
 		ModelName:   c.PostForm("model_name"),
 	}
+	level, present := c.GetPostForm("thinking_level")
+	input.ThinkingLevel = executor.ThinkingLevelInput{Value: level, Present: present}
 	header, err := c.FormFile("avatar_file")
 	if err != nil {
 		if errors.Is(err, http.ErrMissingFile) {

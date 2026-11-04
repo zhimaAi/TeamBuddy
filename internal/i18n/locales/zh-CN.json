@@ -736,6 +736,12 @@
   "localserver_bad_request": {
     "other": "请求参数无效"
   },
+  "localserver_cli_thinking_invalid": {
+    "other": "所选 CLI 或模型不支持该思考强度，请重新选择"
+  },
+  "localserver_cli_thinking_unavailable": {
+    "other": "暂无法确认当前模型的思考强度，请刷新能力列表，或主动选择跟随 CLI / 原会话"
+  },
   "localserver_cli_type_required": {
     "other": "cli_type 不能为空"
   },
@@ -774,10 +780,6 @@
     "description": "SkillPath, TaskUUID, Tool and ExecutionIndex identify the managed TeamBuddy task execution.",
     "other": "请通过当前工具的原生 Skill 加载机制使用 [$teambuddy]({{.SkillPath}}) 处理 TeamBuddy 本地任务。\n\n任务 UUID：{{.TaskUUID}}\n\n工具类型：{{.Tool}}\n\n执行代次（execution_index）：{{.ExecutionIndex}}\n\n{{.OutputDirSection}}\n\n先核对任务的执行代次与上述值一致，再读取任务和历史动态，再按 Skill 指引取得并绑定当前真实会话 ID；取不到 ID 时不要绑定，省略 thread_id，仍上报用户消息、最终答复和状态，不要编造 ID。绑定请求的 type 必须等于工具类型。Codex 的 thread_id 只读取环境变量 CODEX_THREAD_ID（Windows 用 $env:CODEX_THREAD_ID）；这是当前会话提供的线程 ID，不要猜测或扫描历史会话。Claude Code、CodeBuddy、Qoder 使用当前会话 ID；Pi 从当前原生 shell 读取 PI_SESSION_ID。若取不到真实会话 ID，则不要绑定，省略 thread_id，仍上报用户消息、最终答复和状态；继续处理原业务请求。\n\n本会话持续绑定该任务；后续每轮均按 Skill 规则同步用户消息、最终答复和任务状态，直到会话结束。"
   },
-  "localserver_codex_task_prompt_manual": {
-    "description": "手动模式任务提示词。SkillPath 是本地 Skill 文件路径，ThreadID 是客户端下发、Skill 需原样传回的会话标识。回传通道与会话 ID 使用固定中文键名，两种界面语言一致。",
-    "other": "请先完整读取本地 Skill 文件 [$teambuddy]({{.SkillPath}})，再按它的流程处理 TeamBuddy 本地任务。\n\n任务 UUID：{{.TaskUUID}}\n\n工具类型：{{.Tool}}\n\n执行代次（execution_index）：{{.ExecutionIndex}}\n\n回传通道：mcp\n\n会话 ID：{{.ThreadID}}\n\n{{.OutputDirSection}}\n\n要求：\n1. 先调用 teambuddy_get_task 读取任务与全部历史动态，核对返回的 execution_index 与上面的值一致。\n2. 调用 teambuddy_bind_session 绑定本会话：type 必须是 {{.Tool}}，thread_id 必须是上面给定的会话 ID。这是本次执行唯一允许使用的会话 ID，不要读取环境变量、扫描历史会话或另行生成 UUID。\n3. 开始实际开发时调用 teambuddy_update_status 设为 in_progress；完成并验证后才设为 done。\n4. 每次收到用户新消息，先用 teambuddy_report_activity 以 type=question 上报原文；每轮最终答复发送前，用 type=result 上报完整正文。每条动态使用各自的 event_id。\n5. 若 MCP 工具不存在、调用被拒绝，或返回 teambuddy_unavailable、forbidden、task_not_found、conflict、bind_rejected，立即暂停绑定与上报并说明原因；不要改用其他方式绕过，也不要声称已上报成功。\n\n本会话持续绑定该任务，后续每轮都按上述规则同步用户消息、最终答复和任务状态。"
-  },
   "localserver_cli_skill_prompt": {
     "description": "微信通道兜底任务的 CLI prompt。SkillPath 是 teambuddy-im-bot-cli Skill 的 markdown 本地路径；找不到时仅按名称引导。ChannelType 是当前通道类型（wechat/wecom/feishu/dingtalk），用于在 chat-reply 时携带 channel_type 把结果回传到正确通道。",
     "other": "[$teambuddy-im-bot-cli]({{.SkillPath}})\n\n请使用 teambuddy-im-bot-cli Skill 处理 TeamBuddy {{.ChannelType}} 通道的兜底任务：用户通过 {{.ChannelType}} 通道发送消息后，TeamBuddy 无法识别为已知指令时，会自动创建单独任务并交给本地 CLI 处理。\n\n当前绑定任务 UUID：{{.TaskUUID}}\n任务标题：{{.TaskTitle}}\n任务状态：{{.TaskStatus}}\n用户消息：{{.Message}}\n\n按 teambuddy-im-bot-cli Skill 描述的流程处理；处理完成后通过 /api/local/cli-skill/chat-reply 把结果回传到 {{.ChannelType}} 通道（请求体必须带 channel_type=\"{{.ChannelType}}\"），否则结果会被回传到默认通道。处理期间如需在 TeamBuddy 中汇报中间状态或异常，可使用 /api/local/cli-skill/messages 或 /api/local/cli-skill/activities。\n\n本会话持续处理该 {{.ChannelType}} 任务；该任务的会话 ID 已绑定到本 CLI，CLI 退出或被取消时 TeamBuddy 会自动通知用户。"
@@ -797,12 +799,6 @@
   },
   "localserver_task_title_invalid": {
     "other": "请输入 1–200 个字符的单行任务名称"
-  },
-  "localserver_vibe_aibridge_inject_failed": {
-    "other": "向 AiBridge 下发提示词失败，请手动复制提示词到编辑器"
-  },
-  "localserver_vibe_aibridge_unavailable": {
-    "other": "未检测到本机 AiBridge 扩展，请手动复制提示词到编辑器"
   },
   "localserver_vibe_cli_not_found": {
     "other": "未找到对应 CLI，请先安装并加入 PATH"
@@ -1042,6 +1038,12 @@
   },
   "localserver_skill_loopback_required": {
     "other": "TeamBuddy Skill 仅允许通过 loopback 调用"
+  },
+  "localserver_skill_daily_limit": {
+    "other": "今日已成功提交 5 次技能，已达每日上限，请明天再试。"
+  },
+  "localserver_skill_source_exists": {
+    "other": "该来源地址已存在，请勿重复添加"
   },
   "localserver_skill_status_invalid": {
     "other": "状态仅支持 pending、in_progress、blocked、done"

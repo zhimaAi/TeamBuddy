@@ -56,13 +56,6 @@ declare global {
         threadId?: string
         modelName?: string
       }): Promise<{ opened: true }>
-/** 手动模式：可复制的 MCP 配置文本，仅用于展示，不写入用户配置 */
-      getVibeMcpConfig?(tool?: string): Promise<{
-        available: boolean
-        config: string
-        configPath: string
-        command: string
-      }>
       openQoderIDE?(payload: {
         directoryPath: string
         prompt: string

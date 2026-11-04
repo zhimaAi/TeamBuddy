@@ -15,6 +15,7 @@ import (
 	"github.com/gorilla/websocket"
 
 	"goteams-client/internal/applog"
+	"goteams-client/internal/executor"
 	"goteams-client/internal/i18n"
 	"goteams-client/internal/workflow"
 )
@@ -1037,17 +1038,18 @@ func (w *wecomChannel) disable(c *gin.Context) {
 // CLI config methods for WeCom channel
 
 type wecomCLIConfigResult struct {
-	CLICType  string
-	CLIModel  string
-	Workspace string
-	Enabled   bool
+	CLICType      string
+	CLIModel      string
+	ThinkingLevel string
+	Workspace     string
+	Enabled       bool
 }
 
 func (w *wecomChannel) readChannelCLIConfig(ctx context.Context, channelType string) wecomCLIConfigResult {
 	var cfg wecomCLIConfigResult
 	_ = w.taskDB.QueryRowContext(ctx, `
-		SELECT cli_type, cli_model, workspace, enabled FROM gt_remote_channel_cli_configs WHERE channel_type=?`, channelType).Scan(
-		&cfg.CLICType, &cfg.CLIModel, &cfg.Workspace, &cfg.Enabled)
+		SELECT cli_type, cli_model, thinking_level, workspace, enabled FROM gt_remote_channel_cli_configs WHERE channel_type=?`, channelType).Scan(
+		&cfg.CLICType, &cfg.CLIModel, &cfg.ThinkingLevel, &cfg.Workspace, &cfg.Enabled)
 	return cfg
 }
 
@@ -1058,19 +1060,21 @@ func (w *wecomChannel) getCLIConfig(c *gin.Context) {
 		workspace = fmt.Sprintf("%s/wecom_workspace", w.taskRoot)
 	}
 	c.JSON(http.StatusOK, gin.H{
-		"cli_type":  cfg.CLICType,
-		"cli_model": cfg.CLIModel,
-		"workspace": workspace,
-		"enabled":   cfg.Enabled,
+		"cli_type":       cfg.CLICType,
+		"cli_model":      cfg.CLIModel,
+		"thinking_level": cfg.ThinkingLevel,
+		"workspace":      workspace,
+		"enabled":        cfg.Enabled,
 	})
 }
 
 func (w *wecomChannel) saveCLIConfig(c *gin.Context) {
 	var req struct {
-		CLICType  string `json:"cli_type"`
-		CLIModel  string `json:"cli_model"`
-		Workspace string `json:"workspace"`
-		Enabled   bool   `json:"enabled"`
+		ThinkingLevel executor.ThinkingLevelInput `json:"thinking_level"`
+		CLICType      string                      `json:"cli_type"`
+		CLIModel      string                      `json:"cli_model"`
+		Workspace     string                      `json:"workspace"`
+		Enabled       bool                        `json:"enabled"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		i18n.Error(c, http.StatusBadRequest, "common_invalid_request", "invalid_request")
@@ -1081,21 +1085,27 @@ func (w *wecomChannel) saveCLIConfig(c *gin.Context) {
 	req.Workspace = strings.TrimSpace(req.Workspace)
 
 	ctx := c.Request.Context()
+	level, err := resolveRemoteThinking(ctx, w.taskDB, ChannelTypeWecom, req.CLICType, req.CLIModel, req.Workspace, req.ThinkingLevel)
+	if err != nil {
+		i18n.LocalServerError(c, http.StatusBadRequest, err)
+		return
+	}
 	now := time.Now().UnixMilli()
 	enabledInt := 0
 	if req.Enabled {
 		enabledInt = 1
 	}
-	_, err := w.taskDB.ExecContext(ctx, `
-		INSERT INTO gt_remote_channel_cli_configs (channel_type, cli_type, cli_model, workspace, enabled, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?)
+	_, err = w.taskDB.ExecContext(ctx, `
+		INSERT INTO gt_remote_channel_cli_configs (channel_type, cli_type, cli_model, thinking_level, workspace, enabled, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(channel_type) DO UPDATE SET
 			cli_type=excluded.cli_type,
 			cli_model=excluded.cli_model,
+			thinking_level=excluded.thinking_level,
 			workspace=excluded.workspace,
 			enabled=excluded.enabled,
 			updated_at=excluded.updated_at`,
-		ChannelTypeWecom, req.CLICType, req.CLIModel, req.Workspace, enabledInt, now)
+		ChannelTypeWecom, req.CLICType, req.CLIModel, level, req.Workspace, enabledInt, now)
 	if err != nil {
 		i18n.Error(c, http.StatusInternalServerError, "remote_channel_cli_config_save_failed", "cli_config_save_failed")
 		return
