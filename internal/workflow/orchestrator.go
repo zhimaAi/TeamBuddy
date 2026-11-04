@@ -86,13 +86,14 @@ type ActivityBroadcaster func(taskUUID, sessionUUID string, sequence int, eventT
 
 // RunStepOptions are the run-step options
 type RunStepOptions struct {
-	TaskUUID  string
-	StepUUID  string
-	StepKey   string // compatibility lookup; new callers should use StepUUID
-	WorkDir   string
-	RequestID string
-	CLIType   string // optional compatibility override
-	Model     string // optional compatibility override
+	TaskUUID      string
+	StepUUID      string
+	StepKey       string // compatibility lookup; new callers should use StepUUID
+	WorkDir       string
+	RequestID     string
+	CLIType       string // optional compatibility override
+	Model         string // optional compatibility override
+	ThinkingLevel executor.ThinkingLevelInput
 	// UserPrompt is the complete prompt passed into the task prompt builder.
 	UserPrompt string
 	// DisplayPrompt is persisted for the user-message record. When omitted,
@@ -118,6 +119,7 @@ type ContinueConversationOptions struct {
 	RequestID          string
 	CLIType            string
 	Model              string
+	ThinkingLevel      executor.ThinkingLevelInput
 	InternalHandoff    bool
 	ExpertChainUUID    string
 	ExpertChainRound   int
@@ -200,14 +202,14 @@ func (o *Orchestrator) runStep(ctx context.Context, opts RunStepOptions) (string
 	release := o.sessionStarts.acquire(opts.TaskUUID, true)
 	defer release()
 	// 1. Resolve the immutable task-step snapshot.
-	var stepUUID, stepKey, stepCLIType, modelName, workDir, snapshotUUID, expertSnapshotUUID, executionMode string
+	var stepUUID, stepKey, stepCLIType, modelName, thinkingLevel, workDir, snapshotUUID, expertSnapshotUUID, executionMode string
 	err := o.db.QueryRowContext(ctx,
-		`SELECT s.uuid, s.step_key, s.cli_type, s.model_name, t.work_dir, s.task_pipeline_snapshot_uuid,
+		`SELECT s.uuid, s.step_key, s.cli_type, s.model_name, s.thinking_level, t.work_dir, s.task_pipeline_snapshot_uuid,
 		        s.task_expert_group_snapshot_uuid, COALESCE(NULLIF(s.execution_mode,''), t.execution_mode)
 		 FROM gt_task_steps s JOIN gt_tasks t ON t.uuid = s.task_uuid
 		 WHERE s.task_uuid = ? AND ((? <> '' AND s.uuid = ?) OR (? = '' AND s.step_key = ?))`,
 		opts.TaskUUID, opts.StepUUID, opts.StepUUID, opts.StepUUID, opts.StepKey).Scan(
-		&stepUUID, &stepKey, &stepCLIType, &modelName, &workDir, &snapshotUUID, &expertSnapshotUUID, &executionMode)
+		&stepUUID, &stepKey, &stepCLIType, &modelName, &thinkingLevel, &workDir, &snapshotUUID, &expertSnapshotUUID, &executionMode)
 	if err == sql.ErrNoRows {
 		return "", fmt.Errorf("Agent 编排不存在: %w", err)
 	}
@@ -220,9 +222,11 @@ func (o *Orchestrator) runStep(ctx context.Context, opts RunStepOptions) (string
 	if cliType == "" {
 		cliType = stepCLIType
 	}
+	previousModel := modelName
 	if strings.TrimSpace(opts.Model) != "" {
 		modelName = strings.TrimSpace(opts.Model)
 	}
+	thinkingLevel = executor.ResolveThinkingLevel(opts.ThinkingLevel, cliType, modelName, stepCLIType, previousModel, thinkingLevel)
 	if strings.TrimSpace(opts.WorkDir) == "" {
 		opts.WorkDir = workDir
 	}
@@ -232,7 +236,7 @@ func (o *Orchestrator) runStep(ctx context.Context, opts RunStepOptions) (string
 	if displayPrompt == "" {
 		displayPrompt = strings.TrimSpace(opts.UserPrompt)
 	}
-	if id, err := o.existingRequest(ctx, opts.TaskUUID, stepUUID, opts.RequestID, displayPrompt, opts.CLIType, opts.Model); id != "" || err != nil {
+	if id, err := o.existingRequest(ctx, opts.TaskUUID, stepUUID, opts.RequestID, displayPrompt, opts.CLIType, opts.Model, opts.ThinkingLevel); id != "" || err != nil {
 		return id, err
 	}
 	if err := o.validateRun(ctx, opts); err != nil {
@@ -241,6 +245,10 @@ func (o *Orchestrator) runStep(ctx context.Context, opts RunStepOptions) (string
 	if strings.TrimSpace(cliType) == "" || strings.TrimSpace(modelName) == "" {
 		return "", ErrStepRuntimeRequired
 	}
+	if err := executor.ValidateThinkingLevel(ctx, cliType, modelName, opts.WorkDir, thinkingLevel); err != nil {
+		return "", err
+	}
+	opts.ThinkingLevel.Value = thinkingLevel
 	var promptSnapshot string
 	promptSnapshot, err = BuildRoundPrompt(ctx, o.db, executionMode, opts.TaskUUID, stepUUID, opts.UserPrompt)
 	if err != nil {
@@ -314,11 +322,11 @@ func (o *Orchestrator) runStep(ctx context.Context, opts RunStepOptions) (string
 	}
 	_, err = tx.ExecContext(ctx, `INSERT INTO gt_cli_sessions
 		(uuid, task_uuid, step_uuid, task_step_uuid, task_progress_uuid, conversation_uuid, run_no, status,
-		 cli_type, model_name, work_dir, prompt_snapshot, execution_mode, expert_chain_uuid, expert_chain_round,
+		 cli_type, model_name, thinking_level, work_dir, prompt_snapshot, execution_mode, expert_chain_uuid, expert_chain_round,
 		 trigger_session_uuid, started_at, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		sessionUUID, opts.TaskUUID, stepUUID, stepUUID, aiProgressUUID, conversationUUID, runNo,
-		SessionStatusCreated, cliType, modelName, opts.WorkDir, promptSnapshot, executionMode, opts.ExpertChainUUID,
+		SessionStatusCreated, cliType, modelName, thinkingLevel, opts.WorkDir, promptSnapshot, executionMode, opts.ExpertChainUUID,
 		opts.ExpertChainRound, opts.TriggerSessionUUID, now, now, now)
 	if err != nil {
 		return "", fmt.Errorf("创建 Session 失败: %w", err)
@@ -392,10 +400,10 @@ func (o *Orchestrator) continueConversation(ctx context.Context, opts ContinueCo
 	if displayPrompt == "" {
 		displayPrompt = prompt
 	}
-	var taskUUID, stepUUID, stepKey, workDir, parentStatus, conversationUUID, externalSessionID, parentCLIType, parentModelName, snapshotUUID, expertSnapshotUUID, executionMode string
+	var taskUUID, stepUUID, stepKey, workDir, parentStatus, conversationUUID, externalSessionID, parentCLIType, parentModelName, parentThinkingLevel, snapshotUUID, expertSnapshotUUID, executionMode string
 	err := o.db.QueryRowContext(ctx,
 		`SELECT s.task_uuid, s.step_uuid, ts.step_key, s.work_dir, s.status, s.conversation_uuid,
-		        s.external_session_id, s.cli_type, s.model_name, ts.task_pipeline_snapshot_uuid,
+		        s.external_session_id, s.cli_type, s.model_name, s.thinking_level, ts.task_pipeline_snapshot_uuid,
 		        ts.task_expert_group_snapshot_uuid, COALESCE(NULLIF(ts.execution_mode,''), t.execution_mode)
 		 FROM gt_cli_sessions s
 		 JOIN gt_task_steps ts ON ts.uuid = s.step_uuid
@@ -403,7 +411,7 @@ func (o *Orchestrator) continueConversation(ctx context.Context, opts ContinueCo
 		 WHERE s.uuid = ?`,
 		opts.ParentSessionUUID,
 	).Scan(&taskUUID, &stepUUID, &stepKey, &workDir, &parentStatus, &conversationUUID,
-		&externalSessionID, &parentCLIType, &parentModelName, &snapshotUUID, &expertSnapshotUUID, &executionMode)
+		&externalSessionID, &parentCLIType, &parentModelName, &parentThinkingLevel, &snapshotUUID, &expertSnapshotUUID, &executionMode)
 	if err == sql.ErrNoRows {
 		return "", fmt.Errorf("历史会话不存在")
 	}
@@ -412,7 +420,7 @@ func (o *Orchestrator) continueConversation(ctx context.Context, opts ContinueCo
 	}
 	release := o.sessionStarts.acquire(taskUUID, true)
 	defer release()
-	if id, err := o.existingRequest(ctx, taskUUID, stepUUID, opts.RequestID, displayPrompt, opts.CLIType, opts.Model); id != "" || err != nil {
+	if id, err := o.existingRequest(ctx, taskUUID, stepUUID, opts.RequestID, displayPrompt, opts.CLIType, opts.Model, opts.ThinkingLevel); id != "" || err != nil {
 		return id, err
 	}
 	if !IsTerminalStatus(parentStatus) {
@@ -431,8 +439,14 @@ func (o *Orchestrator) continueConversation(ctx context.Context, opts ContinueCo
 	if cliType == "" || modelName == "" {
 		return "", ErrStepRuntimeRequired
 	}
+	thinkingLevel := executor.ResolveThinkingLevel(opts.ThinkingLevel, cliType, modelName, parentCLIType, parentModelName, parentThinkingLevel)
+	if err := executor.ValidateThinkingLevel(ctx, cliType, modelName, workDir, thinkingLevel); err != nil {
+		return "", err
+	}
+	opts.ThinkingLevel.Value = thinkingLevel
 	runOpts := RunStepOptions{TaskUUID: taskUUID, StepUUID: stepUUID, StepKey: stepKey,
-		WorkDir: workDir, RequestID: opts.RequestID, CLIType: cliType, Model: modelName,
+		ThinkingLevel: opts.ThinkingLevel,
+		WorkDir:       workDir, RequestID: opts.RequestID, CLIType: cliType, Model: modelName,
 		UserPrompt: displayPrompt, RecordType: "user_question", ExecutionMode: executionMode,
 		ExpertChainUUID: opts.ExpertChainUUID, ExpertChainRound: opts.ExpertChainRound, TriggerSessionUUID: opts.TriggerSessionUUID}
 	if err = o.validateRun(ctx, runOpts); err != nil {
@@ -518,11 +532,11 @@ func (o *Orchestrator) continueConversation(ctx context.Context, opts ContinueCo
 	// 3. CLI 会话记录，task_progress_uuid 指向 AI 执行 progress
 	_, err = tx.ExecContext(ctx, `INSERT INTO gt_cli_sessions
 		(uuid, task_uuid, step_uuid, task_step_uuid, task_progress_uuid, conversation_uuid, parent_session_uuid,
-		 run_no, status, cli_type, model_name, external_session_id, work_dir, prompt_snapshot,
+		 run_no, status, cli_type, model_name, thinking_level, external_session_id, work_dir, prompt_snapshot,
 		 execution_mode, expert_chain_uuid, expert_chain_round, trigger_session_uuid, started_at, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		sessionUUID, taskUUID, stepUUID, stepUUID, aiProgressUUID, conversationUUID, opts.ParentSessionUUID,
-		runNo, SessionStatusCreated, cliType, modelName, nativeSessionID, workDir, storedPromptSnapshot,
+		runNo, SessionStatusCreated, cliType, modelName, thinkingLevel, nativeSessionID, workDir, storedPromptSnapshot,
 		executionMode, opts.ExpertChainUUID, opts.ExpertChainRound, opts.TriggerSessionUUID, now, now, now)
 	if err != nil {
 		return "", fmt.Errorf("创建继续会话 Session 失败: %w", err)
@@ -676,8 +690,16 @@ func (o *Orchestrator) runCLIProcess(
 			Prompt:          activePrompt,
 			WorkDir:         opts.WorkDir,
 			ModelProfile:    model,
+			ThinkingLevel:   opts.ThinkingLevel.Value,
 			PresetSessionID: presetID,
 			Watchdog:        watchdog,
+		}
+		if attemptNo > 0 {
+			if err := executor.ValidateThinkingLevel(innerCtx, cliType, model, opts.WorkDir, opts.ThinkingLevel.Value); err != nil {
+				key, _ := i18n.Key(err)
+				o.failSessionWithError(sessionUUID, opts.TaskUUID, opts.StepKey, activeExternalID, i18n.WithLocale(locale, key))
+				return
+			}
 		}
 		eventCh, err := startAdapterConversation(innerCtx, adapter, runOptions, activeResume, activeExternalID)
 		if err != nil {
@@ -689,6 +711,9 @@ func (o *Orchestrator) runCLIProcess(
 			}
 			o.failSessionWithError(sessionUUID, opts.TaskUUID, opts.StepKey, "", err.Error())
 			return
+		}
+		if opts.ThinkingLevel.Value != "" {
+			o.db.Exec(`UPDATE gt_cli_sessions SET thinking_level_sent=?, thinking_resolution='sent' WHERE uuid=?`, opts.ThinkingLevel.Value, sessionUUID)
 		}
 		// 启动广播（startSession/ContinueConversation）发生在状态翻转之前；翻转后需补发广播，
 		// 否则前端在 WS 推送模式下不轮询，会一直停留在 created（等待执行）。

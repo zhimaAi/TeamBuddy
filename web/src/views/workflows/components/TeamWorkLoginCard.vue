@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, ref } from 'vue'
+import { computed, nextTick, ref, watch } from 'vue'
 import { useAppI18n } from '@/i18n'
 import { useLastLogin } from '@/composables/useLastLogin'
 import { useBrowserLogin } from '@/composables/useBrowserLogin'
@@ -8,12 +8,20 @@ import featureCollaborateIcon from '@/assets/icons/team-login-feature-collaborat
 import featureSyncIcon from '@/assets/icons/team-login-feature-sync.svg'
 
 const { t } = useAppI18n()
-const { pending, errorMessage, startBrowserLogin, cancelBrowserLogin } = useBrowserLogin()
-const { getLastLogin, getSavedServers, saveLastLogin } = useLastLogin()
+const { pending, pendingServerType, loginContext, errorMessage, startBrowserLogin, cancelBrowserLogin } = useBrowserLogin()
+const { getLastLogin, getSavedServers } = useLastLogin()
 const customLoginOpen = ref(false)
 const customUrl = ref('')
 const addressError = ref('')
 const addressInput = ref<{ focus: () => void } | null>(null)
+
+// 卡片会随看板页签切换重建，授权中的表单必须从共享流程恢复。
+watch(loginContext, (context) => {
+  if (context?.serverType !== 'custom') return
+  customLoginOpen.value = true
+  customUrl.value = context.serverUrl
+  addressError.value = ''
+}, { immediate: true })
 
 const emit = defineEmits<{
   (event: 'use-local'): void
@@ -40,7 +48,7 @@ async function showCustomLogin() {
   addressInput.value?.focus()
 }
 
-async function authorizeCustomLogin() {
+function authorizeCustomLogin() {
   if (pending.value) return
   addressError.value = ''
   const address = customUrl.value.trim()
@@ -59,8 +67,7 @@ async function authorizeCustomLogin() {
     addressInput.value?.focus()
     return
   }
-  const ok = await startBrowserLogin({ serverType: 'custom', serverUrl })
-  if (ok) saveLastLogin({ serverType: 'custom', serverUrl })
+  void startBrowserLogin({ serverType: 'custom', serverUrl })
 }
 
 function closeCustomLogin() {
@@ -96,7 +103,7 @@ function handleCancel() {
         :disabled="pending"
         @click="handleLogin"
       >
-        <span v-if="pending" class="team-login-spinner" aria-hidden="true" />
+        <span v-if="pending && pendingServerType === 'official'" class="team-login-spinner" aria-hidden="true" />
         {{ t('teamwork.login.action') }}
       </button>
 
@@ -118,7 +125,7 @@ function handleCancel() {
           @update:value="addressError = ''"
         />
         <p v-if="addressError" id="team-custom-server-error" class="team-login-error" role="alert">{{ addressError }}</p>
-        <a-button class="custom-login-authorize" size="large" html-type="submit" :loading="pending" :disabled="pending">
+        <a-button class="custom-login-authorize" size="large" html-type="submit" :loading="pending && pendingServerType === 'custom'" :disabled="pending">
           {{ t('teamwork.connection.authorize') }}
         </a-button>
         <a-button v-if="!pending" type="text" @click="closeCustomLogin">{{ t('common.actions.cancel') }}</a-button>

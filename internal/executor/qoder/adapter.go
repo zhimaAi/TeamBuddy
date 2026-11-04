@@ -13,9 +13,10 @@ const fullPermissionArg = "--yolo"
 // NewAdapter 创建 Qoder CLI 适配器。
 func NewAdapter() executor.Adapter {
 	return executor.NewStreamAdapter(executor.AdapterSpec{
-		DisplayName:     displayName,
-		BuildInvocation: buildInvocation,
-		NewDecoder:      executor.NewStreamJSONDecoder,
+		DisplayName:      displayName,
+		SupportsThinking: true,
+		BuildInvocation:  buildInvocation,
+		NewDecoder:       executor.NewStreamJSONDecoder,
 	})
 }
 
@@ -32,6 +33,9 @@ func buildInvocation(opts executor.RunOptions, resumeSession string) executor.In
 	args = append(args, fullPermissionArg, "--output-format", "stream-json")
 	if opts.ModelProfile != "" {
 		args = append(args, "--model", opts.ModelProfile)
+	}
+	if opts.ThinkingLevel != "" {
+		args = append(args, "--reasoning-effort", opts.ThinkingLevel)
 	}
 	args = append(args, opts.ExtraArgs...)
 	return executor.Invocation{Args: args, StdinText: opts.Prompt}

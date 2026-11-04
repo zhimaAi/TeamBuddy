@@ -20,8 +20,9 @@ const displayName = "OpenCode"
 // event. Both are supported below.
 func NewAdapter() executor.Adapter {
 	return executor.NewStreamAdapter(executor.AdapterSpec{
-		DisplayName:     displayName,
-		BuildInvocation: buildInvocation,
+		SupportsThinking: true,
+		DisplayName:      displayName,
+		BuildInvocation:  buildInvocation,
 		NewDecoder: func(name string) executor.Decoder {
 			return NewDecoder(name)
 		},
@@ -38,6 +39,9 @@ func buildInvocation(opts executor.RunOptions, resumeSession string) executor.In
 	}
 	if opts.ModelProfile != "" {
 		args = append(args, "-m", opts.ModelProfile)
+	}
+	if opts.ThinkingLevel != "" {
+		args = append(args, "--variant", opts.ThinkingLevel)
 	}
 	args = append(args, opts.ExtraArgs...)
 	return executor.Invocation{Args: args, StdinText: opts.Prompt}

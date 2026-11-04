@@ -18,8 +18,9 @@ const displayName = "Pi Agent"
 // tool_execution_start / tool_execution_update / tool_execution_end。
 func NewAdapter() executor.Adapter {
 	return executor.NewStreamAdapter(executor.AdapterSpec{
-		DisplayName:     displayName,
-		BuildInvocation: buildInvocation,
+		SupportsThinking: true,
+		DisplayName:      displayName,
+		BuildInvocation:  buildInvocation,
 		NewDecoder: func(name string) executor.Decoder {
 			return NewDecoder(name)
 		},
@@ -36,6 +37,9 @@ func buildInvocation(opts executor.RunOptions, resumeSession string) executor.In
 	}
 	args = append(args, "--mode", "json")
 	args = append(args, modelArgs(opts.ModelProfile)...)
+	if opts.ThinkingLevel != "" {
+		args = append(args, "--thinking", opts.ThinkingLevel)
+	}
 	args = append(args, opts.ExtraArgs...)
 	return executor.Invocation{Args: args, StdinText: opts.Prompt}
 }

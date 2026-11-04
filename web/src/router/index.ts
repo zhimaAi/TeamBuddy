@@ -8,6 +8,7 @@ const sidebarMenuPaths = new Map<string, string>([
   ['workflows', '/board'],
   ['agents', '/agents'],
   ['knowledge', '/knowledge'],
+  ['skills', '/skills'],
   ['remote-channels', '/remote-channels'],
   ['projects', '/projects'],
   ['settings', '/settings'],
@@ -121,6 +122,12 @@ const routes: RouteRecordRaw[] = [
         name: 'knowledge',
         component: () => import('@/views/knowledge/KnowledgeBase.vue'),
         meta: { titleKey: 'routes.knowledge', title: '知识库', menu: 'knowledge' },
+      },
+      {
+        path: 'skills',
+        name: 'skills',
+        component: () => import('@/views/skills/Skills.vue'),
+        meta: { titleKey: 'routes.skills', title: '技能', menu: 'skills', contentLayout: 'custom', isScroll: false },
       },
       //Interface management
       {

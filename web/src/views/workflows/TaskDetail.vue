@@ -118,7 +118,6 @@
       v-if="task && isVibeCoding"
       :tool-name="vibeCodingToolName"
       :tool-id="task?.execution_tool || ''"
-      :task-uuid="resolvedTaskUuid || task.uuid"
       :show-open-button="isVibeCoding"
       :open-label="t('workflows.task.detail.openInTool', { tool: vibeCodingToolName })"
       :opening="codexBusy"
@@ -135,6 +134,7 @@
       :stopping="stoppingSessionUuid === activeSelectedProgress?.session_uuid"
       :cli-type="composerCliType"
       :model-name="composerModelName"
+      :thinking-level="latestSelectedAgentProgress?.thinking_level ?? selectedStep?.thinking_level ?? ''"
       :start-mode="selectedStepAwaitingStart"
       :advance-action="composerAdvanceAction"
       :placeholder="composerPlaceholder"
@@ -196,6 +196,9 @@
       :current-step="currentStep"
       :document-step="currentStep"
       :hide-agent-prompt="true"
+      :cli-type="latestCLIProgress?.cli_type || task.execution_tool || ''"
+      :model-name="latestCLIProgress?.model || task.execution_model || ''"
+      :thinking-level="latestCLIProgress?.thinking_level ?? currentStep?.thinking_level ?? ''"
       :execution-task="task"
       @switch-execution="openExecutionModeModal(true)"
       @submit="submitCLIQuestion"
@@ -423,6 +426,7 @@ const activeCLIProgress = computed(() =>
     .reverse()
     .find((item) => !isUserMessage(item) && ['created', 'running'].includes(item.status)),
 )
+const latestCLIProgress = computed(() => [...progress.value].reverse().find((item) => !isUserMessage(item)))
 const cliCanAsk = computed(() => !activeCLIProgress.value)
 const latestSelectedAgentProgress = computed(() =>
   [...selectedProgress.value].reverse().find((item) => !isUserMessage(item)),
@@ -718,6 +722,7 @@ async function submitQuestion(submission: ChatComposerSubmission) {
       request_id: crypto.randomUUID(),
       cli_type: submission.config.cli_type,
       model_name: submission.config.model_name,
+      thinking_level: submission.config.thinking_level,
     })
     if (readComposerDraft(draftKey) === draftText) writeComposerDraft(draftKey, '')
     composerRef.value?.resetAfterSubmit(draftKey)
@@ -784,6 +789,7 @@ async function submitCLIQuestion(submission: ChatComposerSubmission) {
       question: text,
       display_question: submission.display_content?.trim() || text,
       request_id: crypto.randomUUID(),
+      ...submission.config,
     })
     question.value = ''
     composerRef.value?.resetAfterSubmit()

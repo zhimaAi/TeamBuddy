@@ -1,6 +1,7 @@
 import { computed, ref } from 'vue'
 import apiClient, { ApiError } from '@/api/client'
 import { applySession, fetchSession } from '@/composables/useCloudSession'
+import { useLastLogin, type LastLoginConfig } from '@/composables/useLastLogin'
 import { t } from '@/i18n'
 import { ipcErrorMessage } from '@/utils/ipcError'
 
@@ -30,6 +31,8 @@ export interface BrowserLoginOptions { serverType?: 'official' | 'custom'; serve
 // 侧边栏账号入口与团队工作登录引导卡片共用同一次登录流程，所以状态放在模块级单例，
 // 而不是每个组件各起一份轮询。
 const pending = ref(false)
+// 失败或取消后保留本次地址，页面重建时仍可恢复表单并重试；不持久化授权会话。
+const loginContext = ref<Readonly<LastLoginConfig> | null>(null)
 const errorMessage = ref('')
 const state = ref('')
 let pollTimer: ReturnType<typeof setInterval> | null = null
@@ -49,6 +52,12 @@ function stopPolling() {
 }
 
 function settle(ok: boolean, message = '') {
+  if (ok) {
+    if (loginContext.value?.serverType === 'custom') {
+      useLastLogin().saveLastLogin(loginContext.value)
+    }
+    loginContext.value = null
+  }
   generation += 1
   stopPolling()
   state.value = ''
@@ -121,6 +130,10 @@ function startPolling() {
 async function startBrowserLogin(options: BrowserLoginOptions = {}): Promise<boolean> {
   if (pending.value) return waitForSettle()
   errorMessage.value = ''
+  loginContext.value = {
+    serverType: options.serverType ?? 'official',
+    serverUrl: options.serverUrl ?? '',
+  }
   pending.value = true
   const completion = waitForSettle()
   const startGeneration = generation
@@ -152,7 +165,7 @@ async function startBrowserLogin(options: BrowserLoginOptions = {}): Promise<boo
   return completion
 }
 
-/** 取消进行中的浏览器登录（关闭弹窗、切换页面等）。 */
+/** 用户主动取消登录；页面切换不影响进行中的授权。 */
 async function cancelBrowserLogin(): Promise<void> {
   const current = state.value
   const requestGeneration = generation
@@ -184,6 +197,8 @@ async function cancelBrowserLogin(): Promise<void> {
 export function useBrowserLogin() {
   return {
     pending: computed(() => pending.value),
+    pendingServerType: computed(() => pending.value ? loginContext.value?.serverType ?? null : null),
+    loginContext: computed(() => loginContext.value),
     errorMessage: computed(() => errorMessage.value),
     startBrowserLogin,
     cancelBrowserLogin,

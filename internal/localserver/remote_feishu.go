@@ -14,6 +14,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"goteams-client/internal/applog"
+	"goteams-client/internal/executor"
 	"goteams-client/internal/i18n"
 	"goteams-client/internal/workflow"
 
@@ -725,17 +726,18 @@ func (f *feishuChannel) disable(c *gin.Context) {
 }
 
 type feishuCLIConfigResult struct {
-	CLICType  string
-	CLIModel  string
-	Workspace string
-	Enabled   bool
+	CLICType      string
+	CLIModel      string
+	ThinkingLevel string
+	Workspace     string
+	Enabled       bool
 }
 
 func (f *feishuChannel) readChannelCLIConfig(ctx context.Context) feishuCLIConfigResult {
 	var cfg feishuCLIConfigResult
 	_ = f.db.QueryRowContext(ctx, `
-		SELECT cli_type, cli_model, workspace, enabled FROM gt_remote_channel_cli_configs WHERE channel_type=?`,
-		ChannelTypeFeishu).Scan(&cfg.CLICType, &cfg.CLIModel, &cfg.Workspace, &cfg.Enabled)
+		SELECT cli_type, cli_model, thinking_level, workspace, enabled FROM gt_remote_channel_cli_configs WHERE channel_type=?`,
+		ChannelTypeFeishu).Scan(&cfg.CLICType, &cfg.CLIModel, &cfg.ThinkingLevel, &cfg.Workspace, &cfg.Enabled)
 	if !cfg.Enabled {
 		cfg.Enabled = true
 	}
@@ -750,19 +752,21 @@ func (f *feishuChannel) getCLIConfig(c *gin.Context) {
 	}
 	// 显式使用 snake_case 字段名与前端 CLIConfig 契约对齐
 	c.JSON(http.StatusOK, gin.H{
-		"cli_type":  cfg.CLICType,
-		"cli_model": cfg.CLIModel,
-		"workspace": workspace,
-		"enabled":   cfg.Enabled,
+		"cli_type":       cfg.CLICType,
+		"cli_model":      cfg.CLIModel,
+		"thinking_level": cfg.ThinkingLevel,
+		"workspace":      workspace,
+		"enabled":        cfg.Enabled,
 	})
 }
 
 func (f *feishuChannel) saveCLIConfig(c *gin.Context) {
 	var req struct {
-		CLICType  string `json:"cli_type"`
-		CLIModel  string `json:"cli_model"`
-		Workspace string `json:"workspace"`
-		Enabled   *bool  `json:"enabled"`
+		ThinkingLevel executor.ThinkingLevelInput `json:"thinking_level"`
+		CLICType      string                      `json:"cli_type"`
+		CLIModel      string                      `json:"cli_model"`
+		Workspace     string                      `json:"workspace"`
+		Enabled       *bool                       `json:"enabled"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		i18n.Error(c, http.StatusBadRequest, "remote_channel_cli_config_invalid", "channel_cli_config_invalid")
@@ -780,16 +784,22 @@ func (f *feishuChannel) saveCLIConfig(c *gin.Context) {
 		enabledInt = 1
 	}
 	now := time.Now().UnixMilli()
-	_, err := f.db.ExecContext(c.Request.Context(), `
-		INSERT INTO gt_remote_channel_cli_configs (channel_type, cli_type, cli_model, workspace, enabled, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?)
+	level, err := resolveRemoteThinking(c.Request.Context(), f.db, ChannelTypeFeishu, req.CLICType, req.CLIModel, req.Workspace, req.ThinkingLevel)
+	if err != nil {
+		i18n.LocalServerError(c, http.StatusBadRequest, err)
+		return
+	}
+	_, err = f.db.ExecContext(c.Request.Context(), `
+		INSERT INTO gt_remote_channel_cli_configs (channel_type, cli_type, cli_model, thinking_level, workspace, enabled, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(channel_type) DO UPDATE SET
 			cli_type=excluded.cli_type,
 			cli_model=excluded.cli_model,
+			thinking_level=excluded.thinking_level,
 			workspace=excluded.workspace,
 			enabled=excluded.enabled,
 			updated_at=excluded.updated_at`,
-		ChannelTypeFeishu, req.CLICType, req.CLIModel, req.Workspace, enabledInt, now)
+		ChannelTypeFeishu, req.CLICType, req.CLIModel, level, req.Workspace, enabledInt, now)
 	if err != nil {
 		i18n.Error(c, http.StatusInternalServerError, "remote_channel_cli_config_save_failed", "channel_cli_config_save_failed")
 		return

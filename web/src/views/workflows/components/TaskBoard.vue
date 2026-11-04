@@ -141,6 +141,7 @@
       :initial-cli-type="pendingAssignTask?.execution_mode === 'cli' ? pendingAssignTask?.execution_tool || '' : ''"
       :initial-vibe-tool="pendingAssignTask?.execution_mode === 'vibe_coding' ? pendingAssignTask?.execution_tool || '' : ''"
       :initial-model-name="pendingAssignTask?.execution_mode === 'cli' ? pendingAssignTask?.execution_model || '' : ''"
+      :initial-thinking-level="pendingAssignTask?.thinking_level || ''"
       mode="board"
       @assigned="load"
     />

@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"goteams-client/internal/cloudsync"
+	"goteams-client/internal/executor"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -34,16 +35,17 @@ var (
 const generatedTaskTitleMaxRunes = 20
 
 type SnapshotStep struct {
-	SourceStepID string `json:"source_step_id"`
-	LocalStepID  string `json:"local_step_id"`
-	CloudStepID  string `json:"cloud_step_id"`
-	Name         string `json:"name"`
-	Description  string `json:"description"`
-	Avatar       string `json:"avatar"`
-	Prompt       string `json:"prompt"`
-	CLIType      string `json:"cli_type"`
-	ModelName    string `json:"model_name"`
-	SortOrder    int    `json:"sort_order"`
+	SourceStepID  string `json:"source_step_id"`
+	LocalStepID   string `json:"local_step_id"`
+	CloudStepID   string `json:"cloud_step_id"`
+	Name          string `json:"name"`
+	Description   string `json:"description"`
+	Avatar        string `json:"avatar"`
+	Prompt        string `json:"prompt"`
+	CLIType       string `json:"cli_type"`
+	ModelName     string `json:"model_name"`
+	ThinkingLevel string `json:"thinking_level"`
+	SortOrder     int    `json:"sort_order"`
 }
 
 type Snapshot struct {
@@ -91,6 +93,7 @@ type CreateInput struct {
 	ExecutionMode              string
 	ExecutionTool              string
 	ExecutionModel             string
+	ThinkingLevel              string
 	// SyncAgentOutput 为指针：nil 表示沿用默认值（自动上报产出文件），
 	// 只有显式 false 才关闭该任务的产出文件自动上报。
 	SyncAgentOutput *bool
@@ -166,6 +169,18 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (taskUUID string, 
 	workDirs, projectIDs, err := s.resolveWorkDirs(ctx, in.ProjectUUID, in.SubprojectUUIDs, in.WorkDirs)
 	if err != nil {
 		return "", err
+	}
+	if in.ExecutionMode == ExecutionModeCLI {
+		if err := executor.ValidateThinkingLevel(ctx, in.ExecutionTool, in.ExecutionModel, workDirs[0], in.ThinkingLevel); err != nil {
+			return "", err
+		}
+	} else if in.ThinkingLevel != "" {
+		return "", executor.ErrThinkingInvalid
+	}
+	for _, step := range in.Snapshot.Steps {
+		if err := executor.ValidateThinkingLevel(ctx, step.CLIType, step.ModelName, workDirs[0], step.ThinkingLevel); err != nil {
+			return "", err
+		}
 	}
 
 	root, err := filepath.Abs(strings.TrimSpace(s.taskRoot))
@@ -298,11 +313,11 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (taskUUID string, 
 		stepKey := fmt.Sprintf("step-%02d", i+1)
 		_, err = tx.ExecContext(ctx, `INSERT INTO gt_task_steps
 			(uuid, task_uuid, task_pipeline_snapshot_uuid, source_type, source_step_id, local_step_uuid, cloud_step_id,
-			 step_key, step_order, name, description, avatar, prompt_snapshot, cli_type, model_name, step_dir,
+			 step_key, step_order, name, description, avatar, prompt_snapshot, cli_type, model_name, thinking_level, step_dir,
 			 status, execution_status, created_at, updated_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'idle', ?, ?)`,
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'idle', ?, ?)`,
 			stepUUID, taskUUID, snapshotUUID, in.Snapshot.SourceType, step.SourceStepID, step.LocalStepID, step.CloudStepID,
-			stepKey, i, step.Name, step.Description, step.Avatar, step.Prompt, step.CLIType, step.ModelName, stepDirs[i], stepStatus, now, now)
+			stepKey, i, step.Name, step.Description, step.Avatar, step.Prompt, step.CLIType, step.ModelName, step.ThinkingLevel, stepDirs[i], stepStatus, now, now)
 		if err != nil {
 			return "", fmt.Errorf("保存临时 Agent 编排失败: %w", err)
 		}
@@ -314,10 +329,10 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (taskUUID string, 
 		stepUUID := uuid.New().String()
 		if _, err = tx.ExecContext(ctx, `INSERT INTO gt_task_steps
 			(uuid, task_uuid, task_pipeline_snapshot_uuid, source_type, step_key, step_order, name, description, avatar,
-			 prompt_snapshot, cli_type, model_name, step_dir, status, execution_status, execution_mode, created_at, updated_at)
-			VALUES (?, ?, '', ?, ?, 0, ?, '', '', '', ?, ?, '', 'active', 'idle', ?, ?, ?)`,
+			 prompt_snapshot, cli_type, model_name, thinking_level, step_dir, status, execution_status, execution_mode, created_at, updated_at)
+			VALUES (?, ?, '', ?, ?, 0, ?, '', '', '', ?, ?, ?, '', 'active', 'idle', ?, ?, ?)`,
 			stepUUID, taskUUID, in.SourceType, CLIDirectStepKey, CLIDirectStepName, in.ExecutionTool,
-			in.ExecutionModel, ExecutionModeCLI, now, now); err != nil {
+			in.ExecutionModel, in.ThinkingLevel, ExecutionModeCLI, now, now); err != nil {
 			return "", fmt.Errorf("保存 CLI 直接执行步骤失败: %w", err)
 		}
 		currentStepUUID = stepUUID
@@ -546,9 +561,9 @@ func (s *Service) AssignPipelineSelection(ctx context.Context, taskUUID, selecte
 	}
 	selectedPipelineUUID = strings.TrimSpace(selectedPipelineUUID)
 	selectedConfigJSON = strings.TrimSpace(selectedConfigJSON)
-	var taskDir, existingSnapshot, currentStep, executionMode string
-	err = s.db.QueryRowContext(ctx, `SELECT task_dir, pipeline_snapshot_uuid, current_step_uuid, execution_mode FROM gt_tasks WHERE uuid = ?`, taskUUID).
-		Scan(&taskDir, &existingSnapshot, &currentStep, &executionMode)
+	var taskDir, workDir, existingSnapshot, currentStep, executionMode string
+	err = s.db.QueryRowContext(ctx, `SELECT task_dir, work_dir, pipeline_snapshot_uuid, current_step_uuid, execution_mode FROM gt_tasks WHERE uuid = ?`, taskUUID).
+		Scan(&taskDir, &workDir, &existingSnapshot, &currentStep, &executionMode)
 	if err == sql.ErrNoRows {
 		return ErrNotFound
 	}
@@ -565,6 +580,11 @@ func (s *Service) AssignPipelineSelection(ctx context.Context, taskUUID, selecte
 		return fmt.Errorf("任务已经分配流水线，不能覆盖永久快照")
 	}
 
+	for _, step := range snapshot.Steps {
+		if err := executor.ValidateThinkingLevel(ctx, step.CLIType, step.ModelName, workDir, step.ThinkingLevel); err != nil {
+			return err
+		}
+	}
 	snapshotUUID := uuid.NewString()
 	hash, err := snapshotHash(snapshot)
 	if err != nil {
@@ -610,12 +630,12 @@ func (s *Service) AssignPipelineSelection(ctx context.Context, taskUUID, selecte
 		stepUUID := uuid.NewString()
 		if _, err = tx.ExecContext(ctx, `INSERT INTO gt_task_steps
 			(uuid, task_uuid, task_pipeline_snapshot_uuid, source_type, source_step_id, local_step_uuid, cloud_step_id,
-			 step_key, step_order, name, description, avatar, prompt_snapshot, cli_type, model_name, step_dir,
+			 step_key, step_order, name, description, avatar, prompt_snapshot, cli_type, model_name, thinking_level, step_dir,
 			 status, execution_status, created_at, updated_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', 'idle', ?, ?)`, stepUUID, taskUUID,
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', 'idle', ?, ?)`, stepUUID, taskUUID,
 			snapshotUUID, snapshot.SourceType, step.SourceStepID, step.LocalStepID, step.CloudStepID,
 			fmt.Sprintf("step-%02d", i+1), i, step.Name, step.Description, step.Avatar, step.Prompt,
-			step.CLIType, step.ModelName, stepDirs[i], now, now); err != nil {
+			step.CLIType, step.ModelName, step.ThinkingLevel, stepDirs[i], now, now); err != nil {
 			return err
 		}
 	}
@@ -692,13 +712,25 @@ func (s *Service) AssignVibeCoding(ctx context.Context, taskUUID, tool, model st
 // both the pipeline and the Agent orchestration: it records the chosen runtime on
 // the implicit step, moves the board status to active, and waits for the user's
 // first instruction instead of starting a session.
-func (s *Service) AssignCLI(ctx context.Context, taskUUID, cliType, modelName string, start bool) error {
+func (s *Service) AssignCLI(ctx context.Context, taskUUID, cliType, modelName string, start bool, selection ...executor.ThinkingLevelInput) error {
 	cliType = strings.ToLower(strings.TrimSpace(cliType))
 	modelName = strings.TrimSpace(modelName)
 	if err := ValidateExecutionTarget(ExecutionModeCLI, cliType, "", ""); err != nil {
 		return err
 	}
 	if err := ValidateCLITarget(cliType, modelName); err != nil {
+		return err
+	}
+	var thinking executor.ThinkingLevelInput
+	if len(selection) > 0 {
+		thinking = selection[0]
+	}
+	var previousCLI, previousModel, previousLevel, workDir string
+	if err := s.db.QueryRowContext(ctx, `SELECT t.work_dir, COALESCE(s.cli_type,''), COALESCE(s.model_name,''), COALESCE(s.thinking_level,'') FROM gt_tasks t LEFT JOIN gt_task_steps s ON s.task_uuid=t.uuid AND s.step_key=? WHERE t.uuid=?`, CLIDirectStepKey, taskUUID).Scan(&workDir, &previousCLI, &previousModel, &previousLevel); err != nil {
+		return err
+	}
+	level := executor.ResolveThinkingLevel(thinking, cliType, modelName, previousCLI, previousModel, previousLevel)
+	if err := executor.ValidateThinkingLevel(ctx, cliType, modelName, workDir, level); err != nil {
 		return err
 	}
 	var mode, status, pipelineUUID, snapshotUUID, currentStep, expertSnapshotUUID string
@@ -743,17 +775,17 @@ func (s *Service) AssignCLI(ctx context.Context, taskUUID, cliType, modelName st
 		if stepKey != CLIDirectStepKey {
 			return ErrExecutionModeConflict
 		}
-		if _, err = tx.ExecContext(ctx, `UPDATE gt_task_steps SET cli_type=?, model_name=?, execution_mode=?, status='active', updated_at=?
-			WHERE task_uuid=? AND uuid=?`, cliType, modelName, ExecutionModeCLI, now, taskUUID, stepUUID); err != nil {
+		if _, err = tx.ExecContext(ctx, `UPDATE gt_task_steps SET cli_type=?, model_name=?, thinking_level=?, execution_mode=?, status='active', updated_at=?
+			WHERE task_uuid=? AND uuid=?`, cliType, modelName, level, ExecutionModeCLI, now, taskUUID, stepUUID); err != nil {
 			return fmt.Errorf("更新 CLI 直接执行步骤失败: %w", err)
 		}
 	} else {
 		stepUUID = uuid.New().String()
 		if _, err = tx.ExecContext(ctx, `INSERT INTO gt_task_steps
 			(uuid, task_uuid, task_pipeline_snapshot_uuid, source_type, step_key, step_order, name, description, avatar,
-			 prompt_snapshot, cli_type, model_name, step_dir, status, execution_status, execution_mode, created_at, updated_at)
-			VALUES (?, ?, '', 'local', ?, 0, ?, '', '', '', ?, ?, '', 'active', 'idle', ?, ?, ?)`,
-			stepUUID, taskUUID, CLIDirectStepKey, CLIDirectStepName, cliType, modelName,
+			 prompt_snapshot, cli_type, model_name, thinking_level, step_dir, status, execution_status, execution_mode, created_at, updated_at)
+			VALUES (?, ?, '', 'local', ?, 0, ?, '', '', '', ?, ?, ?, '', 'active', 'idle', ?, ?, ?)`,
+			stepUUID, taskUUID, CLIDirectStepKey, CLIDirectStepName, cliType, modelName, level,
 			ExecutionModeCLI, now, now); err != nil {
 			return fmt.Errorf("保存 CLI 直接执行步骤失败: %w", err)
 		}

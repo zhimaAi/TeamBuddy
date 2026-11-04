@@ -8,6 +8,7 @@ export type ExecutionStatus =
 export interface ConversationRuntimeConfig {
   cli_type: string
   model_name: string
+  thinking_level?: string
 }
 
 export interface PipelineStep {
@@ -25,6 +26,7 @@ export interface PipelineStep {
   cli_type: string
   model?: string
   model_name?: string
+  thinking_level?: string
   sort_order: number
   status?: StepBusinessStatus
   execution_status?: ExecutionStatus
@@ -42,6 +44,7 @@ export interface ExpertMember {
   prompt: string
   cli_type: string
   model_name: string
+  thinking_level?: string
   created_at?: number
   updated_at?: number
 }
@@ -70,6 +73,7 @@ export interface ReusableAgent {
   prompt: string
   cli_type: string
   model_name: string
+  thinking_level?: string
 }
 
 export interface Pipeline {
@@ -98,6 +102,9 @@ export interface TaskProgress {
   result?: string
   cli_type?: string
   model?: string
+  thinking_level?: string
+  thinking_level_sent?: string
+  thinking_resolution?: 'inherit' | 'sent' | 'rejected'
   session_uuid?: string
   execution_mode?: TaskExecutionMode
   external_session_id?: string

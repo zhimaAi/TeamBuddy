@@ -1,10 +1,14 @@
 <script setup lang="ts">
 import { ref, watch } from 'vue'
+import CliThinkingSelect from '@/components/CliThinkingSelect.vue'
+import { useCliThinkingSelection } from '@/composables/useCliThinkingSelection'
+import { useCLIModelCatalogStore } from '@/stores/cli-models'
 import { message } from 'ant-design-vue'
 import apiClient from '@/api/client'
 import { useAppI18n } from '@/i18n'
 
 const { t } = useAppI18n()
+const directories = useCLIModelCatalogStore()
 
 interface DiscoveredCLI {
   type: string
@@ -17,19 +21,22 @@ interface DiscoveredCLI {
 
 const props = defineProps<{
   open: boolean
+  taskUuid?: string
 }>()
 
 const emit = defineEmits<{
   'update:open': [value: boolean]
-  confirm: [payload: { cli_type: string; model: string }]
+  confirm: [payload: { cli_type: string; model: string; thinking_level: string }]
 }>()
 
 const loading = ref(false)
 const cliList = ref<DiscoveredCLI[]>([])
 const selectedType = ref('')
 const selectedModel = ref('')
+const thinkingLevel = ref('')
 const useCustomModel = ref(false)
 const customModel = ref('')
+const { resetThinkingDrafts } = useCliThinkingSelection(() => selectedType.value, () => useCustomModel.value ? customModel.value.trim() : selectedModel.value, thinkingLevel)
 const models = ref<string[]>([])
 const modelsLoading = ref(false)
 let modelReqSeq = 0
@@ -82,6 +89,7 @@ watch(() => props.open, async (visible) => {
     selectedModel.value = ''
     useCustomModel.value = false
     customModel.value = ''
+    resetThinkingDrafts()
     await loadCLIs()
   }
 })
@@ -113,19 +121,20 @@ async function loadModels(cliType: string) {
   selectedModel.value = ''
   let fetched: string[] = []
   try {
-    const result = await apiClient.get<{ models: string[] }>('/tasks/cli-models', { cli_type: cliType })
+    const result = await directories.load(cliType, { taskUuid: props.taskUuid })
     fetched = result.models || []
   } catch (error) {
     if (seq === modelReqSeq) {
       message.error(error instanceof Error ? error.message : t('components.cliSelect.modelsLoadFailed'))
     }
   } finally {
-    if (seq !== modelReqSeq) return
-    modelsLoading.value = false
-    models.value = fetched
-    const merged = mergedModels(fetched)
-    selectedModel.value = merged.length > 0 ? merged[0].name : ''
-    useCustomModel.value = merged.length === 0
+    if (seq === modelReqSeq) {
+      modelsLoading.value = false
+      models.value = fetched
+      const merged = mergedModels(fetched)
+      selectedModel.value = merged.length > 0 ? merged[0].name : ''
+      useCustomModel.value = merged.length === 0
+    }
   }
 }
 
@@ -151,7 +160,7 @@ function handleConfirm() {
   if (useCustomModel.value && model) {
     saveCustomModel(selectedType.value, model)
   }
-  emit('confirm', { cli_type: selectedType.value, model })
+  emit('confirm', { cli_type: selectedType.value, model, thinking_level: thinkingLevel.value })
   emit('update:open', false)
 }
 
@@ -224,6 +233,7 @@ function handleCancel() {
               allow-clear
             />
           </a-spin>
+          <CliThinkingSelect v-if="(useCustomModel ? customModel.trim() : selectedModel)" v-model="thinkingLevel" :cli-type="selectedType" :model-name="useCustomModel ? customModel.trim() : selectedModel" :task-uuid="taskUuid" />
           <div class="cli-model-section__footer">
             <a
               v-if="mergedModels(models).length > 0"

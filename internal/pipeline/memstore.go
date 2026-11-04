@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"goteams-client/internal/executor"
 )
 
 // MemStore is the process-wide cloud pipeline cache. Cloud pipelines are
@@ -112,6 +113,7 @@ func (m *MemStore) ReplaceAll(sourceKey string, items []CloudPipeline, scope ...
 			if prev := m.findStepLocked(pipelineUUID, stepUUID); prev != nil {
 				item.CLIType = prev.CLIType
 				item.ModelName = prev.ModelName
+				item.ThinkingLevel = prev.ThinkingLevel
 				item.CreatedAt = prev.CreatedAt
 			}
 			steps = append(steps, item)
@@ -166,6 +168,7 @@ func (m *MemStore) ApplyStepExecution(pipelineUUID string, steps []Step) {
 		if strings.TrimSpace(next.ModelName) != "" {
 			pipe.Steps[i].ModelName = next.ModelName
 		}
+		pipe.Steps[i].ThinkingLevel = next.ThinkingLevel
 	}
 }
 
@@ -196,7 +199,7 @@ func (m *MemStore) List() []Pipeline {
 }
 
 // UpdateStep persists the locally chosen execution config of a cloud step.
-func (m *MemStore) UpdateStep(pipelineUUID, stepUUID, cliType, modelName string) (*Step, error) {
+func (m *MemStore) UpdateStep(pipelineUUID, stepUUID, cliType, modelName string, thinking executor.ThinkingLevelInput) (*Step, error) {
 	cliType = strings.TrimSpace(cliType)
 	modelName = strings.TrimSpace(modelName)
 	if cliType == "" || modelName == "" {
@@ -210,6 +213,7 @@ func (m *MemStore) UpdateStep(pipelineUUID, stepUUID, cliType, modelName string)
 	}
 	for i := range pipe.Steps {
 		if pipe.Steps[i].UUID == stepUUID {
+			pipe.Steps[i].ThinkingLevel = executor.ResolveThinkingLevel(thinking, cliType, modelName, pipe.Steps[i].CLIType, pipe.Steps[i].ModelName, pipe.Steps[i].ThinkingLevel)
 			pipe.Steps[i].CLIType = cliType
 			pipe.Steps[i].ModelName = modelName
 			pipe.Steps[i].UpdatedAt = time.Now().UnixMilli()
@@ -222,7 +226,7 @@ func (m *MemStore) UpdateStep(pipelineUUID, stepUUID, cliType, modelName string)
 
 // BatchUpdateStepExecution validates all step UUIDs before mutating the cloud
 // pipeline cache, so one missing target cannot leave a partially updated set.
-func (m *MemStore) BatchUpdateStepExecution(pipelineUUID string, stepUUIDs []string, cliType, modelName string) (*Pipeline, error) {
+func (m *MemStore) BatchUpdateStepExecution(pipelineUUID string, stepUUIDs []string, cliType, modelName string, thinking executor.ThinkingLevelInput) (*Pipeline, error) {
 	cliType = strings.TrimSpace(cliType)
 	modelName = strings.TrimSpace(modelName)
 	if cliType == "" || modelName == "" {
@@ -252,6 +256,7 @@ func (m *MemStore) BatchUpdateStepExecution(pipelineUUID string, stepUUIDs []str
 
 	now := time.Now().UnixMilli()
 	for _, idx := range indices {
+		pipe.Steps[idx].ThinkingLevel = executor.ResolveThinkingLevel(thinking, cliType, modelName, pipe.Steps[idx].CLIType, pipe.Steps[idx].ModelName, pipe.Steps[idx].ThinkingLevel)
 		pipe.Steps[idx].CLIType = cliType
 		pipe.Steps[idx].ModelName = modelName
 		pipe.Steps[idx].UpdatedAt = now

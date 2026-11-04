@@ -1,8 +1,12 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, ref, toRef, watch } from 'vue'
 import { Modal, message } from 'ant-design-vue'
 import { SettingOutlined } from '@ant-design/icons-vue'
 import apiClient from '@/api/client'
+import CliThinkingSelect from '@/components/CliThinkingSelect.vue'
+import { useCliThinkingSelection } from '@/composables/useCliThinkingSelection'
+import { modelLogo } from '@/composables/useModelLogo'
+import { useCLIModelCatalogStore } from '@/stores/cli-models'
 import { useLocalWS } from '@/composables/useLocalWebSocket'
 import { useAppI18n } from '@/i18n'
 import DirectoryPicker, { type DirectoryPickerCandidate } from '@/components/DirectoryPicker.vue'
@@ -62,12 +66,14 @@ interface CLIDiscoveryItem {
 interface CLIConfig {
   cli_type: string
   cli_model: string
+  thinking_level?: string
   workspace: string
   enabled: boolean
 }
 
 const { t, d } = useAppI18n()
 const conversationStore = useConversationStore()
+const modelDirectories = useCLIModelCatalogStore()
 const status = ref<ChannelStatus>('disconnected')
 const lastError = ref('')
 const replyMessageIDMissing = ref(false)
@@ -86,6 +92,8 @@ const acknowledgeBusy = ref<string | null>(null)
 
 // S-UI001, IN-001, IN-002, IN-003, IN-004, IN-005: CLI 配置相关状态
 const cliConfigOpen = ref(false)
+const thinkingLevels = ref({ wechat: '', wecom: '', feishu: '', dingtalk: '' })
+const savedThinkingLevels = { ...thinkingLevels.value }
 const cliDiscoveryList = ref<CLIDiscoveryItem[]>([])
 const cliDiscoveryLoading = ref(false)
 const selectedCLItype = ref('')
@@ -95,8 +103,15 @@ const cliConfigEnabled = ref(true)
 const cliModels = ref<string[]>([])
 // 下拉选项右侧展示的模型个数：/tasks/cli-discovery 不下发模型列表，需要按 CLI 逐个拉取，
 // 与「创建任务」的 CLI 下拉（useCliModelOptions.prefetchModelCounts）使用同一数据来源。
-const cliModelCounts = ref<Record<string, number>>({})
-const cliModelCountFlights = new Map<string, Promise<string[]>>()
+const cliModelCounts = computed(() => {
+  const counts: Record<string, number> = {}
+  for (const cli of cliDiscoveryList.value) {
+    const count = modelDirectories.catalog(cli.type)?.models.length
+    if (count) counts[cli.type] = count
+  }
+  return counts
+})
+let cliModelsRequest = 0
 const cliConfigSaving = ref(false)
 const cliConfigToggling = ref(false)
 
@@ -339,6 +354,8 @@ async function loadCLIConfig() {
     cliEnabledBackup = response.enabled !== false
     selectedCLItype.value = response.cli_type
     selectedCLImodel.value = response.cli_model
+    thinkingLevels.value.wechat = response.thinking_level || ''
+    savedThinkingLevels.wechat = thinkingLevels.value.wechat
     selectedWorkspace.value = response.workspace || ''
     cliConfigEnabled.value = response.enabled !== false
   } catch {
@@ -575,6 +592,7 @@ function closeWecomCLIconfig() {
   wecomCLIConfigOpen.value = false
   wecomSelectedCLItype.value = wecomCLITypeBackup
   wecomSelectedCLImodel.value = wecomCLIModelBackup
+  thinkingLevels.value.wecom = savedThinkingLevels.wecom
   wecomSelectedWorkspace.value = wecomCLIWorkspaceBackup
   wecomCLIEnabled.value = wecomCLIEnabledBackup
   // UI-008: 从「连接」入口进来的引导流程，保存与跳过都要接着弹凭据配置弹窗
@@ -596,6 +614,8 @@ async function loadWecomCLIConfig() {
     wecomCLIEnabledBackup = response.enabled !== false
     wecomSelectedCLItype.value = response.cli_type || ''
     wecomSelectedCLImodel.value = response.cli_model || ''
+    thinkingLevels.value.wecom = response.thinking_level || ''
+    savedThinkingLevels.wecom = thinkingLevels.value.wecom
     wecomSelectedWorkspace.value = response.workspace || ''
     wecomCLIEnabled.value = response.enabled !== false
   } catch {
@@ -618,6 +638,7 @@ async function saveWecomCLIconfig() {
     await apiClient.put('/remote-channels/wecom/cli-config', {
       cli_type: wecomSelectedCLItype.value,
       cli_model: wecomSelectedCLImodel.value,
+      thinking_level: thinkingLevels.value.wecom,
       workspace: wecomSelectedWorkspace.value.trim(),
       enabled: wecomCLIEnabled.value,
     })
@@ -625,6 +646,7 @@ async function saveWecomCLIconfig() {
     wecomCLIModelBackup = wecomSelectedCLImodel.value
     wecomCLIWorkspaceBackup = wecomSelectedWorkspace.value
     wecomCLIEnabledBackup = wecomCLIEnabled.value
+    savedThinkingLevels.wecom = thinkingLevels.value.wecom
     message.success(t('remoteChannels.cliConfigSaved'))
     closeWecomCLIconfig()
   } catch (error) {
@@ -644,6 +666,7 @@ async function toggleWecomCLIEnabled(next: boolean) {
     await apiClient.put('/remote-channels/wecom/cli-config', {
       cli_type: wecomSelectedCLItype.value,
       cli_model: wecomSelectedCLImodel.value,
+      workspace: wecomSelectedWorkspace.value.trim(),
       enabled: next,
     })
     wecomCLIEnabledBackup = next
@@ -658,7 +681,7 @@ async function toggleWecomCLIEnabled(next: boolean) {
 // 企业微信通道：弹窗内 CLI 类型切换，清空已选 model 并加载新模型列表
 function onWecomCLItypeChange(cliType: string) {
   wecomSelectedCLImodel.value = ''
-  void loadCLIModels(cliType)
+  void loadCLIModels(cliType, 'wecom')
 }
 
 // 企业微信通道：验证配置
@@ -928,6 +951,8 @@ async function loadFeishuCLIConfig() {
     feishuCLIEnabledBackup = response.enabled !== false
     feishuSelectedCLItype.value = response.cli_type || ''
     feishuSelectedCLImodel.value = response.cli_model || ''
+    thinkingLevels.value.feishu = response.thinking_level || ''
+    savedThinkingLevels.feishu = thinkingLevels.value.feishu
     feishuSelectedWorkspace.value = response.workspace || ''
     feishuCLIEnabled.value = response.enabled !== false
   } catch {
@@ -951,6 +976,7 @@ function closeFeishuCLIconfig() {
   feishuCLIConfigOpen.value = false
   feishuSelectedCLItype.value = feishuCLITypeBackup
   feishuSelectedCLImodel.value = feishuCLIModelBackup
+  thinkingLevels.value.feishu = savedThinkingLevels.feishu
   feishuSelectedWorkspace.value = feishuCLIWorkspaceBackup
   feishuCLIEnabled.value = feishuCLIEnabledBackup
   // UI-008: 从「连接」入口进来的引导流程，保存与跳过都要接着弹凭据配置弹窗
@@ -975,6 +1001,7 @@ async function saveFeishuCLIconfig() {
     await apiClient.put('/remote-channels/feishu/cli-config', {
       cli_type: feishuSelectedCLItype.value,
       cli_model: feishuSelectedCLImodel.value,
+      thinking_level: thinkingLevels.value.feishu,
       workspace: feishuSelectedWorkspace.value.trim(),
       enabled: feishuCLIEnabled.value,
     })
@@ -982,6 +1009,7 @@ async function saveFeishuCLIconfig() {
     feishuCLIModelBackup = feishuSelectedCLImodel.value
     feishuCLIWorkspaceBackup = feishuSelectedWorkspace.value
     feishuCLIEnabledBackup = feishuCLIEnabled.value
+    savedThinkingLevels.feishu = thinkingLevels.value.feishu
     message.success(t('remoteChannels.cliConfigSaved'))
     closeFeishuCLIconfig()
   } catch (error) {
@@ -1001,6 +1029,7 @@ async function toggleFeishuCLIEnabled(next: boolean) {
     await apiClient.put('/remote-channels/feishu/cli-config', {
       cli_type: feishuSelectedCLItype.value,
       cli_model: feishuSelectedCLImodel.value,
+      workspace: feishuSelectedWorkspace.value.trim(),
       enabled: next,
     })
     feishuCLIEnabledBackup = next
@@ -1015,7 +1044,7 @@ async function toggleFeishuCLIEnabled(next: boolean) {
 // 飞书通道：弹窗内 CLI 类型切换，清空已选 model 并加载新模型列表
 function onFeishuCLItypeChange(cliType: string) {
   feishuSelectedCLImodel.value = ''
-  void loadCLIModels(cliType)
+  void loadCLIModels(cliType, 'feishu')
 }
 
 // 钉钉通道：加载状态
@@ -1158,6 +1187,8 @@ async function loadDingtalkCLIConfig() {
     dingtalkCLIEnabledBackup = response.enabled !== false
     dingtalkSelectedCLItype.value = response.cli_type || ''
     dingtalkSelectedCLImodel.value = response.cli_model || ''
+    thinkingLevels.value.dingtalk = response.thinking_level || ''
+    savedThinkingLevels.dingtalk = thinkingLevels.value.dingtalk
     dingtalkSelectedWorkspace.value = response.workspace || ''
     dingtalkCLIEnabled.value = response.enabled !== false
   } catch {
@@ -1181,6 +1212,7 @@ function closeDingtalkCLIconfig() {
   dingtalkCLIConfigOpen.value = false
   dingtalkSelectedCLItype.value = dingtalkCLITypeBackup
   dingtalkSelectedCLImodel.value = dingtalkCLIModelBackup
+  thinkingLevels.value.dingtalk = savedThinkingLevels.dingtalk
   dingtalkSelectedWorkspace.value = dingtalkCLIWorkspaceBackup
   dingtalkCLIEnabled.value = dingtalkCLIEnabledBackup
   // UI-008: 从「连接」入口进来的引导流程，保存与跳过都要接着弹凭据配置弹窗
@@ -1205,6 +1237,7 @@ async function saveDingtalkCLIconfig() {
     await apiClient.put('/remote-channels/dingtalk/cli-config', {
       cli_type: dingtalkSelectedCLItype.value,
       cli_model: dingtalkSelectedCLImodel.value,
+      thinking_level: thinkingLevels.value.dingtalk,
       workspace: dingtalkSelectedWorkspace.value.trim(),
       enabled: dingtalkCLIEnabled.value,
     })
@@ -1212,6 +1245,7 @@ async function saveDingtalkCLIconfig() {
     dingtalkCLIModelBackup = dingtalkSelectedCLImodel.value
     dingtalkCLIWorkspaceBackup = dingtalkSelectedWorkspace.value
     dingtalkCLIEnabledBackup = dingtalkCLIEnabled.value
+    savedThinkingLevels.dingtalk = thinkingLevels.value.dingtalk
     message.success(t('remoteChannels.cliConfigSaved'))
     closeDingtalkCLIconfig()
   } catch (error) {
@@ -1231,6 +1265,7 @@ async function toggleDingtalkCLIEnabled(next: boolean) {
     await apiClient.put('/remote-channels/dingtalk/cli-config', {
       cli_type: dingtalkSelectedCLItype.value,
       cli_model: dingtalkSelectedCLImodel.value,
+      workspace: dingtalkSelectedWorkspace.value.trim(),
       enabled: next,
     })
     dingtalkCLIEnabledBackup = next
@@ -1245,7 +1280,7 @@ async function toggleDingtalkCLIEnabled(next: boolean) {
 // 钉钉通道：弹窗内 CLI 类型切换，清空已选 model 并加载新模型列表
 function onDingtalkCLItypeChange(cliType: string) {
   dingtalkSelectedCLImodel.value = ''
-  void loadCLIModels(cliType)
+  void loadCLIModels(cliType, 'dingtalk')
 }
 
 // IN-001: 关闭 CLI 配置弹窗时还原备份（丢弃临时编辑），保证卡片上的 CLI 配置始终反映已保存值
@@ -1253,6 +1288,7 @@ function closeCLIconfig() {
   cliConfigOpen.value = false
   selectedCLItype.value = cliTypeBackup
   selectedCLImodel.value = cliModelBackup
+  thinkingLevels.value.wechat = savedThinkingLevels.wechat
   selectedWorkspace.value = workspaceBackup
   cliConfigEnabled.value = cliEnabledBackup
   cliModels.value = []
@@ -1273,7 +1309,7 @@ async function loadCLIDiscovery() {
       // 已安装的 CLI 才需要模型个数；不阻塞发现列表的渲染
       prefetchCLIModelCounts(response.items.filter((item) => item.installed).map((item) => item.type))
     }
-  } catch (error) {
+  } catch {
     message.error(t('remoteChannels.cliDiscoveryFailed'))
   } finally {
     cliDiscoveryLoading.value = false
@@ -1283,37 +1319,19 @@ async function loadCLIDiscovery() {
 // S-UI001: 逐 CLI 拉取模型列表并记录个数，供下拉选项右侧展示。
 // 探测最长 45s，因此在途请求按 cliType 去重；失败静默，选项右侧回退为占位符「…」。
 function prefetchCLIModelCounts(cliTypes: string[]) {
-  for (const cliType of new Set(cliTypes.filter(Boolean))) {
-    if (cliModelCountFlights.has(cliType)) continue
-    const request = apiClient
-      .get<{ models: string[] }>(`/tasks/cli-models?cli_type=${encodeURIComponent(cliType)}`)
-      .then((response) => {
-        const models = Array.isArray(response?.models) ? response.models : []
-        if (models.length) cliModelCounts.value = { ...cliModelCounts.value, [cliType]: models.length }
-        return models
-      })
-      .catch(() => [] as string[])
-      .finally(() => {
-        cliModelCountFlights.delete(cliType)
-      })
-    cliModelCountFlights.set(cliType, request)
-  }
+  void Promise.allSettled([...new Set(cliTypes.filter(Boolean))].map(cliType => modelDirectories.load(cliType)))
 }
 
-// S-UI001, IN-003: 仅加载 CLI 模型列表，不修改 selectedCLImodel。
-// 用于程序化触发（如弹窗打开时重新拉模型、loadCLIConfig 完成后预热下拉）。
-async function loadCLIModels(cliType: string) {
-  if (!cliType) {
-    cliModels.value = []
-    return
-  }
+// Counts use the user reference; selectors and lightbulbs share the saved channel workspace.
+async function loadCLIModels(cliType: string, channelType = 'wechat') {
+  const request = ++cliModelsRequest
+  cliModels.value = modelDirectories.catalog(cliType, { channelType })?.models || []
+  if (!cliType) return
   try {
-    const response = await apiClient.get<{ models: string[] }>(`/tasks/cli-models?cli_type=${encodeURIComponent(cliType)}`)
-    if (response && Array.isArray(response.models)) {
-      cliModels.value = response.models
-    }
-  } catch (error) {
-    message.error(t('remoteChannels.cliModelsLoadFailed'))
+    const response = await modelDirectories.load(cliType, { channelType })
+    if (request === cliModelsRequest) cliModels.value = response.models || []
+  } catch {
+    if (request === cliModelsRequest) message.error(t('remoteChannels.cliModelsLoadFailed'))
   }
 }
 
@@ -1341,6 +1359,7 @@ async function saveCLIconfig() {
       cli_type: selectedCLItype.value,
       cli_model: selectedCLImodel.value,
       workspace: selectedWorkspace.value.trim(),
+      thinking_level: thinkingLevels.value.wechat,
       enabled: cliConfigEnabled.value,
     })
     // IN-001: 保存成功时把当前值同步为备份，closeCLIconfig 还原时保留新值，卡片不会被覆盖回旧值
@@ -1348,6 +1367,7 @@ async function saveCLIconfig() {
     cliModelBackup = selectedCLImodel.value
     workspaceBackup = selectedWorkspace.value
     cliEnabledBackup = cliConfigEnabled.value
+    savedThinkingLevels.wechat = thinkingLevels.value.wechat
     message.success(t('remoteChannels.cliConfigSaved'))
     closeCLIconfig()
   } catch (error) {
@@ -1387,26 +1407,35 @@ function skipCLIconfig() {
 // IN-001: 弹窗打开时预热模型列表。已选 model 必须保留（用 loadCLIModels 而非 onCLItypeChange，
 // 否则 backup 还原 selectedCLItype 时会把 selectedCLImodel 又清掉一次）。
 watch(cliConfigOpen, async (isOpen) => {
+  if (isOpen) wechatThinking.resetThinkingDrafts()
   if (isOpen && selectedCLItype.value) {
     await loadCLIModels(selectedCLItype.value)
   }
 })
 // 企微 CLI 弹窗打开时预热模型列表
+const wechatThinking = useCliThinkingSelection(() => selectedCLItype.value, () => selectedCLImodel.value, toRef(thinkingLevels.value, 'wechat'))
+const wecomThinking = useCliThinkingSelection(() => wecomSelectedCLItype.value, () => wecomSelectedCLImodel.value, toRef(thinkingLevels.value, 'wecom'))
+const feishuThinking = useCliThinkingSelection(() => feishuSelectedCLItype.value, () => feishuSelectedCLImodel.value, toRef(thinkingLevels.value, 'feishu'))
+const dingtalkThinking = useCliThinkingSelection(() => dingtalkSelectedCLItype.value, () => dingtalkSelectedCLImodel.value, toRef(thinkingLevels.value, 'dingtalk'))
+
 watch(wecomCLIConfigOpen, async (isOpen) => {
+  if (isOpen) wecomThinking.resetThinkingDrafts()
   if (isOpen && wecomSelectedCLItype.value) {
-    await loadCLIModels(wecomSelectedCLItype.value)
+    await loadCLIModels(wecomSelectedCLItype.value, 'wecom')
   }
 })
 // 飞书 CLI 弹窗打开时预热模型列表
 watch(feishuCLIConfigOpen, async (isOpen) => {
+  if (isOpen) feishuThinking.resetThinkingDrafts()
   if (isOpen && feishuSelectedCLItype.value) {
-    await loadCLIModels(feishuSelectedCLItype.value)
+    await loadCLIModels(feishuSelectedCLItype.value, 'feishu')
   }
 })
 // 钉钉 CLI 弹窗打开时预热模型列表
 watch(dingtalkCLIConfigOpen, async (isOpen) => {
+  if (isOpen) dingtalkThinking.resetThinkingDrafts()
   if (isOpen && dingtalkSelectedCLItype.value) {
-    await loadCLIModels(dingtalkSelectedCLItype.value)
+    await loadCLIModels(dingtalkSelectedCLItype.value, 'dingtalk')
   }
 })
 
@@ -1766,17 +1795,31 @@ onUnmounted(() => {
 
         <!-- 模型选择 -->
         <div class="form-item">
-          <label class="form-label">{{ t('remoteChannels.cliModel') }}</label>
-          <a-select
-            v-model:value="selectedCLImodel"
-            :placeholder="t('remoteChannels.selectCliModel')"
-            :disabled="!selectedCLItype"
-            style="width: 100%"
-          >
-            <a-select-option v-for="model in cliModels" :key="model" :value="model">
-              {{ model }}
-            </a-select-option>
-          </a-select>
+          <label for="wechat-cli-model" class="form-label">{{ t('remoteChannels.cliModel') }}</label>
+          <div class="cli-model-control">
+            <a-select
+              id="wechat-cli-model"
+              v-model:value="selectedCLImodel"
+              class="cli-model-select"
+              :placeholder="t('remoteChannels.selectCliModel')"
+              :disabled="!selectedCLItype || cliConfigSaving"
+              :options="cliModels.map(model => ({ label: model, value: model }))"
+            >
+              <template #optionLabel>
+                <span class="cli-model-value" :title="selectedCLImodel">
+                  <img class="cli-model-logo" :src="modelLogo(selectedCLImodel, selectedCLItype)" alt="" />
+                  <span>{{ selectedCLImodel }}</span>
+                </span>
+              </template>
+              <template #option="{ value }">
+                <span class="cli-model-value" :title="String(value)">
+                  <img class="cli-model-logo" :src="modelLogo(String(value), selectedCLItype)" alt="" />
+                  <span>{{ value }}</span>
+                </span>
+              </template>
+            </a-select>
+            <CliThinkingSelect v-if="cliConfigOpen && selectedCLItype && selectedCLImodel" v-model="thinkingLevels.wechat" channel-type="wechat" :cli-type="selectedCLItype" :model-name="selectedCLImodel" :disabled="cliConfigSaving" :popup-z-index="1200" compact />
+          </div>
         </div>
 
         <!-- 工作区目录：兜底任务自动创建时使用的工作目录；留空使用默认 ~/goteams/wechat_workspace -->
@@ -1997,18 +2040,32 @@ onUnmounted(() => {
         </div>
 
         <div class="form-item">
-          <label class="form-label">{{ t('remoteChannels.cliModel') }}</label>
-          <a-select
-            v-model:value="wecomSelectedCLImodel"
-            :placeholder="t('remoteChannels.selectCliModel')"
-            :disabled="!wecomSelectedCLItype"
-            :loading="cliDiscoveryLoading"
-            style="width: 100%"
-          >
-            <a-select-option v-for="model in cliModels" :key="model" :value="model">
-              {{ model }}
-            </a-select-option>
-          </a-select>
+          <label for="wecom-cli-model" class="form-label">{{ t('remoteChannels.cliModel') }}</label>
+          <div class="cli-model-control">
+            <a-select
+              id="wecom-cli-model"
+              v-model:value="wecomSelectedCLImodel"
+              class="cli-model-select"
+              :placeholder="t('remoteChannels.selectCliModel')"
+              :disabled="!wecomSelectedCLItype || wecomCLISaving"
+              :loading="cliDiscoveryLoading"
+              :options="cliModels.map(model => ({ label: model, value: model }))"
+            >
+              <template #optionLabel>
+                <span class="cli-model-value" :title="wecomSelectedCLImodel">
+                  <img class="cli-model-logo" :src="modelLogo(wecomSelectedCLImodel, wecomSelectedCLItype)" alt="" />
+                  <span>{{ wecomSelectedCLImodel }}</span>
+                </span>
+              </template>
+              <template #option="{ value }">
+                <span class="cli-model-value" :title="String(value)">
+                  <img class="cli-model-logo" :src="modelLogo(String(value), wecomSelectedCLItype)" alt="" />
+                  <span>{{ value }}</span>
+                </span>
+              </template>
+            </a-select>
+            <CliThinkingSelect v-if="wecomCLIConfigOpen && wecomSelectedCLItype && wecomSelectedCLImodel" v-model="thinkingLevels.wecom" channel-type="wecom" :cli-type="wecomSelectedCLItype" :model-name="wecomSelectedCLImodel" :disabled="wecomCLISaving" :popup-z-index="1200" compact />
+          </div>
         </div>
 
         <!-- 工作区目录：兜底任务自动创建时使用的工作目录；留空使用默认 ~/goteams/wecom_workspace -->
@@ -2073,18 +2130,32 @@ onUnmounted(() => {
         </div>
 
         <div class="form-item">
-          <label class="form-label">{{ t('remoteChannels.cliModel') }}</label>
-          <a-select
-            v-model:value="feishuSelectedCLImodel"
-            :placeholder="t('remoteChannels.selectCliModel')"
-            :disabled="!feishuSelectedCLItype"
-            :loading="cliDiscoveryLoading"
-            style="width: 100%"
-          >
-            <a-select-option v-for="model in cliModels" :key="model" :value="model">
-              {{ model }}
-            </a-select-option>
-          </a-select>
+          <label for="feishu-cli-model" class="form-label">{{ t('remoteChannels.cliModel') }}</label>
+          <div class="cli-model-control">
+            <a-select
+              id="feishu-cli-model"
+              v-model:value="feishuSelectedCLImodel"
+              class="cli-model-select"
+              :placeholder="t('remoteChannels.selectCliModel')"
+              :disabled="!feishuSelectedCLItype || feishuCLISaving"
+              :loading="cliDiscoveryLoading"
+              :options="cliModels.map(model => ({ label: model, value: model }))"
+            >
+              <template #optionLabel>
+                <span class="cli-model-value" :title="feishuSelectedCLImodel">
+                  <img class="cli-model-logo" :src="modelLogo(feishuSelectedCLImodel, feishuSelectedCLItype)" alt="" />
+                  <span>{{ feishuSelectedCLImodel }}</span>
+                </span>
+              </template>
+              <template #option="{ value }">
+                <span class="cli-model-value" :title="String(value)">
+                  <img class="cli-model-logo" :src="modelLogo(String(value), feishuSelectedCLItype)" alt="" />
+                  <span>{{ value }}</span>
+                </span>
+              </template>
+            </a-select>
+            <CliThinkingSelect v-if="feishuCLIConfigOpen && feishuSelectedCLItype && feishuSelectedCLImodel" v-model="thinkingLevels.feishu" channel-type="feishu" :cli-type="feishuSelectedCLItype" :model-name="feishuSelectedCLImodel" :disabled="feishuCLISaving" :popup-z-index="1200" compact />
+          </div>
         </div>
 
         <!-- 工作区目录：兜底任务自动创建时使用的工作目录；留空使用默认 ~/goteams/feishu_workspace -->
@@ -2149,18 +2220,32 @@ onUnmounted(() => {
         </div>
 
         <div class="form-item">
-          <label class="form-label">{{ t('remoteChannels.cliModel') }}</label>
-          <a-select
-            v-model:value="dingtalkSelectedCLImodel"
-            :placeholder="t('remoteChannels.selectCliModel')"
-            :disabled="!dingtalkSelectedCLItype"
-            :loading="cliDiscoveryLoading"
-            style="width: 100%"
-          >
-            <a-select-option v-for="model in cliModels" :key="model" :value="model">
-              {{ model }}
-            </a-select-option>
-          </a-select>
+          <label for="dingtalk-cli-model" class="form-label">{{ t('remoteChannels.cliModel') }}</label>
+          <div class="cli-model-control">
+            <a-select
+              id="dingtalk-cli-model"
+              v-model:value="dingtalkSelectedCLImodel"
+              class="cli-model-select"
+              :placeholder="t('remoteChannels.selectCliModel')"
+              :disabled="!dingtalkSelectedCLItype || dingtalkCLISaving"
+              :loading="cliDiscoveryLoading"
+              :options="cliModels.map(model => ({ label: model, value: model }))"
+            >
+              <template #optionLabel>
+                <span class="cli-model-value" :title="dingtalkSelectedCLImodel">
+                  <img class="cli-model-logo" :src="modelLogo(dingtalkSelectedCLImodel, dingtalkSelectedCLItype)" alt="" />
+                  <span>{{ dingtalkSelectedCLImodel }}</span>
+                </span>
+              </template>
+              <template #option="{ value }">
+                <span class="cli-model-value" :title="String(value)">
+                  <img class="cli-model-logo" :src="modelLogo(String(value), dingtalkSelectedCLItype)" alt="" />
+                  <span>{{ value }}</span>
+                </span>
+              </template>
+            </a-select>
+            <CliThinkingSelect v-if="dingtalkCLIConfigOpen && dingtalkSelectedCLItype && dingtalkSelectedCLImodel" v-model="thinkingLevels.dingtalk" channel-type="dingtalk" :cli-type="dingtalkSelectedCLItype" :model-name="dingtalkSelectedCLImodel" :disabled="dingtalkCLISaving" :popup-z-index="1200" compact />
+          </div>
         </div>
 
         <!-- 工作区目录：兜底任务自动创建时使用的工作目录；留空使用默认 ~/goteams/dingtalk_workspace -->
@@ -2255,6 +2340,13 @@ onUnmounted(() => {
 
 /* S-UI001: CLI 配置弹窗样式 */
 .cli-config-body { padding: 8px 0; }
+.cli-model-control { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.cli-model-select { flex: 1; min-width: 0; }
+.cli-model-select :deep(.ant-select-selector) { min-height: 44px; align-items: center; border-radius: 12px; }
+.cli-model-select :deep(.ant-select-selection-item) { display: flex; align-items: center; }
+.cli-model-value { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.cli-model-value > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cli-model-logo { width: 20px; height: 20px; flex: 0 0 20px; object-fit: contain; }
 .cli-config-hint { margin: 0 0 16px; color: #595959; font-size: 14px; line-height: 22px; }
 /* 企微/飞书/钉钉 配置弹窗：开放平台与配置步骤链接样式，与 chatclaw 通道提醒保持一致的视觉 */
 .channel-guide-hint { color: #262626; }

@@ -7,6 +7,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"goteams-client/internal/executor"
 	"goteams-client/internal/expertgroup"
 	"goteams-client/internal/pipeline"
 	"goteams-client/internal/project"
@@ -54,6 +55,10 @@ func Key(err error) (string, string) {
 		return "localserver_internal_error", ""
 	}
 	switch {
+	case errors.Is(err, executor.ErrThinkingInvalid):
+		return "localserver_cli_thinking_invalid", "cli_thinking_invalid"
+	case errors.Is(err, executor.ErrThinkingUnavailable):
+		return "localserver_cli_thinking_unavailable", "cli_thinking_unavailable"
 	case errors.Is(err, project.ErrNotFound):
 		return "localserver_project_not_found", "project_not_found"
 	case errors.Is(err, project.ErrInUse):

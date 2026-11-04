@@ -13,6 +13,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"goteams-client/internal/executor"
 	"goteams-client/internal/expertgroup"
 )
 
@@ -21,10 +22,10 @@ func (s *Service) AssignExpertGroup(ctx context.Context, taskUUID string, group 
 	if group == nil || !group.Ready || group.Leader == nil || len(group.Members) == 0 {
 		return expertgroup.ErrNotReady
 	}
-	var taskDir, status, mode, pipelineUUID, pipelineSnapshotUUID, existingExpertSnapshot string
-	err = s.db.QueryRowContext(ctx, `SELECT task_dir, status, execution_mode, selected_pipeline_uuid,
+	var taskDir, workDir, status, mode, pipelineUUID, pipelineSnapshotUUID, existingExpertSnapshot string
+	err = s.db.QueryRowContext(ctx, `SELECT task_dir, work_dir, status, execution_mode, selected_pipeline_uuid,
 		pipeline_snapshot_uuid, expert_group_snapshot_uuid FROM gt_tasks WHERE uuid=?`, taskUUID).Scan(
-		&taskDir, &status, &mode, &pipelineUUID, &pipelineSnapshotUUID, &existingExpertSnapshot)
+		&taskDir, &workDir, &status, &mode, &pipelineUUID, &pipelineSnapshotUUID, &existingExpertSnapshot)
 	if err != nil {
 		return err
 	}
@@ -34,6 +35,11 @@ func (s *Service) AssignExpertGroup(ctx context.Context, taskUUID string, group 
 	members := make([]expertgroup.Member, 0, len(group.Members)+1)
 	members = append(members, *group.Leader)
 	members = append(members, group.Members...)
+	for _, member := range members {
+		if err := executor.ValidateThinkingLevel(ctx, member.CLIType, member.ModelName, workDir, member.ThinkingLevel); err != nil {
+			return err
+		}
+	}
 	snapshotBytes, err := json.Marshal(group)
 	if err != nil {
 		return err
@@ -76,11 +82,11 @@ func (s *Service) AssignExpertGroup(ctx context.Context, taskUUID string, group 
 		}
 		if _, err = tx.ExecContext(ctx, `INSERT INTO gt_task_steps
 			(uuid, task_uuid, source_type, source_step_id, local_step_uuid, step_key, step_order, name, description,
-			 avatar, prompt_snapshot, cli_type, model_name, step_dir, status, execution_status, execution_mode,
+			 avatar, prompt_snapshot, cli_type, model_name, thinking_level, step_dir, status, execution_status, execution_mode,
 			 member_role, task_expert_group_snapshot_uuid, created_at, updated_at)
-			VALUES (?, ?, 'local', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', 'idle', 'expert_group', ?, ?, ?, ?)`,
+			VALUES (?, ?, 'local', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', 'idle', 'expert_group', ?, ?, ?, ?)`,
 			stepUUID, taskUUID, member.UUID, member.UUID, "expert-"+member.UUID, index, member.Name, member.Description,
-			member.Avatar, member.Prompt, member.CLIType, member.ModelName, stepDirs[index], member.MemberRole, snapshotUUID, now, now); err != nil {
+			member.Avatar, member.Prompt, member.CLIType, member.ModelName, member.ThinkingLevel, stepDirs[index], member.MemberRole, snapshotUUID, now, now); err != nil {
 			return fmt.Errorf("创建专家团成员快照失败: %w", err)
 		}
 	}

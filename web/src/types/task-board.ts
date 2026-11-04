@@ -69,6 +69,7 @@ export interface TaskBoardTask {
   execution_index?: number
   // CLI 直接执行：模型由看板接口透出（若后端返回），缺省回退隐式步骤。
   execution_model?: string
+  thinking_level?: string
   pipeline_name_snapshot?: string
   pipeline_avatar_snapshot?: string
   selected_expert_group_uuid?: string

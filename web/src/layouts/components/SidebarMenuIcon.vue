@@ -17,6 +17,7 @@ import lightSettings from '@/assets/icons/sidebar-nav-light-settings.svg'
 import lightTaskCheck from '@/assets/icons/sidebar-nav-light-task-check.svg'
 import lightTaskFrame from '@/assets/icons/sidebar-nav-light-task-frame.svg'
 import navRemote from '@/assets/icons/sidebar-nav-remote.svg'
+import skillIcon from '@/assets/icons/sidebar-nav-skills.svg'
 import navMore from '@/assets/icons/sidebar-nav-more.svg'
 import conversationFolderOpen from '@/assets/icons/sidebar-conversation-folder-open.svg'
 import conversationFolderClosed from '@/assets/icons/sidebar-conversation-folder-closed.svg'
@@ -37,6 +38,7 @@ type SidebarMenuIconName =
   | 'book'
   | 'api'
   | 'settings'
+  | 'skills'
   | 'remote'
   | 'more'
   | 'conversationFolderOpen'
@@ -59,6 +61,7 @@ const designSources: Partial<Record<SidebarMenuIconName, string>> = {
   agent: lightAgent,
   book: lightKnowledge,
   remote: navRemote,
+  skills: skillIcon,
   more: navMore,
   conversationFolderOpen,
   conversationFolderClosed,

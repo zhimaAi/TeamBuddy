@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"goteams-client/internal/executor"
 )
 
 // CloudGroup is one cloud expert group mirrored into the client's in-memory cache
@@ -160,6 +161,7 @@ func (m *CloudMemStore) ReplaceAll(sourceKey string, items []CloudGroupInput, sc
 				if member.ModelName == "" {
 					member.ModelName = prev.ModelName
 				}
+				member.ThinkingLevel = executor.ResolveThinkingLevel(executor.ThinkingLevelInput{}, member.CLIType, member.ModelName, prev.CLIType, prev.ModelName, prev.ThinkingLevel)
 				member.CreatedAt = prev.CreatedAt
 			}
 			if role == RoleLeader {
@@ -233,7 +235,7 @@ func (m *CloudMemStore) Get(groupUUID string) (*CloudGroup, bool) {
 // of one cloud expert-group member, mirroring pipeline.MemStore.UpdateStep. Cloud-side
 // orchestration fields (name/avatar/prompt/role) stay untouched: the cloud is the source
 // of truth for them, the client only wires how the member actually runs locally.
-func (m *CloudMemStore) UpdateMemberExecution(groupUUID, memberUUID, cliType, modelName string) (*Member, error) {
+func (m *CloudMemStore) UpdateMemberExecution(groupUUID, memberUUID, cliType, modelName string, thinking executor.ThinkingLevelInput) (*Member, error) {
 	cliType = strings.TrimSpace(cliType)
 	modelName = strings.TrimSpace(modelName)
 	if cliType == "" || modelName == "" {
@@ -247,6 +249,7 @@ func (m *CloudMemStore) UpdateMemberExecution(groupUUID, memberUUID, cliType, mo
 	}
 	now := time.Now().UnixMilli()
 	if group.Leader != nil && group.Leader.UUID == memberUUID {
+		group.Leader.ThinkingLevel = executor.ResolveThinkingLevel(thinking, cliType, modelName, group.Leader.CLIType, group.Leader.ModelName, group.Leader.ThinkingLevel)
 		group.Leader.CLIType = cliType
 		group.Leader.ModelName = modelName
 		group.Leader.UpdatedAt = now
@@ -256,6 +259,7 @@ func (m *CloudMemStore) UpdateMemberExecution(groupUUID, memberUUID, cliType, mo
 	}
 	for i := range group.Members {
 		if group.Members[i].UUID == memberUUID {
+			group.Members[i].ThinkingLevel = executor.ResolveThinkingLevel(thinking, cliType, modelName, group.Members[i].CLIType, group.Members[i].ModelName, group.Members[i].ThinkingLevel)
 			group.Members[i].CLIType = cliType
 			group.Members[i].ModelName = modelName
 			group.Members[i].UpdatedAt = now
@@ -270,7 +274,7 @@ func (m *CloudMemStore) UpdateMemberExecution(groupUUID, memberUUID, cliType, mo
 // BatchUpdateMemberExecution applies one CLI and model to every selected cloud
 // member, including the leader. It validates the whole selection before writing,
 // matching the local SQLite batch path.
-func (m *CloudMemStore) BatchUpdateMemberExecution(groupUUID string, memberUUIDs []string, cliType, modelName string) (*Group, error) {
+func (m *CloudMemStore) BatchUpdateMemberExecution(groupUUID string, memberUUIDs []string, cliType, modelName string, thinking executor.ThinkingLevelInput) (*Group, error) {
 	cliType = strings.TrimSpace(cliType)
 	modelName = strings.TrimSpace(modelName)
 	if cliType == "" || modelName == "" {
@@ -292,6 +296,7 @@ func (m *CloudMemStore) BatchUpdateMemberExecution(groupUUID string, memberUUIDs
 	}
 	now := time.Now().UnixMilli()
 	for _, member := range targets {
+		member.ThinkingLevel = executor.ResolveThinkingLevel(thinking, cliType, modelName, member.CLIType, member.ModelName, member.ThinkingLevel)
 		member.CLIType = cliType
 		member.ModelName = modelName
 		member.UpdatedAt = now

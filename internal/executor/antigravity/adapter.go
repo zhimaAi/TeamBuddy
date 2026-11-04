@@ -21,8 +21,9 @@ const printTimeout = "60m"
 // init / step_update / result 事件出。-p 在这种输入格式下会被丢掉，所以提示词只走 stdin。
 func NewAdapter() executor.Adapter {
 	return executor.NewStreamAdapter(executor.AdapterSpec{
-		DisplayName:     displayName,
-		BuildInvocation: buildInvocation,
+		DisplayName:      displayName,
+		SupportsThinking: true,
+		BuildInvocation:  buildInvocation,
 		NewDecoder: func(name string) executor.Decoder {
 			return NewDecoder(name)
 		},
@@ -53,6 +54,9 @@ func buildInvocation(opts executor.RunOptions, resumeSession string) executor.In
 	}
 	if model := strings.TrimSpace(opts.ModelProfile); model != "" && model != "auto" {
 		args = append(args, "--model", model)
+	}
+	if opts.ThinkingLevel != "" {
+		args = append(args, "--effort", opts.ThinkingLevel)
 	}
 	args = append(args, opts.ExtraArgs...)
 

@@ -13,5 +13,5 @@ const displayName = "CodeBuddy Code"
 // CodeBuddy's stream-json, session recovery and permission parameters use the same event contract as Claude Code.
 // Therefore reuse the proven streaming event parsing and process tree termination implementation.
 func NewAdapter() executor.Adapter {
-	return claude.NewStreamJSONAdapter(displayName)
+	return claude.NewStreamJSONAdapter(displayName, true)
 }

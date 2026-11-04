@@ -11,6 +11,7 @@
       <span
         v-if="summaryChip"
         class="exec-summary-chip"
+        :title="props.thinkingLevel ? t('components.cliThinking.hint') : undefined"
       >{{ summaryChip }}</span>
       <span class="exec-summary-gap" />
       <span
@@ -234,6 +235,9 @@ const props = withDefaults(
     cliType?: string
     /** 本次会话使用的模型，来自 gt_task_progress.model_name */
     modelName?: string
+    thinkingLevel?: string
+    thinkingLevelSent?: string
+    thinkingResolution?: string
     /** 本次会话的 token 用量；部分 CLI 不上报，此时为 0 */
     inputTokens?: number
     outputTokens?: number
@@ -595,6 +599,12 @@ const summaryChip = computed(() => {
   }
   if (props.modelName) {
     parts.push(props.modelName)
+  }
+  if (props.thinkingLevel) {
+    parts.push(t('components.cliThinking.requested', { level: props.thinkingLevel }))
+    if (props.thinkingResolution === 'sent' && props.thinkingLevelSent) {
+      parts.push(t('components.cliThinking.sent', { level: props.thinkingLevelSent }))
+    }
   }
   if (toolCount.value) {
     parts.push(t('workflows.task.progress.processToolCallCount', { count: toolCount.value }))

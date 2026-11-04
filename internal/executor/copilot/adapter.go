@@ -22,8 +22,9 @@ const defaultDisplayName = "GitHub Copilot CLI"
 // session id from the final "result" event is used to resume later turns.
 func NewAdapter() executor.Adapter {
 	return executor.NewStreamAdapter(executor.AdapterSpec{
-		DisplayName:     defaultDisplayName,
-		BuildInvocation: buildInvocation,
+		DisplayName:      defaultDisplayName,
+		SupportsThinking: true,
+		BuildInvocation:  buildInvocation,
 		NewDecoder: func(name string) executor.Decoder {
 			return NewDecoder(name)
 		},
@@ -51,6 +52,9 @@ func buildInvocation(opts executor.RunOptions, resumeSession string) executor.In
 	}
 	if opts.ModelProfile != "" && opts.ModelProfile != "auto" {
 		args = append(args, "--model", opts.ModelProfile)
+	}
+	if opts.ThinkingLevel != "" {
+		args = append(args, "--reasoning-effort", opts.ThinkingLevel)
 	}
 	args = append(args, opts.ExtraArgs...)
 	return executor.Invocation{Args: args, StdinText: opts.Prompt}

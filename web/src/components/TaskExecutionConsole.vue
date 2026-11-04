@@ -533,13 +533,13 @@ async function startSelectedStep() {
   cliModalOpen.value = true
 }
 
-async function onCliConfirm(payload: { cli_type: string; model: string }) {
+async function onCliConfirm(payload: { cli_type: string; model: string; thinking_level: string }) {
   if (!selectedStep.value || activeSession.value) return
   startingStep.value = selectedStep.value.step_key
   try {
     const result = await apiClient.post<{ session_uuid: string }>(
       `/tasks/${props.taskUuid}/steps/${encodeURIComponent(selectedStep.value.step_key)}/runs`,
-      { request_id: crypto.randomUUID(), cli_type: payload.cli_type, model: payload.model },
+      { request_id: crypto.randomUUID(), ...payload },
     )
     await loadSessions(result.session_uuid)
     emit('refresh')
@@ -1107,6 +1107,7 @@ onBeforeUnmount(closeSocket)
 
   <CliSelectModal
     v-model:open="cliModalOpen"
+    :task-uuid="taskUuid"
     @confirm="onCliConfirm"
   />
 </template>

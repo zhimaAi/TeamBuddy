@@ -18,6 +18,7 @@ import (
 	qrcode "github.com/skip2/go-qrcode"
 
 	"goteams-client/internal/applog"
+	"goteams-client/internal/executor"
 	"goteams-client/internal/i18n"
 	"goteams-client/internal/secrets"
 	builtinskills "goteams-client/internal/skills"
@@ -1698,10 +1699,11 @@ func (w *wechatRemote) getCLIConfig(c *gin.Context) {
 		workspace = w.taskRoot + "/wechat_workspace"
 	}
 	c.JSON(http.StatusOK, gin.H{
-		"cli_type":  cfg.CLICType,
-		"cli_model": cfg.CLIModel,
-		"workspace": workspace,
-		"enabled":   cfg.Enabled,
+		"cli_type":       cfg.CLICType,
+		"cli_model":      cfg.CLIModel,
+		"thinking_level": cfg.ThinkingLevel,
+		"workspace":      workspace,
+		"enabled":        cfg.Enabled,
 	})
 }
 
@@ -1709,10 +1711,11 @@ func (w *wechatRemote) getCLIConfig(c *gin.Context) {
 // Enabled 独立于 cli_type/cli_model 是否填写：仅在 Enabled=true 且 cli_type 非空时
 // 才会在 dispatch 阶段作为兜底 CLI 启用。
 type channelCLIConfig struct {
-	CLICType  string
-	CLIModel  string
-	Workspace string
-	Enabled   bool
+	CLICType      string
+	CLIModel      string
+	ThinkingLevel string
+	Workspace     string
+	Enabled       bool
 }
 
 // readChannelCLIConfig 读取指定通道类型的 CLI 配置。
@@ -1720,27 +1723,32 @@ type channelCLIConfig struct {
 func (w *wechatRemote) readChannelCLIConfig(ctx context.Context, channelType string) channelCLIConfig {
 	var cfg channelCLIConfig
 	_ = w.db.QueryRowContext(ctx,
-		`SELECT cli_type, cli_model, workspace, enabled FROM gt_remote_channel_cli_configs WHERE channel_type=?`,
-		channelType).Scan(&cfg.CLICType, &cfg.CLIModel, &cfg.Workspace, &cfg.Enabled)
+		`SELECT cli_type, cli_model, thinking_level, workspace, enabled FROM gt_remote_channel_cli_configs WHERE channel_type=?`,
+		channelType).Scan(&cfg.CLICType, &cfg.CLIModel, &cfg.ThinkingLevel, &cfg.Workspace, &cfg.Enabled)
 	return cfg
 }
 
 // saveChannelCLIConfig 保存指定通道类型的 CLI 配置（upsert）。
-func (w *wechatRemote) saveChannelCLIConfig(ctx context.Context, channelType, cliType, cliModel, workspace string, enabled bool) error {
+func (w *wechatRemote) saveChannelCLIConfig(ctx context.Context, channelType, cliType, cliModel, workspace string, enabled bool, thinkingLevel ...string) error {
 	now := time.Now().UnixMilli()
 	enabledInt := 0
 	if enabled {
 		enabledInt = 1
 	}
+	level := ""
+	if len(thinkingLevel) > 0 {
+		level = thinkingLevel[0]
+	}
 	_, err := w.db.ExecContext(ctx,
-		`INSERT INTO gt_remote_channel_cli_configs (channel_type, cli_type, cli_model, workspace, enabled, updated_at) VALUES (?, ?, ?, ?, ?, ?)
+		`INSERT INTO gt_remote_channel_cli_configs (channel_type, cli_type, cli_model, thinking_level, workspace, enabled, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT(channel_type) DO UPDATE SET
 		 	cli_type = excluded.cli_type,
 		 	cli_model = excluded.cli_model,
+			thinking_level = excluded.thinking_level,
 		 	workspace = excluded.workspace,
 		 	enabled = excluded.enabled,
 		 	updated_at = excluded.updated_at`,
-		channelType, cliType, cliModel, workspace, enabledInt, now)
+		channelType, cliType, cliModel, level, workspace, enabledInt, now)
 	return err
 }
 
@@ -1755,10 +1763,11 @@ func (w *wechatRemote) saveChannelCLIConfig(ctx context.Context, channelType, cl
 // @Router /api/local/remote-channels/wechat/cli-config [put]
 func (w *wechatRemote) saveCLIConfig(c *gin.Context) {
 	var body struct {
-		CLICType  string `json:"cli_type"`
-		CLIModel  string `json:"cli_model"`
-		Workspace string `json:"workspace"`
-		Enabled   bool   `json:"enabled"`
+		ThinkingLevel executor.ThinkingLevelInput `json:"thinking_level"`
+		CLICType      string                      `json:"cli_type"`
+		CLIModel      string                      `json:"cli_model"`
+		Workspace     string                      `json:"workspace"`
+		Enabled       bool                        `json:"enabled"`
 	}
 	if err := c.ShouldBindJSON(&body); err != nil {
 		i18n.Error(c, http.StatusBadRequest, "common_request_invalid", "")
@@ -1767,7 +1776,12 @@ func (w *wechatRemote) saveCLIConfig(c *gin.Context) {
 	body.CLICType = strings.TrimSpace(body.CLICType)
 	body.CLIModel = strings.TrimSpace(body.CLIModel)
 	body.Workspace = strings.TrimSpace(body.Workspace)
-	if err := w.saveChannelCLIConfig(c.Request.Context(), "wechat", body.CLICType, body.CLIModel, body.Workspace, body.Enabled); err != nil {
+	level, err := resolveRemoteThinking(c.Request.Context(), w.db, ChannelTypeWechat, body.CLICType, body.CLIModel, body.Workspace, body.ThinkingLevel)
+	if err != nil {
+		i18n.LocalServerError(c, http.StatusBadRequest, err)
+		return
+	}
+	if err := w.saveChannelCLIConfig(c.Request.Context(), "wechat", body.CLICType, body.CLIModel, body.Workspace, body.Enabled, level); err != nil {
 		i18n.Error(c, http.StatusInternalServerError, "remote_wechat_state_error", "wechat_state_error")
 		return
 	}

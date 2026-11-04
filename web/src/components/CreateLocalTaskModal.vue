@@ -26,7 +26,7 @@ import { useCreateTaskDefaults } from '@/composables/useCreateTaskDefaults'
 import { useCliKickoffNavigation } from '@/composables/useCliKickoff'
 import { isDesktopRuntime, selectDirectory } from '@/composables/useDesktop'
 import { openTaskVibeTool } from '@/composables/useTaskVibeTool'
-import { isManualVibeTool, isVibeCodingTool, vibeToolLabelKey, vibeToolLogo } from '@/composables/useVibeCoding'
+import { isVibeCodingTool, vibeToolLabelKey, vibeToolLogo } from '@/composables/useVibeCoding'
 import { readRecentVibeModels, useVibeModelPreferences } from '@/composables/useVibeModelPreferences'
 import { useTaskImageAttachments } from '@/composables/useTaskImageAttachments'
 import { usePipelineStore } from '@/stores/pipeline'
@@ -83,6 +83,7 @@ const form = reactive({
   execution_mode: '' as TaskExecutionMode,
   execution_tool: '',
   model_name: '',
+  thinking_level: '',
 	expert_group_uuid: '',
   project_uuid: '',
   child_project_uuids: [] as string[],
@@ -172,6 +173,7 @@ function reset() {
     execution_mode: '',
     execution_tool: '',
     model_name: '',
+    thinking_level: '',
 	  expert_group_uuid: '',
     project_uuid: '',
     child_project_uuids: [],
@@ -273,6 +275,7 @@ function applyCreateTaskDefaults() {
     form.execution_mode = 'cli'
     form.execution_tool = defaults.execution_tool
     form.model_name = defaults.model_name
+    form.thinking_level = defaults.thinking_level || ''
   }
 }
 
@@ -288,6 +291,7 @@ function applyExecutionSelection(selection: ExecutionModeSelection) {
   form.expert_group_uuid = selection.expertGroupUuid
   form.execution_tool = selection.tool
   form.model_name = selection.modelName
+  form.thinking_level = selection.mode === 'cli' ? selection.thinkingLevel || '' : ''
 }
 
 function handleWorkDirSelect(dir: string) {
@@ -347,6 +351,7 @@ async function create() {
       execution_mode: form.execution_mode || undefined,
       execution_tool: form.execution_tool || undefined,
       model_name: form.model_name || undefined,
+      thinking_level: form.execution_mode === 'cli' ? form.thinking_level : undefined,
 	  expert_group_uuid: form.expert_group_uuid || undefined,
       project_uuid: form.project_uuid || undefined,
       child_project_uuids: form.child_project_uuids,
@@ -377,6 +382,7 @@ async function create() {
       execution_mode: form.execution_mode,
       execution_tool: form.execution_tool,
       model_name: form.model_name,
+      thinking_level: form.thinking_level,
       expert_group_uuid: form.expert_group_uuid,
       // 本弹窗没有「同步 Agent 产出」选项，沿用上次在团队任务配置里的选择
       sync_agent_output: getCreateTaskDefaults().sync_agent_output,
@@ -611,7 +617,6 @@ watch(
           <img
             v-if="isCodexSelected"
             class="chip-avatar"
-            :class="{ 'is-brand-icon': isManualVibeTool(form.execution_tool) }"
             :src="vibeToolLogo(form.execution_tool)"
             alt=""
           />
@@ -807,6 +812,7 @@ watch(
       :preferred-expert-group-uuid="form.expert_group_uuid"
       :initial-cli-type="form.execution_mode === 'cli' ? form.execution_tool : ''"
       :initial-model-name="form.model_name"
+      :initial-thinking-level="form.thinking_level"
       :initial-vibe-tool="form.execution_mode === 'vibe_coding' ? form.execution_tool : ''"
       @selected="applyExecutionSelection"
     />
@@ -992,11 +998,6 @@ watch(
   flex: 0 0 20px;
   border-radius: 50%;
   object-fit: cover;
-}
-
-/* 手动工具直接用官方应用图标（自带圆角方形或透明底），不能再被裁成圆形。 */
-.chip-avatar.is-brand-icon {
-  border-radius: 5px;
 }
 
 /* chip 下拉共用一套菜单外观：内边距、圆角、阴影、悬停底色一致。

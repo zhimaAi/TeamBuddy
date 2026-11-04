@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"goteams-client/internal/cloudscope"
+	"goteams-client/internal/executor"
 	"regexp"
 	"strings"
 	"time"
@@ -20,18 +21,19 @@ var (
 )
 
 type Step struct {
-	UUID         string `json:"uuid"`
-	PipelineUUID string `json:"pipeline_uuid"`
-	SortOrder    int    `json:"sort_order"`
-	Name         string `json:"name"`
-	Description  string `json:"description"`
-	Avatar       string `json:"avatar"`
-	Prompt       string `json:"prompt"`
-	CLIType      string `json:"cli_type"`
-	ModelName    string `json:"model_name"`
-	CloudStepID  string `json:"cloud_step_id"`
-	CreatedAt    int64  `json:"created_at"`
-	UpdatedAt    int64  `json:"updated_at"`
+	UUID          string `json:"uuid"`
+	PipelineUUID  string `json:"pipeline_uuid"`
+	SortOrder     int    `json:"sort_order"`
+	Name          string `json:"name"`
+	Description   string `json:"description"`
+	Avatar        string `json:"avatar"`
+	Prompt        string `json:"prompt"`
+	CLIType       string `json:"cli_type"`
+	ModelName     string `json:"model_name"`
+	ThinkingLevel string `json:"thinking_level"`
+	CloudStepID   string `json:"cloud_step_id"`
+	CreatedAt     int64  `json:"created_at"`
+	UpdatedAt     int64  `json:"updated_at"`
 }
 
 type Pipeline struct {
@@ -55,18 +57,20 @@ type PipelineInput struct {
 }
 
 type StepInput struct {
-	Name        string `json:"name"`
-	Description string `json:"description"`
-	Avatar      string `json:"avatar"`
-	Prompt      string `json:"prompt"`
-	CLIType     string `json:"cli_type"`
-	ModelName   string `json:"model_name"`
+	Name          string                      `json:"name"`
+	Description   string                      `json:"description"`
+	Avatar        string                      `json:"avatar"`
+	Prompt        string                      `json:"prompt"`
+	CLIType       string                      `json:"cli_type"`
+	ModelName     string                      `json:"model_name"`
+	ThinkingLevel executor.ThinkingLevelInput `json:"thinking_level"`
 }
 
 type BatchStepExecutionInput struct {
-	StepUUIDs []string `json:"step_uuids"`
-	CLIType   string   `json:"cli_type"`
-	ModelName string   `json:"model_name"`
+	StepUUIDs     []string                    `json:"step_uuids"`
+	CLIType       string                      `json:"cli_type"`
+	ModelName     string                      `json:"model_name"`
+	ThinkingLevel executor.ThinkingLevelInput `json:"thinking_level"`
 }
 
 type CloudPipeline struct {
@@ -228,10 +232,10 @@ func (s *Service) Copy(ctx context.Context, pipelineUUID string) (*Pipeline, err
 	for _, step := range source.Steps {
 		if _, err := tx.ExecContext(ctx, `
 			INSERT INTO gt_pipeline_steps
-			(uuid, pipeline_uuid, sort_order, name, description, avatar, prompt, cli_type, model_name, created_at, updated_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			(uuid, pipeline_uuid, sort_order, name, description, avatar, prompt, cli_type, model_name, thinking_level, created_at, updated_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			uuid.NewString(), copiedUUID, step.SortOrder, step.Name, step.Description, step.Avatar,
-			step.Prompt, step.CLIType, step.ModelName, now, now); err != nil {
+			step.Prompt, step.CLIType, step.ModelName, step.ThinkingLevel, now, now); err != nil {
 			return nil, fmt.Errorf("复制 Agent 编排失败: %w", err)
 		}
 	}
@@ -298,6 +302,9 @@ func (s *Service) Delete(ctx context.Context, pipelineUUID string) error {
 }
 
 func (s *Service) AddStep(ctx context.Context, pipelineUUID string, input StepInput) (*Step, error) {
+	if err := executor.ValidateThinkingLevel(ctx, input.CLIType, input.ModelName, "", input.ThinkingLevel.Value); err != nil {
+		return nil, err
+	}
 	if err := validateStepInput(input); err != nil {
 		return nil, err
 	}
@@ -321,10 +328,10 @@ func (s *Service) AddStep(ctx context.Context, pipelineUUID string, input StepIn
 	now := time.Now().UnixMilli()
 	_, err = tx.ExecContext(ctx, `
 		INSERT INTO gt_pipeline_steps
-		(uuid, pipeline_uuid, sort_order, name, description, avatar, prompt, cli_type, model_name, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		(uuid, pipeline_uuid, sort_order, name, description, avatar, prompt, cli_type, model_name, thinking_level, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		id, pipelineUUID, order, strings.TrimSpace(input.Name), strings.TrimSpace(input.Description), strings.TrimSpace(input.Avatar),
-		strings.TrimSpace(input.Prompt), strings.TrimSpace(input.CLIType), strings.TrimSpace(input.ModelName), now, now)
+		strings.TrimSpace(input.Prompt), strings.TrimSpace(input.CLIType), strings.TrimSpace(input.ModelName), input.ThinkingLevel.Value, now, now)
 	if err != nil {
 		return nil, fmt.Errorf("创建 Agent 编排失败: %w", err)
 	}
@@ -335,18 +342,39 @@ func (s *Service) AddStep(ctx context.Context, pipelineUUID string, input StepIn
 }
 
 func (s *Service) UpdateStep(ctx context.Context, pipelineUUID, stepUUID string, input StepInput) (*Step, error) {
+	pipe, err := s.Get(ctx, pipelineUUID)
+	if err != nil {
+		return nil, err
+	}
+	var previous *Step
+	for i := range pipe.Steps {
+		if pipe.Steps[i].UUID == stepUUID {
+			previous = &pipe.Steps[i]
+			break
+		}
+	}
+	if previous == nil {
+		return nil, ErrStepNotFound
+	}
+	level := executor.ResolveThinkingLevel(input.ThinkingLevel, input.CLIType, input.ModelName, previous.CLIType, previous.ModelName, previous.ThinkingLevel)
+	if input.ThinkingLevel.Present || level != previous.ThinkingLevel || input.CLIType != previous.CLIType || input.ModelName != previous.ModelName {
+		if err := executor.ValidateThinkingLevel(ctx, input.CLIType, input.ModelName, "", level); err != nil {
+			return nil, err
+		}
+	}
+	input.ThinkingLevel.Value = level
 	if _, ok := DefaultStore().Get(pipelineUUID); ok {
-		step, err := DefaultStore().UpdateStep(pipelineUUID, stepUUID, input.CLIType, input.ModelName)
+		step, err := DefaultStore().UpdateStep(pipelineUUID, stepUUID, input.CLIType, input.ModelName, input.ThinkingLevel)
 		if err != nil {
 			return nil, err
 		}
-		if err = s.saveCloudStepExecution(ctx, pipelineUUID, step.UUID, step.CLIType, step.ModelName); err != nil {
+		if err = s.saveCloudStepExecution(ctx, pipelineUUID, step.UUID, step.CLIType, step.ModelName, step.ThinkingLevel); err != nil {
 			return nil, err
 		}
 		return step, nil
 	}
 	var sourceType string
-	err := s.db.QueryRowContext(ctx, `SELECT source_type FROM gt_pipelines WHERE uuid = ?`, pipelineUUID).Scan(&sourceType)
+	err = s.db.QueryRowContext(ctx, `SELECT source_type FROM gt_pipelines WHERE uuid = ?`, pipelineUUID).Scan(&sourceType)
 	if err == sql.ErrNoRows {
 		return nil, ErrNotFound
 	}
@@ -360,8 +388,8 @@ func (s *Service) UpdateStep(ctx context.Context, pipelineUUID, stepUUID string,
 			return nil, fmt.Errorf("云端 Agent 编排必须配置 CLI 和模型")
 		}
 		result, updateErr := s.db.ExecContext(ctx, `
-			UPDATE gt_pipeline_steps SET cli_type = ?, model_name = ?, updated_at = ?
-			WHERE uuid = ? AND pipeline_uuid = ?`, input.CLIType, input.ModelName, time.Now().UnixMilli(), stepUUID, pipelineUUID)
+			UPDATE gt_pipeline_steps SET cli_type = ?, model_name = ?, thinking_level = ?, updated_at = ?
+			WHERE uuid = ? AND pipeline_uuid = ?`, input.CLIType, input.ModelName, level, time.Now().UnixMilli(), stepUUID, pipelineUUID)
 		if updateErr != nil {
 			return nil, fmt.Errorf("更新云端 Agent 编排执行配置失败: %w", updateErr)
 		}
@@ -375,11 +403,11 @@ func (s *Service) UpdateStep(ctx context.Context, pipelineUUID, stepUUID string,
 	}
 	result, err := s.db.ExecContext(ctx, `
 		UPDATE gt_pipeline_steps
-		SET name = ?, description = ?, avatar = ?, prompt = ?, cli_type = ?, model_name = ?, updated_at = ?
+		SET name = ?, description = ?, avatar = ?, prompt = ?, cli_type = ?, model_name = ?, thinking_level = ?, updated_at = ?
 		WHERE uuid = ? AND pipeline_uuid = ?
 		  AND EXISTS (SELECT 1 FROM gt_pipelines p WHERE p.uuid = gt_pipeline_steps.pipeline_uuid AND p.source_type = 'local')`,
 		strings.TrimSpace(input.Name), strings.TrimSpace(input.Description), strings.TrimSpace(input.Avatar), strings.TrimSpace(input.Prompt),
-		strings.TrimSpace(input.CLIType), strings.TrimSpace(input.ModelName), time.Now().UnixMilli(), stepUUID, pipelineUUID)
+		strings.TrimSpace(input.CLIType), strings.TrimSpace(input.ModelName), level, time.Now().UnixMilli(), stepUUID, pipelineUUID)
 	if err != nil {
 		return nil, fmt.Errorf("更新 Agent 编排失败: %w", err)
 	}
@@ -393,6 +421,23 @@ func (s *Service) UpdateStep(ctx context.Context, pipelineUUID, stepUUID string,
 // and model to all selected steps. Local pipelines use one SQLite transaction;
 // cloud pipelines use the MemStore's atomic write lock.
 func (s *Service) BatchUpdateStepExecution(ctx context.Context, pipelineUUID string, input BatchStepExecutionInput) (*Pipeline, error) {
+	pipe, err := s.Get(ctx, pipelineUUID)
+	if err != nil {
+		return nil, err
+	}
+	levels := make(map[string]string)
+	for _, step := range pipe.Steps {
+		level := executor.ResolveThinkingLevel(input.ThinkingLevel, input.CLIType, input.ModelName, step.CLIType, step.ModelName, step.ThinkingLevel)
+		for _, id := range input.StepUUIDs {
+			if id != step.UUID {
+				continue
+			}
+			if err := executor.ValidateThinkingLevel(ctx, input.CLIType, input.ModelName, "", level); err != nil {
+				return nil, err
+			}
+			levels[id] = level
+		}
+	}
 	pipelineUUID = strings.TrimSpace(pipelineUUID)
 	input.CLIType = strings.TrimSpace(input.CLIType)
 	input.ModelName = strings.TrimSpace(input.ModelName)
@@ -424,7 +469,7 @@ func (s *Service) BatchUpdateStepExecution(ctx context.Context, pipelineUUID str
 	}
 
 	if _, ok := DefaultStore().Get(pipelineUUID); ok {
-		updated, err := DefaultStore().BatchUpdateStepExecution(pipelineUUID, stepUUIDs, input.CLIType, input.ModelName)
+		updated, err := DefaultStore().BatchUpdateStepExecution(pipelineUUID, stepUUIDs, input.CLIType, input.ModelName, input.ThinkingLevel)
 		if err != nil {
 			return nil, err
 		}
@@ -436,7 +481,7 @@ func (s *Service) BatchUpdateStepExecution(ctx context.Context, pipelineUUID str
 			if _, keep := selected[step.UUID]; !keep {
 				continue
 			}
-			if err = s.saveCloudStepExecution(ctx, pipelineUUID, step.UUID, step.CLIType, step.ModelName); err != nil {
+			if err = s.saveCloudStepExecution(ctx, pipelineUUID, step.UUID, step.CLIType, step.ModelName, step.ThinkingLevel); err != nil {
 				return nil, err
 			}
 		}
@@ -485,8 +530,8 @@ func (s *Service) BatchUpdateStepExecution(ctx context.Context, pipelineUUID str
 	now := time.Now().UnixMilli()
 	for _, stepUUID := range stepUUIDs {
 		result, err := tx.ExecContext(ctx, `
-			UPDATE gt_pipeline_steps SET cli_type = ?, model_name = ?, updated_at = ?
-			WHERE uuid = ? AND pipeline_uuid = ?`, input.CLIType, input.ModelName, now, stepUUID, pipelineUUID)
+			UPDATE gt_pipeline_steps SET cli_type = ?, model_name = ?, thinking_level = ?, updated_at = ?
+			WHERE uuid = ? AND pipeline_uuid = ?`, input.CLIType, input.ModelName, levels[stepUUID], now, stepUUID, pipelineUUID)
 		if err != nil {
 			return nil, fmt.Errorf("批量配置 Agent 失败: %w", err)
 		}
@@ -573,7 +618,7 @@ func (s *Service) ReorderSteps(ctx context.Context, pipelineUUID string, ids []s
 
 func (s *Service) listSteps(ctx context.Context, pipelineUUID string) ([]Step, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT uuid, pipeline_uuid, sort_order, name, description, avatar, prompt, cli_type, model_name, cloud_step_id, created_at, updated_at
+		SELECT uuid, pipeline_uuid, sort_order, name, description, avatar, prompt, cli_type, model_name, thinking_level, cloud_step_id, created_at, updated_at
 		FROM gt_pipeline_steps WHERE pipeline_uuid = ? ORDER BY sort_order, created_at, rowid`, pipelineUUID)
 	if err != nil {
 		return nil, fmt.Errorf("查询 Agent 编排失败: %w", err)
@@ -582,7 +627,7 @@ func (s *Service) listSteps(ctx context.Context, pipelineUUID string) ([]Step, e
 	items := make([]Step, 0)
 	for rows.Next() {
 		var item Step
-		if err := rows.Scan(&item.UUID, &item.PipelineUUID, &item.SortOrder, &item.Name, &item.Description, &item.Avatar, &item.Prompt, &item.CLIType, &item.ModelName, &item.CloudStepID, &item.CreatedAt, &item.UpdatedAt); err != nil {
+		if err := rows.Scan(&item.UUID, &item.PipelineUUID, &item.SortOrder, &item.Name, &item.Description, &item.Avatar, &item.Prompt, &item.CLIType, &item.ModelName, &item.ThinkingLevel, &item.CloudStepID, &item.CreatedAt, &item.UpdatedAt); err != nil {
 			return nil, fmt.Errorf("读取 Agent 编排失败: %w", err)
 		}
 		items = append(items, item)
@@ -593,10 +638,10 @@ func (s *Service) listSteps(ctx context.Context, pipelineUUID string) ([]Step, e
 func (s *Service) getStep(ctx context.Context, pipelineUUID, stepUUID string) (*Step, error) {
 	var item Step
 	err := s.db.QueryRowContext(ctx, `
-		SELECT uuid, pipeline_uuid, sort_order, name, description, avatar, prompt, cli_type, model_name, cloud_step_id, created_at, updated_at
+		SELECT uuid, pipeline_uuid, sort_order, name, description, avatar, prompt, cli_type, model_name, thinking_level, cloud_step_id, created_at, updated_at
 		FROM gt_pipeline_steps WHERE uuid = ? AND pipeline_uuid = ?`, stepUUID, pipelineUUID).Scan(
 		&item.UUID, &item.PipelineUUID, &item.SortOrder, &item.Name, &item.Description, &item.Avatar, &item.Prompt,
-		&item.CLIType, &item.ModelName, &item.CloudStepID, &item.CreatedAt, &item.UpdatedAt,
+		&item.CLIType, &item.ModelName, &item.ThinkingLevel, &item.CloudStepID, &item.CreatedAt, &item.UpdatedAt,
 	)
 	if err == sql.ErrNoRows {
 		return nil, ErrStepNotFound
@@ -662,16 +707,16 @@ func (s *Service) SyncCloud(ctx context.Context, sourceKey string, items []Cloud
 	return pipes, nil
 }
 
-func (s *Service) saveCloudStepExecution(ctx context.Context, pipelineUUID, stepUUID, cliType, modelName string) error {
+func (s *Service) saveCloudStepExecution(ctx context.Context, pipelineUUID, stepUUID, cliType, modelName, thinkingLevel string) error {
 	if s.db == nil {
 		return nil
 	}
 	_, err := s.db.ExecContext(ctx, `INSERT INTO gt_cloud_pipeline_step_execution
-		(pipeline_uuid, step_uuid, cli_type, model_name, updated_at)
-		VALUES (?, ?, ?, ?, ?)
+		(pipeline_uuid, step_uuid, cli_type, model_name, thinking_level, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?)
 		ON CONFLICT(pipeline_uuid, step_uuid) DO UPDATE SET
-			cli_type=excluded.cli_type, model_name=excluded.model_name, updated_at=excluded.updated_at`,
-		strings.TrimSpace(pipelineUUID), strings.TrimSpace(stepUUID), strings.TrimSpace(cliType), strings.TrimSpace(modelName), time.Now().UnixMilli())
+			cli_type=excluded.cli_type, model_name=excluded.model_name, thinking_level=excluded.thinking_level, updated_at=excluded.updated_at`,
+		strings.TrimSpace(pipelineUUID), strings.TrimSpace(stepUUID), strings.TrimSpace(cliType), strings.TrimSpace(modelName), thinkingLevel, time.Now().UnixMilli())
 	if err != nil {
 		return fmt.Errorf("保存云端流水线执行配置失败: %w", err)
 	}
@@ -682,7 +727,7 @@ func (s *Service) overlayCloudStepExecution(ctx context.Context, pipe *Pipeline)
 	if s.db == nil || pipe == nil {
 		return nil
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT step_uuid, cli_type, model_name FROM gt_cloud_pipeline_step_execution WHERE pipeline_uuid=?`, pipe.UUID)
+	rows, err := s.db.QueryContext(ctx, `SELECT step_uuid, cli_type, model_name, thinking_level FROM gt_cloud_pipeline_step_execution WHERE pipeline_uuid=?`, pipe.UUID)
 	if err != nil {
 		return fmt.Errorf("读取云端流水线执行配置失败: %w", err)
 	}
@@ -690,7 +735,7 @@ func (s *Service) overlayCloudStepExecution(ctx context.Context, pipe *Pipeline)
 	saved := make(map[string]Step)
 	for rows.Next() {
 		var step Step
-		if err = rows.Scan(&step.UUID, &step.CLIType, &step.ModelName); err != nil {
+		if err = rows.Scan(&step.UUID, &step.CLIType, &step.ModelName, &step.ThinkingLevel); err != nil {
 			return err
 		}
 		saved[step.UUID] = step
@@ -709,6 +754,7 @@ func (s *Service) overlayCloudStepExecution(ctx context.Context, pipe *Pipeline)
 		if strings.TrimSpace(step.ModelName) != "" {
 			pipe.Steps[i].ModelName = step.ModelName
 		}
+		pipe.Steps[i].ThinkingLevel = step.ThinkingLevel
 	}
 	return nil
 }

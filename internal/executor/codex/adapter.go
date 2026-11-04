@@ -15,9 +15,10 @@ const displayName = "Codex"
 // NewAdapter 创建 Codex 适配器。
 func NewAdapter() executor.Adapter {
 	return executor.NewStreamAdapter(executor.AdapterSpec{
-		DisplayName:     displayName,
-		BuildInvocation: buildInvocation,
-		NewDecoder:      NewDecoder,
+		SupportsThinking: true,
+		DisplayName:      displayName,
+		BuildInvocation:  buildInvocation,
+		NewDecoder:       NewDecoder,
 	})
 }
 
@@ -31,6 +32,9 @@ func buildInvocation(opts executor.RunOptions, resumeSession string) executor.In
 	}
 	if opts.ModelProfile != "" {
 		args = append(args, "-m", opts.ModelProfile)
+	}
+	if opts.ThinkingLevel != "" {
+		args = append(args, "-c", "model_reasoning_effort="+strconv.Quote(opts.ThinkingLevel))
 	}
 	args = append(args, opts.ExtraArgs...)
 	return executor.Invocation{Args: args, StdinText: opts.Prompt}

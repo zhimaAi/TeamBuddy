@@ -28,8 +28,10 @@ const displayName = "Cursor CLI"
 // NewAdapter 创建 Cursor Agent 适配器。
 func NewAdapter() executor.Adapter {
 	return executor.NewStreamAdapter(executor.AdapterSpec{
-		DisplayName:     displayName,
-		BuildInvocation: buildInvocation,
+		DisplayName:       displayName,
+		SupportsThinking:  true,
+		PrepareInvocation: prepareThinkingInvocation,
+		BuildInvocation:   buildInvocation,
 		NewDecoder: func(name string) executor.Decoder {
 			return NewDecoder(name)
 		},

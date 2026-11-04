@@ -3,16 +3,11 @@
     <span :tabindex="capability.available ? undefined : 0">
       <a-dropdown :disabled="busy || !capability.available" :trigger="['click']">
         <button type="button" class="codex-button" :disabled="busy || !capability.available" :aria-label="t('workflows.task.detail.codexActions')" aria-haspopup="menu"><img :src="toolLogo" alt="" aria-hidden="true" /><span>{{ toolLabel }}</span></button>
-        <template #overlay><a-menu><a-menu-item key="open" @click="openTool"><DesktopOutlined /> {{ openLabel }}</a-menu-item><a-menu-item key="copy" @click="copyPrompt"><CopyOutlined /> {{ t('workflows.task.detail.copyCodexPrompt') }}</a-menu-item></a-menu></template>
+        <template #overlay><a-menu><a-menu-item key="open" @click="openTool"><DesktopOutlined /> {{ t('workflows.task.detail.openCodex') }}</a-menu-item><a-menu-item key="copy" @click="copyPrompt"><CopyOutlined /> {{ t('workflows.task.detail.copyCodexPrompt') }}</a-menu-item></a-menu></template>
       </a-dropdown>
     </span>
   </a-tooltip>
 
-  <TaskVibeManualPanel
-    v-model:open="panelOpen"
-    :task-uuid="task.uuid"
-    :tool="task.execution_tool || ''"
-  />
 </template>
 
 <script setup lang="ts">
@@ -20,9 +15,8 @@ import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { message } from 'ant-design-vue'
 import { CopyOutlined, DesktopOutlined } from '@ant-design/icons-vue'
 import codexLogo from '@/assets/icons/codex-logo.svg'
-import TaskVibeManualPanel from '@/components/task-progress/TaskVibeManualPanel.vue'
 import { assignTaskToCodex, copyTaskCodexPrompt, loadCodexCapability, openTaskInCodex, type CodexCapability } from '@/composables/useTaskCodex'
-import { isManualVibeTool, vibeToolLabelKey, vibeToolLogo } from '@/composables/useVibeCoding'
+import { vibeToolLabelKey, vibeToolLogo } from '@/composables/useVibeCoding'
 import { useAppI18n } from '@/i18n'
 import type { TaskWithDetails } from '@/types/task-detail'
 
@@ -31,18 +25,12 @@ const emit = defineEmits<{ changed: [] }>()
 const { t } = useAppI18n()
 // 未指派时保留 Codex 快捷入口；已指派为 Vibe Coding 时跟随实际工具展示。
 const visible = computed(() => !props.task.execution_mode || props.task.execution_mode === 'vibe_coding')
-// 手动模式没有可拉起的进程，打开与复制都改为展示可复制面板。
-const manual = computed(() => props.task.execution_mode === 'vibe_coding' && isManualVibeTool(props.task.execution_tool || ''))
 const toolLabel = computed(() => (props.task.execution_mode === 'vibe_coding'
   ? t(vibeToolLabelKey(props.task.execution_tool || ''))
   : t('workflows.task.assign.codex')))
 const toolLogo = computed(() => (props.task.execution_mode === 'vibe_coding' ? vibeToolLogo(props.task.execution_tool || '') : codexLogo))
-const openLabel = computed(() => (manual.value
-  ? t('workflows.task.detail.openManualPanel')
-  : t('workflows.task.detail.openCodex')))
 const capability = ref<CodexCapability>({ available: false })
 const busy = ref(false)
-const panelOpen = ref(false)
 let revision = 0
 watch(() => [props.task.uuid, visible.value], async () => {
   const requestRevision = ++revision
@@ -55,11 +43,9 @@ watch(() => [props.task.uuid, visible.value], async () => {
 }, { immediate: true })
 onBeforeUnmount(() => { revision += 1 })
 async function openTool() {
-  if (manual.value) { panelOpen.value = true; return }
   await performAction(false)
 }
 async function copyPrompt() {
-  if (manual.value) { panelOpen.value = true; return }
   await performAction(true)
 }
 async function performAction(copy: boolean) {

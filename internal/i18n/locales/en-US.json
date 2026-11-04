@@ -737,6 +737,12 @@
   "localserver_bad_request": {
     "other": "Invalid request"
   },
+  "localserver_cli_thinking_invalid": {
+    "other": "The selected CLI or model does not support this thinking level. Select another level."
+  },
+  "localserver_cli_thinking_unavailable": {
+    "other": "Thinking levels cannot currently be verified for this model. Refresh the catalog or explicitly choose to follow the CLI / original session."
+  },
   "localserver_cli_type_required": {
     "other": "cli_type is required"
   },
@@ -792,12 +798,6 @@
   "localserver_task_title_invalid": {
     "other": "Enter a single-line task name with 1–200 characters"
   },
-  "localserver_vibe_aibridge_inject_failed": {
-    "other": "Failed to send the prompt through AiBridge. Copy it into your editor manually."
-  },
-  "localserver_vibe_aibridge_unavailable": {
-    "other": "The local AiBridge extension was not detected. Copy the prompt into your editor manually."
-  },
   "localserver_vibe_cli_not_found": {
     "other": "The CLI was not found. Install it and add it to PATH."
   },
@@ -808,10 +808,6 @@
   "localserver_codex_task_prompt": {
     "description": "SkillPath, TaskUUID, Tool and ExecutionIndex identify the managed TeamBuddy task execution.",
     "other": "Use the current tool's native Skill loading mechanism with [$teambuddy]({{.SkillPath}}) to handle the TeamBuddy local task.\n\nTask UUID: {{.TaskUUID}}\n\nTool: {{.Tool}}\n\nExecution generation (execution_index): {{.ExecutionIndex}}\n\n{{.OutputDirSection}}\n\nFirst verify that the task's execution generation matches the value above, then read the task and its history, then follow the Skill instructions to obtain and bind the current real session ID. If no ID can be obtained, do not bind, omit thread_id, and still report user messages, the final answer, and status; do not invent an ID. The binding request type must equal the tool. For Codex, thread_id is read only from the CODEX_THREAD_ID environment variable (on Windows, $env:CODEX_THREAD_ID); this is the thread ID provided by the current session, do not guess or scan old sessions. Claude Code, CodeBuddy and Qoder use the current session ID; Pi reads PI_SESSION_ID from the current native shell. If no real session ID can be obtained, do not bind, omit thread_id, and still report user messages, the final answer, and status; continue handling the business request.\n\nThis session stays bound to the task; subsequent turns sync user messages, final reply, and task status according to the Skill rules until the conversation ends."
-  },
-  "localserver_codex_task_prompt_manual": {
-    "description": "Launch prompt for manual mode. SkillPath is the local Skill file; ThreadID is the session identifier issued by the client that the Skill must pass back unchanged. The report channel and session ID keys stay in Chinese so both UI languages match the same Skill instructions.",
-    "other": "First read the local Skill file [$teambuddy]({{.SkillPath}}) in full, then follow it to handle this TeamBuddy local task.\n\n任务 UUID：{{.TaskUUID}}\n\n工具类型：{{.Tool}}\n\n执行代次（execution_index）：{{.ExecutionIndex}}\n\n回传通道：mcp\n\n会话 ID：{{.ThreadID}}\n\n{{.OutputDirSection}}\n\n要求 / Requirements:\n1. Call teambuddy_get_task to read the task and its full history, and confirm the returned execution_index matches the value above.\n2. Call teambuddy_bind_session to bind this session: type must be {{.Tool}} and thread_id must be the session ID given above. That is the only session ID allowed for this run — do not read environment variables, scan past sessions, or invent another UUID.\n3. Call teambuddy_update_status with in_progress when the real work starts, and done only after it is finished and verified.\n4. For every new user message, first report the original text with teambuddy_report_activity using type=question; before sending each final reply, report the full text using type=result. Use a distinct event_id per activity.\n5. If the MCP tools are missing, the call is rejected, or the result is teambuddy_unavailable, forbidden, task_not_found, conflict, or bind_rejected, stop binding and reporting immediately and explain why. Do not work around it through another channel, and do not claim the activity was reported.\n\nThis session stays bound to the task; keep syncing user messages, final replies and task status every round."
   },
   "localserver_cli_skill_prompt": {
     "description": "CLI prompt for remote channel fallback tasks. SkillPath is a markdown local link to the teambuddy-im-bot-cli Skill; when missing, the Skill is referenced by name only. ChannelType is the current channel type (wechat/wecom/feishu/dingtalk); include it in chat-reply to route the result back to the correct channel.",
@@ -1053,6 +1049,12 @@
   },
   "localserver_skill_loopback_required": {
     "other": "The TeamBuddy Skill must connect through loopback"
+  },
+  "localserver_skill_daily_limit": {
+    "other": "You have successfully submitted 5 skills today and reached the daily limit. Please try again tomorrow."
+  },
+  "localserver_skill_source_exists": {
+    "other": "This source URL already exists. Please do not add it again."
   },
   "localserver_skill_status_invalid": {
     "other": "Status must be pending, in_progress, blocked, or done"

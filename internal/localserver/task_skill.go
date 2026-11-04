@@ -5,12 +5,9 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
-	"errors"
 	"io"
 	"net/http"
-	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -19,8 +16,6 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 
-	"goteams-client/internal/aibridge"
-	"goteams-client/internal/applog"
 	"goteams-client/internal/executor"
 	"goteams-client/internal/i18n"
 	builtinskills "goteams-client/internal/skills"
@@ -85,8 +80,8 @@ func (h *TasksHandler) getCodexCapability(c *gin.Context) {
 			item["message"] = i18n.T(c, vibeCapabilityMessageKey(tool, reason))
 		}
 		switch tool {
-		case taskruntime.ExecutionToolCodex, taskruntime.ExecutionToolCursor:
-			// Codex 应用通过深链接打开；手动模式不启动本机进程。两者都不探测可执行文件。
+		case taskruntime.ExecutionToolCodex:
+			// Codex 应用通过深链接打开，不探测可执行文件。
 			item["installed"] = true
 		default:
 			if vibeLaunchKind(tool) == "terminal" {
@@ -206,43 +201,6 @@ func (h *TasksHandler) getCodexContext(c *gin.Context) {
 	}
 	skillPath := filepath.Join(skillRoot, builtinskills.TaskSkillName, "SKILL.md")
 	linkPath := encodeMarkdownLocalPath(skillPath)
-	// 手动模式没有可读取的原生会话 ID，也没有由客户端拉起的进程：先下发一个受控
-	// 会话标识，并把 Skill 路径一并返回给前端，供用户复制或写入外部工具规则。
-	// Cursor / WorkBuddy / DSH 等手动工具共用这条分支，只是推荐写入路径不同。
-	if isManualVibeTool(executionTool) {
-		threadID, prompt := h.manualVibePrompt(c.Request.Context(), c, taskUUID, taskDir, executionTool, linkPath, executionIndex)
-		response := gin.H{
-			"task_uuid": taskUUID, "work_dir": workDirs[0],
-			"tool": executionTool, "launch": vibeLaunchKind(executionTool),
-			"prompt": prompt, "thread_id": threadID,
-			"skill_path": filepath.ToSlash(skillPath),
-		}
-		// 装了 AiBridge 扩展的编辑器能直接接收提示词，前端据此多给一个下发入口；
-		// 探测失败只表示没有这条捷径，手动复制始终可用。非编辑器宿主的手动工具
-		// （WorkBuddy / DSH）没有对应扩展，固定返回不可用，前端不显示下发按钮。
-		if health, ok := aibridge.Probe(c.Request.Context()); ok && vibeSupportsAiBridge(executionTool) {
-			response["aibridge_available"] = true
-			response["aibridge_editor"] = health.Editor
-		} else {
-			response["aibridge_available"] = false
-		}
-		// MCP 配置由 sidecar 自己生成：mcp 是同一可执行文件的子命令，因此不依赖
-		// Electron 侧是否已更新。这里只返回文本供用户复制，不读写用户配置。
-		if command, ok := vibeMCPCommand(); ok {
-			response["mcp_available"] = true
-			response["mcp_command"] = command
-			response["mcp_config"] = vibeMCPConfigDocument(command)
-		} else {
-			response["mcp_available"] = false
-		}
-		if home, homeErr := os.UserHomeDir(); homeErr == nil {
-			if configPath := vibeMCPConfigPath(home, executionTool); configPath != "" {
-				response["mcp_config_path"] = filepath.ToSlash(configPath)
-			}
-		}
-		c.JSON(http.StatusOK, response)
-		return
-	}
 	promptKey := "localserver_codex_task_prompt"
 	if executionTool == taskruntime.ExecutionToolGeneric {
 		promptKey = "localserver_generic_task_prompt"
@@ -453,53 +411,6 @@ func validVibeCodingSession(raw, expectedType string) (vibeCodingSession, bool) 
 	return session, true
 }
 
-// vibeMCPCommand 返回可复制到外部 IDE 的桥接程序命令：mcp 是当前 sidecar 可执行
-// 文件的子命令，所以这里用自身路径。桥接进程会自行读取 runtime.json，因此该路径
-// 不必与 Electron 本次启动的 sidecar 完全相同，只要求文件真实存在。
-// 开发态（go run）得到的是临时路径，客户端重启后会失效，但本次运行期间可用。
-func vibeMCPCommand() (string, bool) {
-	exe, err := os.Executable()
-	if err != nil {
-		return "", false
-	}
-	if resolved, resolveErr := filepath.EvalSymlinks(exe); resolveErr == nil {
-		exe = resolved
-	}
-	if !filepath.IsAbs(exe) {
-		return "", false
-	}
-	if info, statErr := os.Stat(exe); statErr != nil || info.IsDir() {
-		return "", false
-	}
-	return exe, true
-}
-
-// vibeMCPConfigDocument 生成 teambuddy 的 stdio MCP 配置文本。只做展示与复制，
-// 客户端不写入、也不读取用户的 MCP 配置文件。
-func vibeMCPConfigDocument(command string) string {
-	return "{\n  \"mcpServers\": {\n    \"teambuddy\": {\n      \"type\": \"stdio\",\n      \"command\": " +
-		strconv.Quote(command) +
-		",\n      \"args\": [\"mcp\"]\n    }\n  }\n}"
-}
-
-// manualVibePrompt 生成手动模式提示词，并确保会话标识已就绪。预置绑定失败不阻塞
-// 可复制包：改用临时会话 ID，交给 Skill 首次绑定时写入。返回会话 ID 与提示词文本。
-// taskDir 是任务产出目录，必须在提示词中显式给出：手动工具默认以项目工作目录为
-// 当前目录，不声明产出目录时容易把文档写进工作区，导致客户端无法同步到线上。
-func (h *TasksHandler) manualVibePrompt(ctx context.Context, c *gin.Context, taskUUID, taskDir, tool, linkPath string, executionIndex int) (string, string) {
-	threadID, err := h.ensureManualVibeSession(ctx, taskUUID, tool)
-	if err != nil {
-		applog.Warn("手动模式会话标识预置失败，改用临时 ID",
-			"task_uuid", taskUUID, "tool", tool, "error", err)
-		threadID = uuid.NewString()
-	}
-	return threadID, i18n.Format(c, "localserver_codex_task_prompt_manual", i18n.Params{
-		"SkillPath": linkPath, "TaskUUID": taskUUID, "Tool": tool,
-		"ExecutionIndex": executionIndex, "ThreadID": threadID,
-		"OutputDirSection": vibeOutputDirSection(c, taskDir),
-	})
-}
-
 // vibeOutputDirSection 生成「产出文档目录」段落。客户端只同步任务产出目录
 // （task_dir）内的文件，因此 Vibe Coding 提示词必须显式给出该目录，否则外部工具
 // 会把产出文档写进项目工作目录，产出无法同步到线上。任务没有产出目录时返回空串，
@@ -510,103 +421,6 @@ func vibeOutputDirSection(c *gin.Context, taskDir string) string {
 		return ""
 	}
 	return i18n.Format(c, "localserver_vibe_output_dir", i18n.Params{"TaskDir": taskDir})
-}
-
-// injectVibeManualPrompt 把手动模式提示词交给本机 AiBridge 扩展，直接注入编辑器的
-// AI 对话，省掉手动复制粘贴。未安装扩展或注入失败时如实返回错误，由前端退回手动
-// 复制；不重试、不补发，也不读写扩展自身配置。
-func (h *TasksHandler) injectVibeManualPrompt(c *gin.Context) {
-	taskUUID, ok := validateTaskSkillUUID(c)
-	if !ok {
-		return
-	}
-	var legacyWorkDir, taskDir, executionMode, executionTool, sessionJSON string
-	var executionIndex int
-	err := h.taskDB().QueryRowContext(c.Request.Context(), `SELECT work_dir, COALESCE(task_dir,''), execution_mode, execution_tool,
-		vibe_coding_session_json, execution_index FROM gt_tasks WHERE uuid=?`, taskUUID).
-		Scan(&legacyWorkDir, &taskDir, &executionMode, &executionTool, &sessionJSON, &executionIndex)
-	if err == sql.ErrNoRows {
-		i18n.Error(c, http.StatusNotFound, "localserver_task_not_found", "task_not_found")
-		return
-	}
-	if err != nil {
-		i18n.LocalServerError(c, http.StatusInternalServerError, err)
-		return
-	}
-	if !isVibeCodingTask(executionMode, executionTool) || !vibeSupportsAiBridge(executionTool) {
-		i18n.Error(c, http.StatusConflict, "localserver_task_not_codex", "task_not_codex")
-		return
-	}
-	health, available := aibridge.Probe(c.Request.Context())
-	if !available {
-		i18n.Error(c, http.StatusConflict, "localserver_vibe_aibridge_unavailable", "vibe_aibridge_unavailable")
-		return
-	}
-	skillRoot, skillReady, skillReason := h.vibeSkill(executionTool)
-	if !skillReady {
-		if skillReason == "" {
-			skillReason = builtinskills.CapabilityReasonInstallationFail
-		}
-		i18n.Error(c, http.StatusConflict, codexCapabilityMessageKey(skillReason), skillReason)
-		return
-	}
-	workDirs, err := h.loadTaskWorkDirs(taskUUID, legacyWorkDir)
-	if err != nil {
-		i18n.LocalServerError(c, http.StatusInternalServerError, err)
-		return
-	}
-	if len(workDirs) == 0 || strings.TrimSpace(workDirs[0]) == "" {
-		i18n.Error(c, http.StatusConflict, "localserver_task_work_dir_required", "task_work_dir_required")
-		return
-	}
-	skillPath := filepath.Join(skillRoot, builtinskills.TaskSkillName, "SKILL.md")
-	_, prompt := h.manualVibePrompt(c.Request.Context(), c, taskUUID, taskDir, executionTool, encodeMarkdownLocalPath(skillPath), executionIndex)
-	if err := aibridge.Inject(c.Request.Context(), prompt, true); err != nil {
-		applog.Warn("向 AiBridge 下发提示词失败", "task_uuid", taskUUID, "error", err)
-		i18n.Error(c, http.StatusBadGateway, "localserver_vibe_aibridge_inject_failed", "vibe_aibridge_inject_failed")
-		return
-	}
-	c.JSON(http.StatusOK, gin.H{"injected": true, "editor": health.Editor})
-}
-
-// ensureManualVibeSession 为手动模式准备一个稳定的会话标识。手动执行没有可读取的
-// 原生会话 ID，因此由客户端在生成可复制包时下发一个受控 ID，Skill 原样传回；绑定
-// 唯一性、代次冻结与 404/409 停用规则仍由既有接口负责。已绑定则复用，避免用户重复
-// 打开弹窗时更换 ID 使旧绑定失效。
-func (h *TasksHandler) ensureManualVibeSession(ctx context.Context, taskUUID, tool string) (string, error) {
-	readBound := func() (string, bool) {
-		var raw string
-		if err := h.taskDB().QueryRowContext(ctx, `SELECT vibe_coding_session_json FROM gt_tasks WHERE uuid=?`, taskUUID).Scan(&raw); err != nil {
-			return "", false
-		}
-		bound, ok := validVibeCodingSession(raw, tool)
-		if !ok {
-			return "", false
-		}
-		return bound.ThreadID, true
-	}
-	if threadID, ok := readBound(); ok {
-		return threadID, nil
-	}
-	sessionJSON, err := json.Marshal(vibeCodingSession{Type: tool, ThreadID: uuid.NewString()})
-	if err != nil {
-		return "", err
-	}
-	// 只要当前不是该工具的有效绑定就写入：字段可能是空串，也可能是 `{}` 这类
-	// 空 JSON 对象，因此不能只判断「为空」。有效性已由上面的 readBound 判断。
-	result, err := h.taskDB().ExecContext(ctx, `UPDATE gt_tasks SET vibe_coding_session_json=?, updated_at=?
-		WHERE uuid=? AND execution_mode='vibe_coding' AND execution_tool=?`,
-		string(sessionJSON), time.Now().UnixMilli(), taskUUID, tool)
-	if err != nil {
-		return "", err
-	}
-	if rows, rowsErr := result.RowsAffected(); rowsErr == nil && rows > 0 {
-		h.notifyTaskChanged(taskUUID)
-	}
-	if threadID, ok := readBound(); ok {
-		return threadID, nil
-	}
-	return "", errors.New("手动模式会话标识写入失败")
 }
 
 // 工具名称仅作展示，不能参与工具路由、绑定校验或外部应用启动。
@@ -1014,40 +828,13 @@ func isVibeCodingTask(mode, tool string) bool {
 }
 
 // vibeLaunchKind 决定前端如何交付本次执行：app 用深链接打开桌面应用，terminal 由
-// 客户端拉起终端，clipboard 只复制提示词，manual 只生成可复制包交给用户在外部 IDE
-// 中自行粘贴执行。取值来自工具定义表，未登记的工具返回空串。
+// 客户端拉起终端，clipboard 只复制提示词。取值来自工具定义表，未登记的工具返回空串。
 func vibeLaunchKind(tool string) string {
 	definition, ok := taskruntime.VibeTool(tool)
 	if !ok {
 		return ""
 	}
 	return definition.Launch
-}
-
-// isManualVibeTool 手动模式：客户端不启动任何进程，只生成「MCP 配置 + Skill 路径 +
-// 提示词」可复制包，交给用户在外部工具中粘贴执行。
-func isManualVibeTool(tool string) bool {
-	return vibeLaunchKind(tool) == "manual"
-}
-
-// vibeSupportsAiBridge 只有宿主为编辑器的工具才有 AiBridge 扩展可以接收提示词。
-// WorkBuddy / DSH 这类非编辑器宿主没有对应扩展，不参与探测也不展示下发入口。
-func vibeSupportsAiBridge(tool string) bool {
-	return strings.ToLower(strings.TrimSpace(tool)) == taskruntime.ExecutionToolCursor
-}
-
-// vibeMCPConfigPath 返回手动模式下各外部工具推荐的 MCP 配置写入路径。仅用于展示与
-// 复制，客户端不读取也不写入用户配置。未登记的工具返回空串，由前端兜底或改走插件
-// 引导：DSH 的 MCP 由 profile 下的 cordis.patch.yml 管理，只引导用可视化插件添加，
-// 不给出可写路径。
-func vibeMCPConfigPath(home, tool string) string {
-	switch strings.ToLower(strings.TrimSpace(tool)) {
-	case taskruntime.ExecutionToolCursor:
-		return filepath.Join(home, ".cursor", "mcp.json")
-	case taskruntime.ExecutionToolWorkBuddy:
-		return filepath.Join(home, ".workbuddy", "mcp.json")
-	}
-	return ""
 }
 
 func (h *TasksHandler) vibeSkill(tool string) (root string, ready bool, reason string) {

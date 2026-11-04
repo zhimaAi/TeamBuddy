@@ -18,8 +18,10 @@ const displayName = "Kimi Code"
 // argument (not stdin), so the process never blocks waiting for input.
 func NewAdapter() executor.Adapter {
 	return executor.NewStreamAdapter(executor.AdapterSpec{
-		DisplayName:     displayName,
-		BuildInvocation: buildInvocation,
+		DisplayName:       displayName,
+		SupportsThinking:  true,
+		PrepareInvocation: prepareThinkingInvocation,
+		BuildInvocation:   buildInvocation,
 		NewDecoder: func(name string) executor.Decoder {
 			return NewDecoder(name)
 		},

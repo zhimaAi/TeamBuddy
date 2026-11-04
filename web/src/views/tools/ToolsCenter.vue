@@ -77,6 +77,14 @@ const TOOL_ITEMS = computed<ToolItem[]>(() => [
     detail: t('tools.items.remoteChannels.detail'),
   },
   {
+    key: 'skills',
+    label: t('tools.items.skills.label'),
+    tag: 'skill',
+    icon: 'skills',
+    description: t('tools.items.skills.description'),
+    detail: t('tools.items.skills.detail'),
+  },
+  {
     key: 'apis',
     label: t('tools.items.apis.label'),
     tag: 'api',

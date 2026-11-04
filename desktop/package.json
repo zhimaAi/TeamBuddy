@@ -1,6 +1,6 @@
 {
   "name": "goteams-client-desktop",
-  "version": "0.1.9",
+  "version": "0.1.10",
   "private": true,
   "description": "TeamBuddy Electron desktop shell",
   "author": "TeamBuddy",

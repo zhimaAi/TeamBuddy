@@ -12,7 +12,6 @@ const OPEN_TERMINAL_CHANNEL = 'desktop:open-terminal'
 const OPEN_CODEX_THREAD_CHANNEL = 'desktop:open-codex-thread'
 const OPEN_QODER_IDE_CHANNEL = 'desktop:open-qoder-ide'
 const OPEN_VIBE_CLI_CHANNEL = 'desktop:open-vibe-cli'
-const GET_VIBE_MCP_CONFIG_CHANNEL = 'desktop:get-vibe-mcp-config'
 const GET_API_TOKEN_CHANNEL = 'desktop:get-api-token'
 const GET_CLOSE_BEHAVIOR_CHANNEL = 'desktop:get-close-behavior'
 const SET_CLOSE_BEHAVIOR_CHANNEL = 'desktop:set-close-behavior'
@@ -154,10 +153,6 @@ contextBridge.exposeInMainWorld('goteamsDesktop', Object.freeze({
       threadId: payload.threadId,
       modelName: payload.modelName,
     })
-  },
-/** 手动模式：返回可复制到外部工具的 MCP 配置文本，不写入任何文件。 */
-  getVibeMcpConfig(tool) {
-    return ipcRenderer.invoke(GET_VIBE_MCP_CONFIG_CHANNEL, { tool: typeof tool === 'string' ? tool : '' })
   },
   /** @param {{ directoryPath: string, prompt: string, threadId?: string }} payload */
   openQoderIDE(payload) {

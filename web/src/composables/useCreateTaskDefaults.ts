@@ -8,6 +8,7 @@ export interface CreateTaskDefaults {
   execution_mode: TaskExecutionMode
   execution_tool: string
   model_name: string
+  thinking_level?: string
   expert_group_uuid: string
   /** 是否同步 Agent 产出（团队任务配置里的勾选项）；默认开启并记住上次选择 */
   sync_agent_output: boolean
@@ -55,6 +56,7 @@ export function useCreateTaskDefaults() {
         execution_mode: parseExecutionMode(parsed.execution_mode),
         execution_tool: typeof parsed.execution_tool === 'string' ? parsed.execution_tool : '',
         model_name: typeof parsed.model_name === 'string' ? parsed.model_name : '',
+        thinking_level: typeof parsed.thinking_level === 'string' ? parsed.thinking_level : '',
         expert_group_uuid:
           typeof parsed.expert_group_uuid === 'string' ? parsed.expert_group_uuid : '',
         // 未记录过选择时默认勾选，与产品默认值保持一致
@@ -78,6 +80,7 @@ export function useCreateTaskDefaults() {
           execution_mode: defaults.execution_mode || '',
           execution_tool: defaults.execution_tool || '',
           model_name: defaults.model_name || '',
+          thinking_level: defaults.thinking_level || '',
           expert_group_uuid: defaults.expert_group_uuid || '',
           sync_agent_output: defaults.sync_agent_output !== false,
         }),

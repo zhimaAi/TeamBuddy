@@ -329,14 +329,18 @@ type Invocation struct {
 	Args       []string
 	StdinText  string
 	PromptFile *PromptFileSpec
+	EnvVars    map[string]string // 本次调用的环境覆盖，不修改进程或全局 CLI 配置
 }
 
 // AdapterSpec 声明一个 CLI 适配器：如何构造命令行、如何解码输出。
 // 新增 CLI 只需要提供这两项，进程管理与错误归并复用 StreamAdapter。
 type AdapterSpec struct {
-	DisplayName string
+	DisplayName      string
+	SupportsThinking bool
 	// BuildInvocation 根据执行选项构造命令行；resumeSession 非空表示续聊既有会话。
 	BuildInvocation func(opts RunOptions, resumeSession string) Invocation
+	// PrepareInvocation 可执行有界的会话级配置或创建临时配置；cleanup 随进程树回收。
+	PrepareInvocation func(context.Context, RunOptions, string) (Invocation, func(), error)
 	// NewDecoder 构造本次执行的协议解码器。
 	NewDecoder func(displayName string) Decoder
 }
@@ -377,19 +381,60 @@ func (a *StreamAdapter) Stop() error {
 
 func (a *StreamAdapter) run(ctx context.Context, opts RunOptions, resumeSession string) (<-chan ExecutorEvent, error) {
 	displayName := a.displayName()
-	invocation := a.spec.BuildInvocation(opts, resumeSession)
+	if opts.ThinkingLevel != "" {
+		if !a.spec.SupportsThinking || !thinkingToken.MatchString(opts.ThinkingLevel) {
+			return nil, ErrThinkingInvalid
+		}
+		for _, arg := range opts.ExtraArgs {
+			flag, _, _ := strings.Cut(arg, "=")
+			switch flag {
+			case "--thinking", "--thinking-budget", "--variant", "--effort", "--reasoning-effort", "--model", "--auth-type", "--provider", "--session", "--resume", "--conversation", "-S", "-m":
+				return nil, ErrThinkingInvalid
+			}
+			if strings.Contains(arg, "model_reasoning_effort") || (strings.HasPrefix(arg, "-m") && !strings.HasPrefix(arg, "--")) {
+				return nil, ErrThinkingInvalid
+			}
+		}
+	}
+	var invocation Invocation
+	var cleanup func()
+	if a.spec.PrepareInvocation != nil {
+		var err error
+		invocation, cleanup, err = a.spec.PrepareInvocation(ctx, opts, resumeSession)
+		if err != nil {
+			if cleanup != nil {
+				cleanup()
+			}
+			return nil, err
+		}
+	} else {
+		invocation = a.spec.BuildInvocation(opts, resumeSession)
+	}
+	env := opts.EnvVars
+	if len(invocation.EnvVars) > 0 {
+		env = make(map[string]string, len(opts.EnvVars)+len(invocation.EnvVars))
+		for key, value := range opts.EnvVars {
+			env[key] = value
+		}
+		for key, value := range invocation.EnvVars {
+			env[key] = value
+		}
+	}
 	decoder := a.spec.NewDecoder(displayName)
 
 	proc, err := StartProcess(ctx, RunSpec{
 		ExecPath:   opts.ExecPath,
 		Args:       invocation.Args,
 		WorkDir:    opts.WorkDir,
-		EnvVars:    opts.EnvVars,
+		EnvVars:    env,
 		StdinText:  invocation.StdinText,
 		PromptFile: invocation.PromptFile,
 		Watchdog:   opts.Watchdog,
 	})
 	if err != nil {
+		if cleanup != nil {
+			cleanup()
+		}
 		return nil, fmt.Errorf("启动 %s 失败: %w", displayName, err)
 	}
 
@@ -401,6 +446,9 @@ func (a *StreamAdapter) run(ctx context.Context, opts RunOptions, resumeSession 
 	go func() {
 		defer close(eventCh)
 		defer a.clearProcess(proc)
+		if cleanup != nil {
+			defer cleanup()
+		}
 
 		emit := func(event ExecutorEvent) {
 			if event.Type == EventHeartbeat {
