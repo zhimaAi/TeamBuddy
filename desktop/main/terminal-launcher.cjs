@@ -77,4 +77,4 @@ async function openTerminalWindow(directory, platform = process.platform, spawnP
   })
 }
 
-module.exports = { terminalLaunchOptions, openTerminalWindow }
+module.exports = { terminalLaunchOptions, openTerminalWindow, windowsPowerShellPath }

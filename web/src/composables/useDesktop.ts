@@ -22,6 +22,7 @@ function updateBridge() {
   return bridge
 }
 
+export const configureCodexReporting = (action: 'status' | 'enable' | 'review') => updateBridge().configureCodexReporting(action)
 export const getUpdateState = () => updateBridge().getUpdateState()
 export const checkForUpdates = (manual = false) => updateBridge().checkForUpdates(manual)
 export const deferUpdate = () => updateBridge().deferUpdate()
@@ -83,7 +84,7 @@ export async function revealTaskOutputFile(
   }
   const located = await apiClient.post<{ path: string }>(
     `/tasks/${encodeURIComponent(taskUuid)}/files/locate`,
-    { path: fileRef, session_uuid: sessionUuid },
+    { path: fileRef, literal: true, session_uuid: sessionUuid },
   )
   await copyText(located.path)
   return 'copied'
@@ -120,16 +121,10 @@ export async function openQoderIDE(payload: {
   return bridge.openQoderIDE(payload)
 }
 
-export async function openCodexThread(
-  directoryPath: string,
-  prompt: string,
-  threadId?: string,
-): Promise<void> {
+export async function openCodexThread(payload: DesktopCodexRequest): Promise<DesktopCodexResult> {
   const bridge = window.goteamsDesktop
-  if (!bridge) {
-    throw new Error(t('components.errors.openCodexUnsupported'))
-  }
-  await bridge.openCodexThread({ directoryPath, prompt, threadId })
+  if (!bridge?.openCodexThread) throw new Error(t('components.errors.openCodexUnsupported'))
+  return bridge.openCodexThread(payload)
 }
 
 export async function getDesktopCloseBehavior(): Promise<DesktopCloseBehavior> {

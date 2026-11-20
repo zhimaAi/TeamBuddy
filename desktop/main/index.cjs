@@ -11,6 +11,7 @@ const { createBrowserLoginDeepLink, registerProtocolClient } = require('./deep-l
 const { registerDialogIPC } = require('./ipc/dialog.cjs')
 const { registerApiTokenIPC } = require('./ipc/api-token.cjs')
 const { registerBrowserLoginIPC, notifyBrowserLoginResult } = require('./ipc/browser-login.cjs')
+const { registerCodexReportingIPC } = require('./ipc/codex-reporting.cjs')
 const { registerCodexIPC } = require('./ipc/codex.cjs')
 const { resolveQoderBackend } = require('./qoder-backend.cjs')
 const { registerQoderIDEIPC } = require('./ipc/qoder-ide.cjs')
@@ -311,7 +312,20 @@ async function startApplication() {
   removeIPC = registerDialogIPC(created.allowedOrigins, () => backendConnection)
   removeApiTokenIPC = registerApiTokenIPC(created.allowedOrigins, backendConnection.apiToken)
   removeBrowserLoginIPC = registerBrowserLoginIPC(created.allowedOrigins, () => backendConnection)
-  removeCodexIPC = registerCodexIPC(created.allowedOrigins)
+  const callbackBackend = (signal, codex = false) => resolveQoderBackend({
+      codex,
+      isPackaged: app.isPackaged,
+      resourcesPath: process.resourcesPath,
+      repoRoot,
+      stateRoot: app.getPath('userData'),
+      platform: process.platform,
+      signal,
+    })
+  const hookBackend = { backendPath: signal => callbackBackend(signal) }
+  const userBackend = { backendPath: signal => callbackBackend(signal, true) }
+  const removeLaunch = registerCodexIPC(created.allowedOrigins, userBackend, hookBackend.backendPath)
+  const removeReporting = registerCodexReportingIPC(created.allowedOrigins, userBackend)
+  removeCodexIPC = () => { removeReporting(); removeLaunch() }
   removeVibeCliIPC = registerVibeCliIPC(created.allowedOrigins, {
     backendPath: () => mcpBackendPath(resolveBackendLaunch({
       isPackaged: app.isPackaged,
@@ -320,16 +334,7 @@ async function startApplication() {
       platform: process.platform,
     }).command),
   })
-  removeQoderIDEIPC = registerQoderIDEIPC(created.allowedOrigins, {
-    backendPath: signal => resolveQoderBackend({
-      isPackaged: app.isPackaged,
-      resourcesPath: process.resourcesPath,
-      repoRoot,
-      stateRoot: app.getPath('userData'),
-      platform: process.platform,
-      signal,
-    }),
-  })
+  removeQoderIDEIPC = registerQoderIDEIPC(created.allowedOrigins, hookBackend)
   removeTaskNotificationIPC = registerTaskNotificationIPC(created.allowedOrigins, {
     getMainWindow: () => mainWindow,
     showOrCreateMainWindow,

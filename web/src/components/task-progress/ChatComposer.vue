@@ -178,7 +178,7 @@
             :selected-model-name="selectedModelName"
             :thinking-level="selectedThinkingLevel"
             :task-uuid="taskUuid"
-            :model-options="availableModels"
+            :model-options="modelOptions"
             :model-loading="modelLoading"
             :model-counts="modelCounts"
             :show-execution-switch="Boolean(executionTask)"
@@ -505,6 +505,7 @@ const {
   modelCounts,
   modelLoading,
   modelOptions,
+  modelLabel,
   prefetchModelCounts,
   resetModelOptions,
 } = useCliModelOptions(true, () => ({ taskUuid: props.taskUuid || undefined }))
@@ -521,13 +522,6 @@ const resolvedSubmitButtonLabel = computed(
       : t('workflows.task.progress.send')),
 )
 const runtimeIdentity = computed(() => `${props.taskUuid}:${props.currentStep?.uuid || ''}`)
-const availableModels = computed(() => {
-  const result = [...modelOptions.value]
-  if (selectedModelName.value && !result.includes(selectedModelName.value)) {
-    result.unshift(selectedModelName.value)
-  }
-  return result
-})
 const fileAttachmentItems = computed(() => attachmentItems.value.filter((item) => !item.isImage))
 /** 附件只在上方附件行里，正文可能为空，所以「只有附件」也算可发送 */
 const hasAttachments = computed(() => attachmentItems.value.length > 0)
@@ -557,7 +551,7 @@ const selectedCliLogo = computed(() => {
 })
 const runtimeTriggerLabel = computed(() => {
   if (selectedCliType.value && selectedModelName.value) {
-    return `${selectedCliLabel.value} / ${selectedModelName.value}`
+    return `${selectedCliLabel.value} / ${modelLabel(selectedModelName.value)}`
   }
   if (selectedCliType.value) return selectedCliLabel.value
   return t('workflows.task.progress.chooseCli')

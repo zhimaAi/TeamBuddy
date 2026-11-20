@@ -805,6 +805,33 @@
     "description": "Output directory clause for Vibe Coding prompts. TaskDir is the absolute task output directory (task_dir); the client only syncs files inside it. An empty section means the task has no output directory.",
     "other": "Output document directory (task_dir): {{.TaskDir}}\n\nIf the request does not specify where an output document (design doc, plan, report, analysis, notes, etc.) should go, write it into that directory; you may create topic or step subdirectories inside it. Follow the request when it does specify a location. Do not write them into the project working directory or anywhere else: the client only syncs files inside that directory, so output written elsewhere is never reported and never shows up in the client."
   },
+  "codex_reply_hidden": {
+    "other": "Private content hidden"
+  },
+  "codex_reply_unavailable": {
+    "other": "This question reply is incomplete. Its contents are hidden."
+  },
+  "codex_reply_key_error": {
+    "other": "The Codex conversation could not be protected. Check the device key store and retry. No content was sent."
+  },
+  "codex_reply_size_error": {
+    "other": "The encrypted Codex conversation exceeds the upload limit. No content was sent."
+  },
+  "codex_hook_unavailable": {
+    "other": "TeamBuddy synchronization is unavailable. Saved events will retry on the next callback in this chat. Check the local service and task binding."
+  },
+  "codex_hook_pending": {
+    "other": "Some TeamBuddy events are pending. The next callback in this chat will continue delivery."
+  },
+  "codex_hook_incomplete": {
+    "other": "TeamBuddy history is incomplete: some content could not be saved. You can continue working; check the task history."
+  },
+  "localserver_codex_hooks_task_prompt": {
+    "other": "Use [$teambuddy]({{.SkillPath}}) to read the TeamBuddy local task and history and update its business status as work progresses.\n\nTask UUID: {{.TaskUUID}}\nTool: {{.Tool}}\nExecution generation (execution_index): {{.ExecutionIndex}}\nMessage reporting: native_hooks\n\n{{.OutputDirSection}}\n\nVerify the task tool and original execution generation before working. TeamBuddy native Hooks exclusively bind the session and report user messages and final replies; the Skill only reads task/history and updates business status, without binding again or reporting activities. Use the thread_id injected by the Hook. If no ID is injected or synchronization is unavailable, continue safe business work and state the synchronization status. Do not guess IDs, scan sessions, or refresh the execution generation. Stop does not mean the task is complete."
+  },
+  "localserver_codex_hooks_activity_owned": {
+    "other": "Native Hooks report messages for this session. Do not report duplicate activities."
+  },
   "localserver_codex_task_prompt": {
     "description": "SkillPath, TaskUUID, Tool and ExecutionIndex identify the managed TeamBuddy task execution.",
     "other": "Use the current tool's native Skill loading mechanism with [$teambuddy]({{.SkillPath}}) to handle the TeamBuddy local task.\n\nTask UUID: {{.TaskUUID}}\n\nTool: {{.Tool}}\n\nExecution generation (execution_index): {{.ExecutionIndex}}\n\n{{.OutputDirSection}}\n\nFirst verify that the task's execution generation matches the value above, then read the task and its history, then follow the Skill instructions to obtain and bind the current real session ID. If no ID can be obtained, do not bind, omit thread_id, and still report user messages, the final answer, and status; do not invent an ID. The binding request type must equal the tool. For Codex, thread_id is read only from the CODEX_THREAD_ID environment variable (on Windows, $env:CODEX_THREAD_ID); this is the thread ID provided by the current session, do not guess or scan old sessions. Claude Code, CodeBuddy and Qoder use the current session ID; Pi reads PI_SESSION_ID from the current native shell. If no real session ID can be obtained, do not bind, omit thread_id, and still report user messages, the final answer, and status; continue handling the business request.\n\nThis session stays bound to the task; subsequent turns sync user messages, final reply, and task status according to the Skill rules until the conversation ends."

@@ -104,6 +104,8 @@ const vibeBound = computed(() => props.task?.execution_bound === true)
 const statusLabel = computed(() => {
   if (['pending', 'in_progress'].includes(props.status) && props.task?.execution_mode === 'vibe_coding'
       && props.task.execution_tool === 'generic' && !vibeBound.value) return t('workflows.task.detail.genericAwaitingBinding')
+  if (['pending', 'in_progress'].includes(props.status) && props.task?.execution_mode === 'vibe_coding'
+      && props.task.execution_tool === 'codex' && !vibeBound.value) return t('workflows.task.detail.codexAwaitBind')
   if (props.status === 'in_progress' && props.task?.execution_mode === 'vibe_coding'
       && props.task.execution_tool === 'qoder_ide' && !vibeBound.value) return t('workflows.task.detail.qoderIDEAwaitingStart')
   return statusOptions.value.find(option => option.value === props.status)?.label || props.status

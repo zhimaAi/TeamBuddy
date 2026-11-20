@@ -19,12 +19,14 @@ export async function exportConversationMarkdown(taskUuid: string) {
   const lines = [`# ${heading(data.title)}`, '', `Task: ${taskUuid}`, '']
   for (const execution of data.executions) {
     lines.push(`## ${t('layout.sidebar.exportExecution', { count: execution.execution_no })} · ${heading(execution.target_name || execution.execution_tool || execution.execution_mode)}`, '')
+    const hasLegacyReply = execution.progress.some(record => record.codex_reply &&
+      (!execution.codex_explicit_thread || record.external_session_id !== execution.codex_explicit_thread))
     const steps = new Map(execution.steps.map(step => [step.uuid, step.name]))
     const emittedSessions = new Set<string>()
     for (const record of execution.progress) {
       lines.push(`### ${heading(steps.get(record.task_step_uuid) || record.cli_type || 'AI')} · ${new Date(record.created_at).toISOString()}`, '', `Status: ${record.status}`, '')
       if (record.user_prompt) lines.push(`#### ${t('layout.sidebar.exportUser')}`, '', record.user_prompt, '')
-      if (record.session_uuid && !emittedSessions.has(record.session_uuid)) {
+      if (!hasLegacyReply && record.session_uuid && !emittedSessions.has(record.session_uuid)) {
         emittedSessions.add(record.session_uuid)
         for (const event of execution.session_events[record.session_uuid] || []) {
           if (event.event?.content) lines.push(`#### AI · ${heading(event.event_type)} · ${new Date(event.created_at).toISOString()}`, '', event.event.content, '')
@@ -32,6 +34,7 @@ export async function exportConversationMarkdown(taskUuid: string) {
       }
       if (record.final_result) lines.push(`#### ${t('layout.sidebar.exportAssistant')}`, '', record.final_result, '')
     }
+    if (hasLegacyReply) continue
     // 原始事件保留工具调用、流式片段、错误及运行中的输出，防止只导出最终回复而遗漏记录。
     lines.push(`### ${t('layout.sidebar.exportRecords')}`, '', jsonBlock({
       steps: execution.steps,

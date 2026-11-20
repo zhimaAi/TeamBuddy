@@ -1717,7 +1717,7 @@ func resolveAntigravityModels(ctx context.Context, execPath string) []string {
 }
 
 // parseAntigravityModelOutput 解析 `agy models` 的文本或 JSON。
-// 文本每行是「slug 加至少两个空格 再加展示名」。
+// 文本每行以 Tab 或至少两个空格分隔 slug 与展示名。
 func parseAntigravityModelOutput(output string) []string {
 	trimmed := strings.TrimSpace(output)
 	if strings.HasPrefix(trimmed, "[") || strings.HasPrefix(trimmed, "{") {
@@ -1783,7 +1783,7 @@ func parseAntigravityModelJSON(raw string) []string {
 
 func antigravityModelID(line string) string {
 	for i := 0; i < len(line)-1; i++ {
-		if (line[i] == ' ' || line[i] == '\t') && (line[i+1] == ' ' || line[i+1] == '\t') {
+		if line[i] == '\t' || (line[i] == ' ' && (line[i+1] == ' ' || line[i+1] == '\t')) {
 			return strings.TrimSpace(line[:i])
 		}
 	}

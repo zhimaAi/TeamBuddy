@@ -15,6 +15,7 @@ export interface TaskExecutionHistorySummary {
 }
 
 export interface TaskExecutionHistoryDetail extends TaskExecutionHistorySummary {
+  codex_explicit_thread?: string
   version: number
   steps: PipelineStep[]
   progress: TaskProgress[]

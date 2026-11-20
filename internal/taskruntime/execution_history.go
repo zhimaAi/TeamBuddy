@@ -12,6 +12,8 @@ import (
 	"github.com/google/uuid"
 
 	"goteams-client/internal/cloudsync"
+	"goteams-client/internal/codexmessage"
+	"goteams-client/internal/codexreply"
 )
 
 // v2 起快照记录 sync_execution_index，可以把上报队列的实时状态叠加回归档内容。
@@ -57,33 +59,35 @@ type ExecutionHistoryStep struct {
 }
 
 type ExecutionHistoryProgress struct {
-	UUID               string `json:"uuid"`
-	TaskUUID           string `json:"task_uuid"`
-	TaskStepUUID       string `json:"task_step_uuid"`
-	SessionUUID        string `json:"session_uuid"`
-	RecordType         string `json:"record_type"`
-	UserPrompt         string `json:"user_prompt"`
-	CLIType            string `json:"cli_type"`
-	ModelName          string `json:"model"`
-	ThinkingLevel      string `json:"thinking_level"`
-	ThinkingLevelSent  string `json:"thinking_level_sent"`
-	ThinkingResolution string `json:"thinking_resolution"`
-	Status             string `json:"status"`
-	FinalResult        string `json:"final_result"`
-	ExecutionMode      string `json:"execution_mode"`
-	ExternalSessionID  string `json:"external_session_id"`
-	DispatchStatus     string `json:"dispatch_status"`
-	DispatchMessage    string `json:"dispatch_message"`
-	CreatedAt          int64  `json:"created_at"`
-	StartedAt          int64  `json:"started_at"`
-	FinishedAt         int64  `json:"finished_at"`
-	LatestEventType    string `json:"latest_event_type"`
-	LatestEventContent string `json:"latest_event_content"`
-	LatestEventAt      int64  `json:"latest_event_at"`
-	InputTokens        int64  `json:"input_tokens"`
-	OutputTokens       int64  `json:"output_tokens"`
-	TotalTokens        int64  `json:"total_tokens"`
-	DurationMs         int64  `json:"duration_ms"`
+	CodexMessage       *codexmessage.Message `json:"codex_message,omitempty"`
+	CodexReply         *codexreply.Reply     `json:"codex_reply,omitempty"`
+	UUID               string                `json:"uuid"`
+	TaskUUID           string                `json:"task_uuid"`
+	TaskStepUUID       string                `json:"task_step_uuid"`
+	SessionUUID        string                `json:"session_uuid"`
+	RecordType         string                `json:"record_type"`
+	UserPrompt         string                `json:"user_prompt"`
+	CLIType            string                `json:"cli_type"`
+	ModelName          string                `json:"model"`
+	ThinkingLevel      string                `json:"thinking_level"`
+	ThinkingLevelSent  string                `json:"thinking_level_sent"`
+	ThinkingResolution string                `json:"thinking_resolution"`
+	Status             string                `json:"status"`
+	FinalResult        string                `json:"final_result"`
+	ExecutionMode      string                `json:"execution_mode"`
+	ExternalSessionID  string                `json:"external_session_id"`
+	DispatchStatus     string                `json:"dispatch_status"`
+	DispatchMessage    string                `json:"dispatch_message"`
+	CreatedAt          int64                 `json:"created_at"`
+	StartedAt          int64                 `json:"started_at"`
+	FinishedAt         int64                 `json:"finished_at"`
+	LatestEventType    string                `json:"latest_event_type"`
+	LatestEventContent string                `json:"latest_event_content"`
+	LatestEventAt      int64                 `json:"latest_event_at"`
+	InputTokens        int64                 `json:"input_tokens"`
+	OutputTokens       int64                 `json:"output_tokens"`
+	TotalTokens        int64                 `json:"total_tokens"`
+	DurationMs         int64                 `json:"duration_ms"`
 }
 
 type ExecutionHistorySession struct {
@@ -138,6 +142,7 @@ type ExecutionHistoryConversationSummary struct {
 }
 
 type ExecutionHistoryPayload struct {
+	ExplicitThread        string                                `json:"codex_explicit_thread,omitempty"`
 	Version               int                                   `json:"version"`
 	Steps                 []ExecutionHistoryStep                `json:"steps"`
 	Progress              []ExecutionHistoryProgress            `json:"progress"`
@@ -209,6 +214,34 @@ func (s *Service) GetExecutionHistory(ctx context.Context, taskUUID, historyUUID
 	return detail, nil
 }
 
+// Archived payloads stay immutable. Apply the same read projection to history and downloads.
+func (d *ExecutionHistoryDetail) ProjectCodexReplies(view codexreply.View) {
+	if d.ExecutionMode != "vibe_coding" || d.ExecutionTool != "codex" {
+		return
+	}
+	hasLegacyReply := false
+	for i := range d.Progress {
+		p := &d.Progress[i]
+		explicit := p.ExternalSessionID != "" && p.ExternalSessionID == d.ExplicitThread
+		p.CodexReply = view.Project(p.ExternalSessionID, &p.UserPrompt, &p.FinalResult, explicit)
+		p.CodexMessage = codexmessage.Parse(p.UserPrompt, p.UUID)
+		hasLegacyReply = hasLegacyReply || (!explicit && p.CodexReply != nil)
+	}
+	if hasLegacyReply {
+		// These CLI-only raw appendices are not part of a Codex App form.
+		d.Sessions = []ExecutionHistorySession{}
+		d.SessionEvents = map[string][]ExecutionHistoryEvent{}
+		d.ConversationSummaries = []ExecutionHistoryConversationSummary{}
+		for i := range d.Steps {
+			d.Steps[i].PromptSnapshot = ""
+		}
+		for i := range d.Progress {
+			d.Progress[i].LatestEventContent = ""
+			d.Progress[i].DispatchMessage = ""
+		}
+	}
+}
+
 // applyExecutionSyncState 把这次执行在上报队列里的实时状态叠加到归档快照上。
 // 归档后后台重试仍可能补报成功，快照里冻结的结论会过期，所以状态以队列为准。
 func (s *Service) applyExecutionSyncState(ctx context.Context, detail *ExecutionHistoryDetail) {
@@ -277,9 +310,11 @@ func captureExecutionTx(ctx context.Context, tx *sql.Tx, taskUUID string, output
 	// 记下这次执行在上报队列里的位置：读取归档时按它把实时上报状态叠加回快照。
 	payload.SyncExecutionIndex = executionIndex
 	if summary.ExecutionMode == ExecutionModeVibeCoding {
-		if err := tx.QueryRowContext(ctx, `SELECT vibe_coding_model FROM gt_tasks WHERE uuid=?`, taskUUID).Scan(&summary.ModelName); err != nil {
+		var binding string
+		if err := tx.QueryRowContext(ctx, `SELECT vibe_coding_model,COALESCE(vibe_coding_session_json,'') FROM gt_tasks WHERE uuid=?`, taskUUID).Scan(&summary.ModelName, &binding); err != nil {
 			return err
 		}
+		payload.ExplicitThread = codexreply.ExplicitThread(binding)
 	}
 	if summary.ExecutionMode == ExecutionModeCLI {
 		_ = tx.QueryRowContext(ctx, `SELECT model_name, thinking_level FROM gt_task_steps WHERE task_uuid=? AND step_key=? LIMIT 1`,

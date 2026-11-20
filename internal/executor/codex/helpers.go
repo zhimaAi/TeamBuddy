@@ -14,7 +14,3 @@ func environ() []string {
 func createProcessGroupForCmd(cmd *exec.Cmd) {
 	executor.CreateProcessGroup(cmd)
 }
-
-func terminateProcessTreeForPID(pid int) error {
-	return executor.TerminateProcessTree(pid)
-}

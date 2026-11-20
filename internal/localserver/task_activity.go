@@ -10,6 +10,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"goteams-client/internal/codexreply"
 	"goteams-client/internal/executor"
 	"goteams-client/internal/taskruntime"
 	"goteams-client/internal/workflow"
@@ -264,24 +265,21 @@ func loadLatestVibeTaskActivities(
 ) error {
 	query := fmt.Sprintf(`WITH requested(task_uuid) AS (VALUES %s)
 		SELECT p.uuid, p.task_uuid, p.record_type,
-		substr(p.user_prompt, 1, ?), substr(p.final_result, 1, ?),
+		p.user_prompt, substr(p.final_result, 1, ?),
 		p.status, p.activity_actor, p.activity_kind, p.created_at, p.finished_at,
-		substr(COALESCE((
-			SELECT q.user_prompt FROM gt_task_progress q
-			WHERE q.task_uuid=r.task_uuid AND q.record_type='user_question'
-			ORDER BY q.created_at DESC, q.rowid DESC LIMIT 1
-		), ''), 1, ?),
+        COALESCE(q.user_prompt,''),COALESCE(q.external_session_id,''),p.external_session_id,t.vibe_coding_session_json,
 		substr(COALESCE(t.content_snapshot, ''), 1, ?),
 		substr(COALESCE(t.title, ''), 1, ?)
 		FROM requested r
 		JOIN gt_tasks t ON t.uuid=r.task_uuid
+        LEFT JOIN gt_task_progress q ON q.rowid=(SELECT latest.rowid FROM gt_task_progress latest WHERE latest.task_uuid=r.task_uuid AND latest.record_type='user_question' ORDER BY latest.created_at DESC,latest.rowid DESC LIMIT 1)
 		JOIN gt_task_progress p ON p.rowid = (
 			SELECT p2.rowid FROM gt_task_progress p2
 			WHERE p2.task_uuid=r.task_uuid AND p2.execution_mode='vibe_coding'
 			ORDER BY p2.created_at DESC, p2.rowid DESC LIMIT 1
 		)`, valuePlaceholders(len(targets)))
 	args := taskUUIDArgs(targets)
-	args = append(args, taskActivityPreviewLimit, taskActivityPreviewLimit, taskActivityPreviewLimit, taskActivityPreviewLimit, taskActivityPreviewLimit)
+	args = append(args, taskActivityPreviewLimit, taskActivityPreviewLimit, taskActivityPreviewLimit)
 	rows, err := db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return fmt.Errorf("查询 Vibe Coding 最近动态失败: %w", err)
@@ -290,16 +288,17 @@ func loadLatestVibeTaskActivities(
 	for rows.Next() {
 		var createdAt, finishedAt int64
 		var progressUUID, taskUUID, recordType, prompt, result, progressStatus, actor, kind string
-		var userQuestion, snapshot, title string
+		var userQuestion, snapshot, title, thread, qThread, binding string
 		if err := rows.Scan(&progressUUID, &taskUUID, &recordType, &prompt, &result,
-			&progressStatus, &actor, &kind, &createdAt, &finishedAt, &userQuestion, &snapshot, &title); err != nil {
+			&progressStatus, &actor, &kind, &createdAt, &finishedAt, &userQuestion, &qThread, &thread, &binding, &snapshot, &title); err != nil {
 			return fmt.Errorf("读取 Vibe Coding 最近动态失败: %w", err)
 		}
 		if targetByUUID[taskUUID].ExecutionMode != taskruntime.ExecutionModeVibeCoding {
 			continue
 		}
 		actor, kind = normalizeVibeActivitySemantics(taskUUID, progressUUID, recordType, progressStatus, actor, kind)
-		content := vibeBoardUserText(recordType, kind, prompt, result, userQuestion, snapshot, title)
+		explicit := codexreply.ExplicitThread(binding)
+		content := vibeBoardUserText(recordType, kind, codexReplyPreview(ctx, prompt, thread != "" && thread == explicit), result, codexReplyPreview(ctx, userQuestion, qThread != "" && qThread == explicit), snapshot, title)
 		occurredAt := finishedAt
 		if recordType == "user_question" || kind == activityKindUserMessage {
 			occurredAt = createdAt
@@ -446,26 +445,23 @@ func loadProgressActivity(ctx context.Context, db *sql.DB, taskUUID, activityID 
 		return nil, sql.ErrNoRows
 	}
 	var taskStatus, recordType, prompt, result, progressStatus, actor, kind string
+	var thread, binding string
 	var createdAt, finishedAt int64
-	err := db.QueryRowContext(ctx, `SELECT t.status, p.record_type, p.user_prompt, p.final_result, p.status,
+	err := db.QueryRowContext(ctx, `SELECT t.status, p.record_type, p.user_prompt, p.final_result, p.status,p.external_session_id,t.vibe_coding_session_json,
 		p.activity_actor, p.activity_kind, p.created_at, p.finished_at
 		FROM gt_task_progress p JOIN gt_tasks t ON t.uuid=p.task_uuid
 		WHERE p.task_uuid=? AND p.uuid=? AND p.execution_mode='vibe_coding'`, taskUUID, progressUUID).
-		Scan(&taskStatus, &recordType, &prompt, &result, &progressStatus, &actor, &kind, &createdAt, &finishedAt)
+		Scan(&taskStatus, &recordType, &prompt, &result, &progressStatus, &thread, &binding, &actor, &kind, &createdAt, &finishedAt)
 	if err != nil {
 		return nil, err
 	}
 	actor, kind = normalizeVibeActivitySemantics(taskUUID, progressUUID, recordType, progressStatus, actor, kind)
-	var userQuestion, snapshot, title string
-	if err = db.QueryRowContext(ctx, `SELECT COALESCE((
-			SELECT q.user_prompt FROM gt_task_progress q
-			WHERE q.task_uuid=? AND q.record_type='user_question'
-			ORDER BY q.created_at DESC, q.rowid DESC LIMIT 1
-		), ''), COALESCE(content_snapshot, ''), COALESCE(title, '')
-		FROM gt_tasks WHERE uuid=?`, taskUUID, taskUUID).Scan(&userQuestion, &snapshot, &title); err != nil {
+	var userQuestion, snapshot, title, qThread string
+	if err = db.QueryRowContext(ctx, `SELECT COALESCE(q.user_prompt,''),COALESCE(q.external_session_id,''),t.content_snapshot,t.title FROM gt_tasks t LEFT JOIN gt_task_progress q ON q.rowid=(SELECT latest.rowid FROM gt_task_progress latest WHERE latest.task_uuid=t.uuid AND latest.record_type='user_question' ORDER BY latest.created_at DESC,latest.rowid DESC LIMIT 1) WHERE t.uuid=?`, taskUUID).Scan(&userQuestion, &qThread, &snapshot, &title); err != nil {
 		userQuestion, snapshot, title = "", "", ""
 	}
-	content := vibeBoardUserText(recordType, kind, prompt, result, userQuestion, snapshot, title)
+	explicit := codexreply.ExplicitThread(binding)
+	content := vibeBoardUserText(recordType, kind, codexReplyPreview(ctx, prompt, thread != "" && thread == explicit), result, codexReplyPreview(ctx, userQuestion, qThread != "" && qThread == explicit), snapshot, title)
 	occurredAt := finishedAt
 	if recordType == "user_question" || kind == activityKindUserMessage {
 		occurredAt = createdAt

@@ -58,6 +58,7 @@ func (h *TasksHandler) buildTaskSyncResponse(c *gin.Context, taskUUID string) (t
 	}
 	client := h.taskCloudClient()
 	response.TaskSyncStatus = status
+	response.LastError = codexSyncError(c, response.LastError)
 	response.LoggedIn = client != nil && client.UserID() != ""
 	if response.LoggedIn && status.SourceType == "cloud" {
 		owned, ownErr := cloudsync.TaskOwnedByClient(c.Request.Context(), db, client, taskUUID)
@@ -119,7 +120,7 @@ func (h *TasksHandler) retryTaskSync(c *gin.Context) {
 			return
 		}
 		response.RetryError = i18n.T(c, "localserver_task_sync_push_failed")
-		response.RetryErrorDetail = truncateSyncError(err.Error())
+		response.RetryErrorDetail = codexSyncError(c, truncateSyncError(err.Error()))
 		c.JSON(http.StatusOK, response)
 		return
 	}
@@ -132,6 +133,14 @@ func (h *TasksHandler) retryTaskSync(c *gin.Context) {
 }
 
 // truncateSyncError 按字符数截断，避免把超长错误原文整段塞进响应。
+func codexSyncError(c *gin.Context, value string) string {
+	switch value {
+	case "codex_reply_key_error", "codex_reply_size_error":
+		return i18n.T(c, value)
+	}
+	return value
+}
+
 func truncateSyncError(value string) string {
 	runes := []rune(value)
 	if len(runes) <= taskSyncErrorMaxRunes {

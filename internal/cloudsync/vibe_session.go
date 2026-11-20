@@ -69,6 +69,9 @@ func buildVibeSession(ctx context.Context, db syncQueryer, taskUUID, tool string
 	}
 	result.Conversation.RoundCount = len(result.Conversation.Rounds)
 	result.ConversationRounds = result.Conversation.RoundCount
-	fitSessionSyncPayload(result)
+	// Inspect untruncated replies before applying the transport limits.
+	if !isCodexVibe(result) {
+		fitSessionSyncPayload(result)
+	}
 	return result, nil
 }

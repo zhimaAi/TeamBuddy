@@ -11,6 +11,7 @@ import (
 
 	"goteams-client/internal/applog"
 	"goteams-client/internal/cloud"
+	"goteams-client/internal/codexreply"
 	"goteams-client/internal/pipeline"
 )
 
@@ -20,8 +21,9 @@ type syncQueryer interface {
 }
 
 type executionSnapshot struct {
-	Task  cloud.PipelineTaskSync `json:"task"`
-	Steps []stepSnapshot         `json:"steps"`
+	CodexPrivacy int                    `json:"codex_privacy_version,omitempty"`
+	Task         cloud.PipelineTaskSync `json:"task"`
+	Steps        []stepSnapshot         `json:"steps"`
 	// ProgressWatermark 是本快照覆盖到的 Vibe 沟通记录最大 rowid，投递成功 / 失败时
 	// 据此把结果回写到每条记录自己的上报状态。老快照没有该字段时为 0，不做回写。
 	ProgressWatermark int64 `json:"progress_watermark,omitempty"`
@@ -116,10 +118,10 @@ func CaptureTaskExecutionTx(ctx context.Context, tx *sql.Tx, taskUUID string) er
 }
 
 func captureTaskExecutionTx(ctx context.Context, tx *sql.Tx, taskUUID string, force bool) error {
-	var source, sourceKey, userID, mode, tool string
+	var source, sourceKey, userID, mode, tool, binding string
 	err := tx.QueryRowContext(ctx, `SELECT source_type, cloud_source_key, cloud_user_id,
-		execution_mode, execution_tool FROM gt_tasks WHERE uuid=?`, taskUUID).
-		Scan(&source, &sourceKey, &userID, &mode, &tool)
+		execution_mode, execution_tool, COALESCE(vibe_coding_session_json,'') FROM gt_tasks WHERE uuid=?`, taskUUID).
+		Scan(&source, &sourceKey, &userID, &mode, &tool, &binding)
 	if err == sql.ErrNoRows {
 		return nil
 	}
@@ -203,6 +205,9 @@ func captureTaskExecutionTx(ctx context.Context, tx *sql.Tx, taskUUID string, fo
 		return nil
 	}
 	revision := max(time.Now().UnixMilli(), previousRevision+1)
+	if err = protectCodexSnapshot(&snapshot, sourceKey, userID, false, codexreply.ExplicitThread(binding)); err != nil {
+		return err
+	}
 	snapshot.Task.LocalRevision = revision
 	for i := range snapshot.Steps {
 		snapshot.Steps[i].Payload.ClientUpdatedAt = revision
@@ -225,13 +230,13 @@ func deliverTaskSnapshots(ctx context.Context, db *sql.DB, client *cloud.Client,
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		var raw string
+		var raw, sourceKey string
 		var index, attempts int
 		var revision, nextAttempt int64
-		err := db.QueryRowContext(ctx, `SELECT execution_index, revision, payload_json, attempts, next_attempt_at
+		err := db.QueryRowContext(ctx, `SELECT execution_index, revision, payload_json, attempts, next_attempt_at, cloud_source_key
 			FROM gt_cloud_sync_outbox WHERE task_uuid=? AND cloud_source_key IN (?, ?) AND cloud_user_id=?
 			AND delivered_revision < revision ORDER BY execution_index LIMIT 1`,
-			taskUUID, primary, alternate, client.UserID()).Scan(&index, &revision, &raw, &attempts, &nextAttempt)
+			taskUUID, primary, alternate, client.UserID()).Scan(&index, &revision, &raw, &attempts, &nextAttempt, &sourceKey)
 		if err == sql.ErrNoRows {
 			return nil
 		}
@@ -245,7 +250,37 @@ func deliverTaskSnapshots(ctx context.Context, db *sql.DB, client *cloud.Client,
 		if err = json.Unmarshal([]byte(raw), &snapshot); err != nil {
 			return err
 		}
-		pushedSteps, err := pushSnapshot(ctx, client, snapshot)
+		pushedSteps := 0
+		switch snapshot.CodexPrivacy {
+		case 0:
+			err = protectCodexSnapshot(&snapshot, sourceKey, client.UserID(), true, "")
+			if err == nil && snapshot.CodexPrivacy != 0 {
+				// Persist once before any HTTP. Reuse identical ciphertext on retries.
+				upgraded, e := json.Marshal(snapshot)
+				if e != nil {
+					return e
+				}
+				res, e := db.ExecContext(ctx, `UPDATE gt_cloud_sync_outbox SET payload_json=?
+                    WHERE task_uuid=? AND execution_index=? AND revision=? AND cloud_source_key=? AND cloud_user_id=?
+                    AND delivered_revision<revision AND payload_json=?`, string(upgraded), taskUUID, index, revision, sourceKey, client.UserID(), raw)
+				if e != nil {
+					return e
+				}
+				n, e := res.RowsAffected()
+				if e != nil {
+					return e
+				}
+				if n != 1 {
+					continue
+				}
+			}
+		case codexPrivacyVersion, codexExplicitVersion:
+		default:
+			err = ErrCodexPrivacyKey
+		}
+		if err == nil {
+			pushedSteps, err = pushSnapshot(ctx, client, snapshot)
+		}
 		if err != nil {
 			delay := min(300, 10<<min(attempts, 5))
 			_, saveErr := db.ExecContext(ctx, `UPDATE gt_cloud_sync_outbox SET attempts=attempts+1,

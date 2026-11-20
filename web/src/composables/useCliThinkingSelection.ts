@@ -1,11 +1,12 @@
 import { watch, type Ref } from 'vue'
 import { useCLIThinkingPreferencesStore } from '@/stores/cli-thinking-preferences'
+import { cliModelFamily } from '@/utils/cliModelOptions'
 
 // 表单草稿只在本入口保留，只有灯泡中的用户选择写入跨入口偏好。
 export function useCliThinkingSelection(cliType: () => string, model: () => string, level: Ref<string>) {
   const preferences = useCLIThinkingPreferencesStore()
   const drafts = new Map<string, string>()
-  const key = (cli: string, name: string) => JSON.stringify([cli, name])
+  const key = (cli: string, name: string) => JSON.stringify([cli, cliModelFamily(cli, name)])
 
   watch([cliType, model], ([cli, name], [oldCLI, oldModel]) => {
     if (oldCLI && oldModel) drafts.set(key(oldCLI, oldModel), level.value)

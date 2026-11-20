@@ -7,6 +7,7 @@ import CliThinkingSelect from '@/components/CliThinkingSelect.vue'
 import { useCliThinkingSelection } from '@/composables/useCliThinkingSelection'
 import { modelLogo } from '@/composables/useModelLogo'
 import { useCLIModelCatalogStore } from '@/stores/cli-models'
+import { cliModelChoices, cliModelFamily } from '@/utils/cliModelOptions'
 import { useLocalWS } from '@/composables/useLocalWebSocket'
 import { useAppI18n } from '@/i18n'
 import DirectoryPicker, { type DirectoryPickerCandidate } from '@/components/DirectoryPicker.vue'
@@ -106,7 +107,7 @@ const cliModels = ref<string[]>([])
 const cliModelCounts = computed(() => {
   const counts: Record<string, number> = {}
   for (const cli of cliDiscoveryList.value) {
-    const count = modelDirectories.catalog(cli.type)?.models.length
+    const count = cliModelChoices(cli.type, modelDirectories.catalog(cli.type)?.models || []).length
     if (count) counts[cli.type] = count
   }
   return counts
@@ -1803,18 +1804,18 @@ onUnmounted(() => {
               class="cli-model-select"
               :placeholder="t('remoteChannels.selectCliModel')"
               :disabled="!selectedCLItype || cliConfigSaving"
-              :options="cliModels.map(model => ({ label: model, value: model }))"
+              :options="cliModelChoices(selectedCLItype, cliModels, selectedCLImodel)"
             >
               <template #optionLabel>
-                <span class="cli-model-value" :title="selectedCLImodel">
+                <span class="cli-model-value" :title="cliModelFamily(selectedCLItype, selectedCLImodel)">
                   <img class="cli-model-logo" :src="modelLogo(selectedCLImodel, selectedCLItype)" alt="" />
-                  <span>{{ selectedCLImodel }}</span>
+                  <span>{{ cliModelFamily(selectedCLItype, selectedCLImodel) }}</span>
                 </span>
               </template>
-              <template #option="{ value }">
-                <span class="cli-model-value" :title="String(value)">
+              <template #option="{ value, label }">
+                <span class="cli-model-value" :title="String(label)">
                   <img class="cli-model-logo" :src="modelLogo(String(value), selectedCLItype)" alt="" />
-                  <span>{{ value }}</span>
+                  <span>{{ label }}</span>
                 </span>
               </template>
             </a-select>
@@ -2049,18 +2050,18 @@ onUnmounted(() => {
               :placeholder="t('remoteChannels.selectCliModel')"
               :disabled="!wecomSelectedCLItype || wecomCLISaving"
               :loading="cliDiscoveryLoading"
-              :options="cliModels.map(model => ({ label: model, value: model }))"
+              :options="cliModelChoices(wecomSelectedCLItype, cliModels, wecomSelectedCLImodel)"
             >
               <template #optionLabel>
-                <span class="cli-model-value" :title="wecomSelectedCLImodel">
+                <span class="cli-model-value" :title="cliModelFamily(wecomSelectedCLItype, wecomSelectedCLImodel)">
                   <img class="cli-model-logo" :src="modelLogo(wecomSelectedCLImodel, wecomSelectedCLItype)" alt="" />
-                  <span>{{ wecomSelectedCLImodel }}</span>
+                  <span>{{ cliModelFamily(wecomSelectedCLItype, wecomSelectedCLImodel) }}</span>
                 </span>
               </template>
-              <template #option="{ value }">
-                <span class="cli-model-value" :title="String(value)">
+              <template #option="{ value, label }">
+                <span class="cli-model-value" :title="String(label)">
                   <img class="cli-model-logo" :src="modelLogo(String(value), wecomSelectedCLItype)" alt="" />
-                  <span>{{ value }}</span>
+                  <span>{{ label }}</span>
                 </span>
               </template>
             </a-select>
@@ -2139,18 +2140,18 @@ onUnmounted(() => {
               :placeholder="t('remoteChannels.selectCliModel')"
               :disabled="!feishuSelectedCLItype || feishuCLISaving"
               :loading="cliDiscoveryLoading"
-              :options="cliModels.map(model => ({ label: model, value: model }))"
+              :options="cliModelChoices(feishuSelectedCLItype, cliModels, feishuSelectedCLImodel)"
             >
               <template #optionLabel>
-                <span class="cli-model-value" :title="feishuSelectedCLImodel">
+                <span class="cli-model-value" :title="cliModelFamily(feishuSelectedCLItype, feishuSelectedCLImodel)">
                   <img class="cli-model-logo" :src="modelLogo(feishuSelectedCLImodel, feishuSelectedCLItype)" alt="" />
-                  <span>{{ feishuSelectedCLImodel }}</span>
+                  <span>{{ cliModelFamily(feishuSelectedCLItype, feishuSelectedCLImodel) }}</span>
                 </span>
               </template>
-              <template #option="{ value }">
-                <span class="cli-model-value" :title="String(value)">
+              <template #option="{ value, label }">
+                <span class="cli-model-value" :title="String(label)">
                   <img class="cli-model-logo" :src="modelLogo(String(value), feishuSelectedCLItype)" alt="" />
-                  <span>{{ value }}</span>
+                  <span>{{ label }}</span>
                 </span>
               </template>
             </a-select>
@@ -2229,18 +2230,18 @@ onUnmounted(() => {
               :placeholder="t('remoteChannels.selectCliModel')"
               :disabled="!dingtalkSelectedCLItype || dingtalkCLISaving"
               :loading="cliDiscoveryLoading"
-              :options="cliModels.map(model => ({ label: model, value: model }))"
+              :options="cliModelChoices(dingtalkSelectedCLItype, cliModels, dingtalkSelectedCLImodel)"
             >
               <template #optionLabel>
-                <span class="cli-model-value" :title="dingtalkSelectedCLImodel">
+                <span class="cli-model-value" :title="cliModelFamily(dingtalkSelectedCLItype, dingtalkSelectedCLImodel)">
                   <img class="cli-model-logo" :src="modelLogo(dingtalkSelectedCLImodel, dingtalkSelectedCLItype)" alt="" />
-                  <span>{{ dingtalkSelectedCLImodel }}</span>
+                  <span>{{ cliModelFamily(dingtalkSelectedCLItype, dingtalkSelectedCLImodel) }}</span>
                 </span>
               </template>
-              <template #option="{ value }">
-                <span class="cli-model-value" :title="String(value)">
+              <template #option="{ value, label }">
+                <span class="cli-model-value" :title="String(label)">
                   <img class="cli-model-logo" :src="modelLogo(String(value), dingtalkSelectedCLItype)" alt="" />
-                  <span>{{ value }}</span>
+                  <span>{{ label }}</span>
                 </span>
               </template>
             </a-select>

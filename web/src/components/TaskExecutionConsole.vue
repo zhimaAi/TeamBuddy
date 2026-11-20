@@ -12,7 +12,7 @@ import {
 import { cliDisplayName, sanitizeUserMessageText } from '@/components/task-progress/utils'
 import { revealTaskOutputFile } from '@/composables/useDesktop'
 import { t } from '@/i18n'
-import { allowLocalFileLinks, LOCAL_FILE_LINK_ATTRIBUTE, LOCAL_FILE_SESSION_ATTRIBUTE, localFileTarget, renderInlineFileCode } from '@/utils/localFileLink'
+import { allowLocalFileLinks, LOCAL_FILE_LINK_ATTRIBUTE, LOCAL_FILE_SESSION_ATTRIBUTE, localFileTarget } from '@/utils/localFileLink'
 import StopExecutionConfirmModal from '@/components/task-progress/StopExecutionConfirmModal.vue'
 import { isStopConfirmSuppressed, suppressStopConfirm } from '@/utils/stopConfirm'
 
@@ -99,9 +99,10 @@ const originalLinkOpenRenderer = markdown.renderer.rules.link_open
 markdown.renderer.rules.link_open = (tokens, index, options, env, self) => {
   const token = tokens[index]
   const href = token.attrGet('href') || ''
-  if (env.taskUuid && localFileTarget(href, env.fileRoots || [])) {
+  const fileTarget = localFileTarget(href)
+  if (env.taskUuid && fileTarget) {
     token.attrSet('href', '#')
-    token.attrSet(LOCAL_FILE_LINK_ATTRIBUTE, href)
+    token.attrSet(LOCAL_FILE_LINK_ATTRIBUTE, fileTarget)
     if (env.sessionUuid) token.attrSet(LOCAL_FILE_SESSION_ATTRIBUTE, env.sessionUuid)
     token.attrSet('title', t('components.markdown.revealInFolder'))
   }
@@ -299,21 +300,6 @@ function formatDuration(duration: number) {
   if (duration < 1000) return `${duration}ms`
   if (duration < 60_000) return `${(duration / 1000).toFixed(1)}s`
   return `${Math.floor(duration / 60_000)}m ${Math.round((duration % 60_000) / 1000)}s`
-}
-
-const originalCodeRenderer = markdown.renderer.rules.code_inline
-markdown.renderer.rules.code_inline = (tokens, index, options, env, self) => {
-  const html = renderInlineFileCode(
-    markdown,
-    tokens[index].content,
-    env.fileRoots || [],
-    t('components.markdown.revealInFolder'),
-    env.sessionUuid || '',
-  )
-  if (env.taskUuid && html) return html
-  return originalCodeRenderer
-    ? originalCodeRenderer(tokens, index, options, env, self)
-    : self.renderToken(tokens, index, options)
 }
 
 function renderMarkdown(content = '', sessionUuid = '') {

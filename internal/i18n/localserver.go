@@ -7,6 +7,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"goteams-client/internal/cloudsync"
 	"goteams-client/internal/executor"
 	"goteams-client/internal/expertgroup"
 	"goteams-client/internal/pipeline"
@@ -55,6 +56,10 @@ func Key(err error) (string, string) {
 		return "localserver_internal_error", ""
 	}
 	switch {
+	case errors.Is(err, cloudsync.ErrCodexPrivacyKey):
+		return "codex_reply_key_error", "codex_reply_key_error"
+	case errors.Is(err, cloudsync.ErrCodexPrivacySize):
+		return "codex_reply_size_error", "codex_reply_size_error"
 	case errors.Is(err, executor.ErrThinkingInvalid):
 		return "localserver_cli_thinking_invalid", "cli_thinking_invalid"
 	case errors.Is(err, executor.ErrThinkingUnavailable):

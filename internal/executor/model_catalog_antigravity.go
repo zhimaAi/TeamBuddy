@@ -77,9 +77,37 @@ func parseAntigravityEffort(raw []byte) (ModelThinking, error) {
 		Status   string `json:"status"`
 		Response string `json:"response"`
 		Turns    int    `json:"num_turns"`
+		Command  *struct {
+			Name string `json:"name"`
+			Data struct {
+				Adjustable *bool    `json:"adjustable"`
+				Current    string   `json:"current"`
+				Available  []string `json:"available"`
+			} `json:"data"`
+		} `json:"command"`
 	}
 	if json.Unmarshal(raw, &response) != nil || strings.EqualFold(response.Status, "ERROR") || response.Turns != 0 {
 		return ModelThinking{}, ErrThinkingUnavailable
+	}
+	// 新版 CLI 的 response 只有当前档位，完整能力以结构化 command.data 为准。
+	if command := response.Command; command != nil {
+		data := command.Data
+		if command.Name != "effort" || data.Adjustable == nil {
+			return ModelThinking{}, ErrThinkingUnavailable
+		}
+		var levels []string
+		if *data.Adjustable {
+			if len(data.Available) == 0 {
+				return ModelThinking{}, ErrThinkingUnavailable
+			}
+			levels = data.Available
+		}
+		thinking := ThinkingFromLevels("effort", levels, data.Current)
+		if thinking.State != "fresh" {
+			return ModelThinking{}, ErrThinkingUnavailable
+		}
+		thinking.Source = "antigravity_effort_command"
+		return thinking, nil
 	}
 	text := strings.ToLower(stripANSI(response.Response))
 	if strings.Contains(text, "not adjustable") || strings.Contains(text, "isn't adjustable") || strings.Contains(text, "isn’t adjustable") {

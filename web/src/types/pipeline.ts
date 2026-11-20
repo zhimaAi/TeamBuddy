@@ -91,6 +91,15 @@ export interface Pipeline {
 }
 
 export interface TaskProgress {
+  codex_message?: {
+    text: string
+    attachments: { name: string; is_image: boolean; index: number; relative_path: string }[]
+  }
+  codex_reply?: {
+    prefix?: string
+    items?: { question: string; answer: string; isSecret?: boolean }[]
+    unavailable?: boolean
+  }
   uuid: string
   task_uuid: string
   task_step_uuid: string

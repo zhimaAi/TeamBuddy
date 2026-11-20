@@ -150,9 +150,73 @@ const MESSAGES = Object.freeze({
     'zh-CN': { other: 'TeamBuddy 启动失败' },
     'en-US': { other: 'TeamBuddy failed to start' },
   },
+  'error.codex.busy': {
+    'zh-CN': { other: "正在准备 Codex，请稍后重试。" },
+    'en-US': { other: "Codex setup is in progress. Try again shortly." },
+  },
+  'error.codex.not_installed': {
+    'zh-CN': { other: "未找到可打开 codex:// 的 Codex App，请检查安装。" },
+    'en-US': { other: "No Codex App handles codex://. Check your installation." },
+  },
+  'error.codex.runtime_unavailable': {
+    'zh-CN': { other: "无法定位 Codex App 随附的运行程序，请核对桌面版安装位置和版本。" },
+    'en-US': { other: "Could not locate the runtime bundled with Codex App. Check the desktop installation and version." },
+  },
+  'error.codex.backend_unavailable': {
+    'zh-CN': { other: "无法准备 TeamBuddy 回调程序，请检查本地服务后重试。" },
+    'en-US': { other: "Could not prepare the TeamBuddy callback. Check the local service and retry." },
+  },
+  'error.codex.configuration_conflict': {
+    'zh-CN': { other: "无法安全合并 Codex 配置，请检查文件、写入权限和已有 Hooks。" },
+    'en-US': { other: "Could not safely merge the Codex settings. Check the files, permissions and existing hooks." },
+  },
+  'error.codex.configuration_modified': {
+    'zh-CN': { other: "TeamBuddy Hooks 已被修改，请先核对 .codex/hooks.json；已保留你的配置。" },
+    'en-US': { other: "TeamBuddy hooks were changed. Review .codex/hooks.json; your settings were preserved." },
+  },
+  'error.codex.configuration_locked': {
+    'zh-CN': { other: "Codex Hooks 正在安装或安装中断，请核对本机安装锁后重试。" },
+    'en-US': { other: "Codex hook installation is busy or interrupted. Check the local installation lock and retry." },
+  },
+  'error.codex.inspection_failed': {
+    'zh-CN': { other: "无法检测 Codex Hooks，请核对桌面版版本和 Hooks 设置后重试。" },
+    'en-US': { other: "Could not inspect Codex hooks. Check the desktop version and hook settings, then retry." },
+  },
+  'error.codex.invalid_request': {
+    'zh-CN': { other: "Codex 启动信息无效，请从任务重新打开。" },
+    'en-US': { other: "Invalid Codex launch request. Reopen it from the task." },
+  },
+  'error.codex.directory': {
+    'zh-CN': { other: "无法访问任务工作目录，请检查目录是否存在。" },
+    'en-US': { other: "Could not access the task workspace. Check that the directory exists." },
+  },
+  'error.codex.binding_unavailable': {
+    'zh-CN': { other: "无法核对原会话绑定。请确认 TeamBuddy 正在运行、当前任务执行代次未变，且本机会话记录仍在。" },
+    'en-US': { other: "Could not verify the original binding. Check the local service, task generation and local session record." },
+  },
+  'error.codex.task_changed': {
+    'zh-CN': { other: "无法核对任务、执行代次或工作目录。请检查 TeamBuddy 服务并从任务重新打开。" },
+    'en-US': { other: "Could not verify the task, generation or workspace. Check the TeamBuddy service and reopen the task." },
+  },
+  'error.codex.settings_failed': {
+    'zh-CN': { other: '无法打开 Codex 设置。请在 Codex App 的「设置 → Hooks」中查看 TeamBuddy 回调，然后返回。' },
+    'en-US': { other: 'Could not open Codex settings. Open Settings → Hooks in the Codex app to review the TeamBuddy hooks, then return.' },
+  },
+  'error.codex.review_failed': {
+    'zh-CN': { other: "无法打开原生审阅终端。请在 Codex 中信任该项目并审阅三个 TeamBuddy Hooks，然后重新检测。" },
+    'en-US': { other: "Could not open the review terminal. Trust the project and review the three TeamBuddy hooks in Codex, then recheck." },
+  },
+  'error.codex.open_copy_failed': {
+    'zh-CN': { other: 'Codex 未能打开，启动提示词也未复制。请检查应用和剪贴板后重试。' },
+    'en-US': { other: 'Could not open Codex or copy the launch prompt. Check the app and clipboard, then retry.' },
+  },
+  'error.codex.copy_failed': {
+    'zh-CN': { other: "无法写入剪贴板，请重试。" },
+    'en-US': { other: "Could not write to the clipboard. Try again." },
+  },
   'error.codex.openFailed': {
-    'zh-CN': { other: '无法打开 Codex，请复制提示词后手动打开' },
-    'en-US': { other: 'Could not open Codex. Copy the prompt and open it manually.' },
+    'zh-CN': { other: '无法打开 Codex，请检查应用及 codex:// 协议关联。' },
+    'en-US': { other: 'Could not open Codex. Check the app and its codex:// association.' },
   },
   'error.qoderIDE.not_installed': {
     'zh-CN': { other: "未找到 Qoder IDE，请先安装 IDE（Qoder 应用不能替代 IDE）" },

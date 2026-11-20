@@ -61,20 +61,20 @@
           <a-spin :spinning="modelLoading">
             <div
               v-for="model in visibleModelOptions"
-              :key="model"
+              :key="model.value"
               class="cli-picker-model"
-              :class="{ 'is-selected': model === selectedModelName }"
+              :class="{ 'is-selected': model.value === selectedModelName }"
               role="option"
-              :aria-selected="model === selectedModelName"
+              :aria-selected="model.value === selectedModelName"
             >
-              <button type="button" class="cli-picker-model-name" :title="model" @click="selectModel(model)">
-                <img class="cli-picker-model-logo" :src="modelLogo(model, selectedCliType)" alt="" aria-hidden="true" />
-                <span class="cli-picker-model-label">{{ model }}</span>
+              <button type="button" class="cli-picker-model-name" :title="model.label" @click="selectModel(model.value)">
+                <img class="cli-picker-model-logo" :src="modelLogo(model.value, selectedCliType)" alt="" aria-hidden="true" />
+                <span class="cli-picker-model-label">{{ model.label }}</span>
               </button>
               <CliThinkingSelect
-                v-if="model === selectedModelName"
+                v-if="model.value === selectedModelName"
                 :cli-type="selectedCliType"
-                :model-name="model"
+                :model-name="model.value"
                 :model-value="thinkingLevel || ''"
                 :task-uuid="taskUuid"
                 :popup-z-index="1200"
@@ -82,7 +82,7 @@
                 @update:model-value="emit('select-thinking', $event)"
               />
               <img
-                v-if="model === selectedModelName"
+                v-if="model.value === selectedModelName"
                 class="cli-picker-check"
                 :src="cliPickerCheckIcon"
                 alt=""
@@ -118,6 +118,7 @@ import { cliLogo } from '@/composables/useCliLogo'
 import { modelLogo } from '@/composables/useModelLogo'
 import type { DiscoveredCLI } from '@/views/agents/components/agentPipeline'
 import { useAppI18n } from '@/i18n'
+import { cliModelChoices } from '@/utils/cliModelOptions'
 
 const { t } = useAppI18n()
 
@@ -155,22 +156,15 @@ const visibleCliOptions = computed(() => {
   return items
 })
 
-const visibleModelOptions = computed(() => {
-  const models = [...props.modelOptions]
-  // 已保存模型暂时离开目录时仍可查看/清空其强度，不用其他模型替换它。
-  if (props.selectedCliType && props.selectedModelName && !models.includes(props.selectedModelName)) {
-    models.unshift(props.selectedModelName)
-  }
-  return models
-})
+const visibleModelOptions = computed(() => cliModelChoices(props.selectedCliType, props.modelOptions, props.selectedModelName))
 
 function modelCount(cli: DiscoveredCLI) {
   if (cli.type === props.selectedCliType && props.modelOptions.length) {
-    return props.modelOptions.length
+    return cliModelChoices(cli.type, props.modelOptions).length
   }
   const cached = props.modelCounts?.[cli.type]
   if (cached != null) return cached
-  if (cli.models?.length) return cli.models.length
+  if (cli.models?.length) return cliModelChoices(cli.type, cli.models).length
   return undefined
 }
 

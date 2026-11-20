@@ -1,4 +1,18 @@
 {
+  "codexReporting": {
+    "title": "Codex App 任务同步",
+    "scope": "只同步从 TeamBuddy 启动并绑定的任务聊天。普通 Codex 聊天不会写入任务。",
+    "enable": "启用同步并前往授权",
+    "trust": "前往 Codex 信任钩子",
+    "review": "打开 Codex 设置",
+    "ready": "已启用任务同步。",
+    "awaitTrust": "钩子已配置，任务同步还需要你在 Codex 中授权。",
+    "selectHooks": "在 Codex 设置左侧点「钩子」（Hooks）。",
+    "trustCallbacks": "在「用户配置」下，找到 TeamBuddy 的 SessionStart、UserPromptSubmit 和 Stop，分别点「信任」。",
+    "returnToTask": "回到 TeamBuddy，授权生效后会自动继续。",
+    "reloadHint": "没看到这三项？在钩子页面点「重新加载钩子」。",
+    "checking": "正在读取配置…"
+  },
   "gitProjects": "Git 项目",
   "desktop": "客户端",
   "name": "名称",

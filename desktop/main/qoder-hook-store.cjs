@@ -19,9 +19,9 @@ function digest(text) {
   return createHash('sha256').update(text).digest('hex')
 }
 
-function hookStateDir(workDir, stateRoot) {
+function hookStateDir(workDir, stateRoot, namespace = 'qoder-hooks') {
   if (!stateRoot || !path.isAbsolute(stateRoot)) throw new Error('configuration_conflict')
-  return path.join(stateRoot, 'qoder-hooks', digest(workDir))
+  return path.join(stateRoot, namespace, digest(workDir))
 }
 
 async function writeAtomic(file, content) {

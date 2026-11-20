@@ -29,6 +29,9 @@
   "markdown": {
     "empty": "暂无 Markdown 内容",
     "attachmentLoadFailed": "附件加载失败",
+    "imageLoading": "图片加载中…",
+    "imageUnavailable": "图片不可用",
+    "previewAttachment": "预览图片：{name}",
     "attachmentDownloadFailed": "附件下载失败",
     "revealInFolder": "在文件夹中显示",
     "revealFailed": "无法在文件夹中显示该文件",
@@ -198,6 +201,8 @@
     "composeFilePath": "Compose 文件路径"
   },
   "taskProgress": {
+    "codexAnswered": "已回答",
+    "codexHidden": "隐私内容已隐藏",
     "running": "正在执行，请稍候…",
     "noResult": "本次执行未返回结果",
     "pastedImage": "已粘贴图片"

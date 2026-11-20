@@ -54,17 +54,8 @@ async function performAction(copy: boolean) {
       await assignTaskToCodex(task.uuid, false)
       emit('changed')
     }
-    if (copy) {
-      await copyTaskVibeToolPrompt(task.uuid)
-      if (tool.value === 'generic') {
-        showVibeToolOpenResult({ opened: false, copied: true, guidanceKey: 'workflows.task.detail.genericPromptCopied' }, currentToolName)
-      } else {
-        message.success(t('workflows.task.detail.codexPromptCopied'))
-      }
-    } else {
-      const result = await openTaskVibeTool(task.uuid)
-      showVibeToolOpenResult(result, currentToolName)
-    }
+    const result = copy ? await copyTaskVibeToolPrompt(task.uuid) : await openTaskVibeTool(task.uuid)
+    showVibeToolOpenResult(result, currentToolName)
   } catch (error) {
     message.error(error instanceof Error ? error.message : copy
       ? t('workflows.task.detail.codexCopyFailed')

@@ -35,6 +35,7 @@ import type { Pipeline, TaskExecutionMode } from '@/types/pipeline'
 import type { LocalProject } from '@/types/project'
 import type { CloudWorkItem } from '@/types/workitem'
 import { useAppI18n } from '@/i18n'
+import { cliModelFamily } from '@/utils/cliModelOptions'
 import WorkDirectoryPicker from '@/components/WorkDirectoryPicker.vue'
 
 const { t } = useAppI18n()
@@ -784,7 +785,7 @@ watch(
         <span v-if="selectedPipeline"
           >{{ t('workflows.task.create.selectedPipeline', { name: selectedPipeline.name }) }}</span
         ><span v-else-if="isCLISelected && form.execution_tool && form.model_name"
-          >{{ t('workflows.task.assign.cliSelected', { cli: form.execution_tool, model: form.model_name }) }}</span
+          >{{ t('workflows.task.assign.cliSelected', { cli: form.execution_tool, model: cliModelFamily(form.execution_tool, form.model_name) }) }}</span
         ><span v-else-if="form.execution_mode === 'vibe_coding' && form.execution_tool">{{ t(vibeToolLabelKey(form.execution_tool)) }}</span
         ><span v-else-if="form.execution_mode === 'expert_group' && selectedExpertGroup">{{ t('workflows.task.create.selectedExpertGroup', { name: selectedExpertGroup.name }) }}</span
         ><span v-else-if="form.execution_mode">{{ t('workflows.task.create.executionTargetRequired') }}</span

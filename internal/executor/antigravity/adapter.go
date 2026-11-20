@@ -2,6 +2,7 @@
 package antigravity
 
 import (
+	"context"
 	"encoding/json"
 	"strconv"
 	"strings"
@@ -21,13 +22,47 @@ const printTimeout = "60m"
 // init / step_update / result 事件出。-p 在这种输入格式下会被丢掉，所以提示词只走 stdin。
 func NewAdapter() executor.Adapter {
 	return executor.NewStreamAdapter(executor.AdapterSpec{
-		DisplayName:      displayName,
-		SupportsThinking: true,
-		BuildInvocation:  buildInvocation,
+		DisplayName:       displayName,
+		SupportsThinking:  true,
+		PrepareInvocation: prepareThinkingInvocation,
+		BuildInvocation:   buildInvocation,
 		NewDecoder: func(name string) executor.Decoder {
 			return NewDecoder(name)
 		},
 	})
+}
+
+func prepareThinkingInvocation(ctx context.Context, opts executor.RunOptions, resumeSession string) (executor.Invocation, func(), error) {
+	if opts.ThinkingLevel == "" {
+		return buildInvocation(opts, resumeSession), nil, nil
+	}
+	model := strings.TrimSpace(opts.ModelProfile)
+	thinking, err := executor.ResolveModelThinking(ctx, executor.CLITypeAntigravity, model, opts.WorkDir, opts.ThinkingLevel)
+	if err != nil {
+		return executor.Invocation{}, nil, err
+	}
+	catalog := executor.GetCLIModelCatalog(ctx, executor.CLITypeAntigravity, opts.WorkDir, model, false)
+	model, err = modelForThinking(model, thinking.DefaultLevel, opts.ThinkingLevel, catalog.Options)
+	if err != nil {
+		return executor.Invocation{}, nil, err
+	}
+	opts.ModelProfile = model
+	return buildInvocation(opts, resumeSession), nil, nil
+}
+
+func modelForThinking(model, current, requested string, options []executor.CLIModelOption) (string, error) {
+	if requested == "" || current == "" || current == requested || !strings.HasSuffix(model, "-"+current) {
+		return model, nil
+	}
+	// agy 不接受带 medium 的模型再配 high；只切换到目录已核实的同系列档位版本。
+	target := strings.TrimSuffix(model, current) + requested
+	for _, option := range options {
+		if option.ID == target && option.Thinking.State == "fresh" &&
+			option.Thinking.Status == "supported" && option.Thinking.DefaultLevel == requested {
+			return option.ID, nil
+		}
+	}
+	return "", executor.ErrThinkingUnavailable
 }
 
 // buildInvocation 构造一次无头执行。

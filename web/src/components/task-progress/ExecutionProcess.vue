@@ -202,7 +202,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, h, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, h, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import {
   BulbOutlined,
   CheckCircleOutlined,
@@ -301,6 +301,7 @@ const liveSequences = ref(new Set<number>())
 const revealedKeys = ref(new Set<string>())
 // 执行过程的内容容器：只用来观察内容增长，自身已不再滚动
 const bodyRef = ref<HTMLElement>()
+let disposed = false
 
 // 真正承接滚动的外层会话区。执行过程取消了固定高度与内部滚动，
 // 跟随必须作用在外层容器上，否则内容增高时用户得手动往下拖。
@@ -332,25 +333,19 @@ function bindScrollContainer() {
   scrollContainer?.removeEventListener('scroll', handleContainerScroll)
   scrollContainer = resolveScrollContainer()
   scrollContainer?.addEventListener('scroll', handleContainerScroll, { passive: true })
-}
-
-async function scrollToLatest() {
-  await nextTick()
-  const el = scrollContainer
-  if (el) el.scrollTop = el.scrollHeight
+  handleContainerScroll()
 }
 
 // 打字机逐字增高内容时滚动容器自身尺寸不变，ResizeObserver 观察不到，
 // 只能盯内容树的变更；rAF 节流是必须的，否则逐字更新会让滚动任务每帧排队。
-let scrollScheduled = false
+let scrollFrame = 0
 
 function scheduleFollowScroll() {
-  if (scrollScheduled) return
-  scrollScheduled = true
-  requestAnimationFrame(() => {
-    scrollScheduled = false
+  if (scrollFrame || !followTail) return
+  scrollFrame = requestAnimationFrame(() => {
+    scrollFrame = 0
     const el = scrollContainer
-    if (el && running.value && followTail) el.scrollTop = el.scrollHeight
+    if (el && running.value && expanded.value && followTail) el.scrollTop = el.scrollHeight
   })
 }
 
@@ -366,8 +361,13 @@ watch(bodyRef, (el) => {
 })
 
 onBeforeUnmount(() => {
+  disposed = true
   unsubscribeEvents()
+  if (!props.readOnly && props.sessionUuid) {
+    wsSend({ type: 'executor.unsubscribe', session_uuid: props.sessionUuid })
+  }
   clearTimeout(collapseTimer)
+  cancelAnimationFrame(scrollFrame)
   bodyObserver?.disconnect()
   scrollContainer?.removeEventListener('scroll', handleContainerScroll)
 })
@@ -659,6 +659,8 @@ function isRowOpen(row: ProcessRow) {
 }
 
 function toggleRow(row: ProcessRow) {
+  // 手动展开是在回看已有内容，关闭时也结束本行动画，避免再次展开重播。
+  markRevealed(row.key)
   const next = new Map(rowOverrides.value)
   next.set(row.key, !isRowOpen(row))
   rowOverrides.value = next
@@ -682,13 +684,6 @@ watch(rows, () => {
   scheduleFollowScroll()
 })
 
-// 展开执行过程时直接落在最新一条上，而不是从头开始读
-watch(expanded, (value) => {
-  if (!value) return
-  followTail = true
-  if (running.value) void scrollToLatest()
-})
-
 // Only a completed HTTP replay proves that all persisted events up to this
 // cursor were received. A higher live event must not skip an unfinished replay.
 let historyCursor = 0
@@ -703,7 +698,7 @@ async function loadHistory() {
       `/tasks/sessions/${encodeURIComponent(sessionUuid)}/events`,
       { after_sequence: historyCursor },
     )
-    if (sessionUuid !== props.sessionUuid) return
+    if (disposed || sessionUuid !== props.sessionUuid) return
     if (result.activity?.kind) activityHint.value = result.activity.kind
     mergeEvents(result.items || [])
     historyCursor = (result.items || []).reduce((cursor, item) => Math.max(cursor, item.sequence), historyCursor)
@@ -728,7 +723,10 @@ function mergeEvents(incoming: SessionEventItem[], live = false) {
     }
   }
   // 只有实时推送的事件才算「正在生成」；历史补拉的内容直接整段渲染
-  if (live && fresh.length) {
+  if (
+    live && historyLoaded.value && expanded.value &&
+    bodyRef.value?.getClientRects().length && fresh.length
+  ) {
     const next = new Set(liveSequences.value)
     for (const sequence of fresh) next.add(sequence)
     liveSequences.value = next
@@ -736,8 +734,13 @@ function mergeEvents(incoming: SessionEventItem[], live = false) {
   events.value = merged
 }
 
-function subscribe() {
-  if (!props.sessionUuid) return
+async function subscribe() {
+  const sessionUuid = props.sessionUuid
+  if (!sessionUuid || props.readOnly) return
+  // WS 订阅会补发历史；先建立 HTTP 游标，避免补发内容被误判为新输出。
+  historyLoaded.value = false
+  await loadHistory()
+  if (disposed || sessionUuid !== props.sessionUuid || !running.value) return
   wsSend({
     type: 'executor.subscribe',
     task_uuid: props.taskUuid,
@@ -753,11 +756,13 @@ watch(() => props.sessionUuid, (sessionUuid, previous) => {
   historyLoaded.value = false
   events.value = []
   liveSequences.value = new Set()
+  revealedKeys.value = new Set()
+  rowOverrides.value = new Map()
   fullBySequence.value = new Map()
   activityHint.value = ''
   if (sessionUuid && !props.readOnly) {
-    void loadHistory()
-    if (running.value) subscribe()
+    if (running.value) void subscribe()
+    else void loadHistory()
   }
 })
 
@@ -766,8 +771,7 @@ const connected = useLocalWSStatus()
 // 断线重连后 WS 订阅会丢失，恢复连接时重新订阅并补拉历史
 watch(connected, (value) => {
   if (!props.readOnly && value && running.value) {
-    subscribe()
-    void loadHistory()
+    void subscribe()
   }
 })
 
@@ -776,10 +780,8 @@ watch(
   (status, prev) => {
     if (props.readOnly) return
     if (status === 'created' || status === 'running') {
-      expanded.value = true
-      followTail = true
-      void loadHistory()
-      subscribe()
+      if (prev !== 'created' && prev !== 'running') expanded.value = true
+      void subscribe()
     }
     // 运行结束后自动收起，让最终输出成为焦点
     if (prev === 'running' && status && status !== 'running' && status !== 'created') {
@@ -787,7 +789,7 @@ watch(
       wsSend({ type: 'executor.unsubscribe', session_uuid: props.sessionUuid })
       clearTimeout(collapseTimer)
       collapseTimer = setTimeout(() => {
-        expanded.value = false
+        if (followTail) expanded.value = false
       }, 1000)
     }
   },
@@ -847,6 +849,7 @@ const unsubscribeEvents = onMessage('executor.event', (payload: Record<string, u
 })
 
 function toggleExpanded() {
+  liveSequences.value = new Set()
   expanded.value = !expanded.value
   // 首次展开时补拉历史事件（旧会话可能未订阅过实时流）
   if (!props.readOnly && expanded.value && !historyLoaded.value) {

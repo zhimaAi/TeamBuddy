@@ -69,7 +69,7 @@ function registerDialogIPC(allowedOrigins, getConnection) {
       locale: payload && payload.locale,
     })
     const realPath = await fs.realpath(located)
-    if (realPath !== located) throw new Error('Located file path is invalid')
+    if (path.relative(realPath, located) !== '') throw new Error('Located file path is invalid')
     const info = await fs.stat(realPath)
     if (!info.isFile()) throw new Error('Requested path is not a file')
     shell.showItemInFolder(realPath)

@@ -169,11 +169,11 @@
           :placeholder="form.cli_type ? t('agents.selectModel') : t('agents.selectCliFirst')"
         >
           <a-select-option
-            v-for="model in modelOptions"
-            :key="model"
-            :value="model"
+            v-for="model in modelChoices"
+            :key="model.value"
+            :value="model.value"
           >
-            {{ model }}
+            {{ model.label }}
           </a-select-option>
         </a-select>
       </a-form-item>
@@ -205,6 +205,7 @@ import apiClient from '@/api/client'
 import CliThinkingSelect from '@/components/CliThinkingSelect.vue'
 import { useCliThinkingSelection } from '@/composables/useCliThinkingSelection'
 import { useCLIModelCatalogStore } from '@/stores/cli-models'
+import { cliModelChoices } from '@/utils/cliModelOptions'
 import agentCliReloadIcon from '@/assets/icons/agent-cli-reload.svg'
 import projectModalCameraIcon from '@/assets/icons/project-modal-camera.svg'
 import { ICON_FILE_ACCEPT, useIconFile } from '@/composables/useIconFile'
@@ -254,6 +255,7 @@ const form = reactive({
   thinking_level: '',
 })
 const { resetThinkingDrafts } = useCliThinkingSelection(() => form.cli_type, () => form.model, toRef(form, 'thinking_level'))
+const modelChoices = computed(() => cliModelChoices(form.cli_type, modelOptions.value, form.model))
 const { file: avatarFile, previewUrl, selectFile, reset: resetAvatarFile } = useIconFile()
 // 设计稿约束：Agent 头像大小不超过 100KB，比共享图标校验（2MB）更严格，仅作用于本弹窗
 const MAX_AVATAR_FILE_SIZE = 100 * 1024

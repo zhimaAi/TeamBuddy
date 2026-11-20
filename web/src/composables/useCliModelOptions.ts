@@ -2,6 +2,7 @@ import { computed, ref, toValue, watch, type MaybeRefOrGetter } from 'vue'
 import apiClient from '@/api/client'
 import { useCLIModelCatalogStore, type CLIModelContext } from '@/stores/cli-models'
 import type { DiscoveredCLI } from '@/views/agents/components/agentPipeline'
+import { cliModelChoices, cliModelFamily } from '@/utils/cliModelOptions'
 
 export function useCliModelOptions(retainModelsOnEmpty = true, scope?: MaybeRefOrGetter<CLIModelContext>) {
   const directories = useCLIModelCatalogStore()
@@ -18,8 +19,10 @@ export function useCliModelOptions(retainModelsOnEmpty = true, scope?: MaybeRefO
     }
     return cache
   })
-  const modelCounts = computed(() => Object.fromEntries(Object.entries(modelCache.value).map(([cli, models]) => [cli, models.length])))
+  const modelCounts = computed(() => Object.fromEntries(Object.entries(modelCache.value).map(([cli, models]) => [cli, cliModelChoices(cli, models).length])))
   const modelOptions = computed(() => modelCache.value[activeCli.value] || [])
+  const modelChoices = (selected = '') => cliModelChoices(activeCli.value, modelOptions.value, selected)
+  const modelLabel = (model: string) => cliModelFamily(activeCli.value, model)
   const modelLoading = computed(() => !!activeCli.value && !modelOptions.value.length && directories.isLoading(activeCli.value, context()))
 
   async function loadCliOptions(refresh = false) {
@@ -65,7 +68,7 @@ export function useCliModelOptions(retainModelsOnEmpty = true, scope?: MaybeRefO
 
   return {
     cliLoading, cliOptions, loadCliOptions, loadModelOptions,
-    modelCounts, modelLoading, modelOptions, prefetchModelCounts,
+    modelCounts, modelLoading, modelOptions, modelChoices, modelLabel, prefetchModelCounts,
     resetModelOptions: () => { activeCli.value = '' },
   }
 }

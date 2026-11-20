@@ -776,6 +776,33 @@
     "description": "Vibe Coding 提示词中的产出目录约束。TaskDir 是任务产出目录（task_dir）绝对路径；客户端只同步该目录内的文件，段落为空表示任务没有产出目录。",
     "other": "产出文档目录（task_dir）：{{.TaskDir}}\n\n需求中没有明确指定存放位置的产出文档（设计文档、方案、报告、分析结论、说明等），一律写入该目录，可在其中按主题或步骤自建子目录；需求已明确指定位置的按其指定。不要写入项目工作目录或其他位置：客户端只同步该目录内的文件，写到别处的产出不会上报，客户端也看不到。"
   },
+  "codex_reply_hidden": {
+    "other": "隐私内容已隐藏"
+  },
+  "codex_reply_unavailable": {
+    "other": "无法完整读取这组问答，内容已隐藏"
+  },
+  "codex_reply_key_error": {
+    "other": "无法保护 Codex 会话，未发送正文。请检查本机密钥存储后重试。"
+  },
+  "codex_reply_size_error": {
+    "other": "加密后的 Codex 会话超过上报大小限制，未发送正文。"
+  },
+  "codex_hook_unavailable": {
+    "other": "TeamBuddy 暂未同步本轮消息。已保存的记录将在本会话下次回调时重试；请检查本地服务及任务绑定。"
+  },
+  "codex_hook_pending": {
+    "other": "TeamBuddy 仍有消息待传；本会话下次回调会继续同步。"
+  },
+  "codex_hook_incomplete": {
+    "other": "TeamBuddy 的本地回传记录有缺口，部分内容未能保存。可以继续工作，请核对任务历史。"
+  },
+  "localserver_codex_hooks_task_prompt": {
+    "other": "请使用 [$teambuddy]({{.SkillPath}}) 读取 TeamBuddy 本地任务和历史，并按实际进展更新业务状态。\n\n任务 UUID：{{.TaskUUID}}\n工具类型：{{.Tool}}\n执行代次（execution_index）：{{.ExecutionIndex}}\n消息回传：native_hooks\n\n{{.OutputDirSection}}\n\n先核对任务工具及原执行代次，再处理任务。会话绑定、用户消息和最终答复由 TeamBuddy 原生 Hooks 唯一负责；Skill 只读取任务、历史和更新业务状态，不重复绑定或写动态。真实会话 ID 使用 Hook 注入的 thread_id。Hook 未注入 ID 或同步不可用时继续安全处理业务，明确说明同步状态，不猜测 ID、不扫描会话、不刷新执行代次。Stop 不表示任务完成。"
+  },
+  "localserver_codex_hooks_activity_owned": {
+    "other": "此会话由原生 Hooks 同步消息，请勿重复上报动态"
+  },
   "localserver_codex_task_prompt": {
     "description": "SkillPath, TaskUUID, Tool and ExecutionIndex identify the managed TeamBuddy task execution.",
     "other": "请通过当前工具的原生 Skill 加载机制使用 [$teambuddy]({{.SkillPath}}) 处理 TeamBuddy 本地任务。\n\n任务 UUID：{{.TaskUUID}}\n\n工具类型：{{.Tool}}\n\n执行代次（execution_index）：{{.ExecutionIndex}}\n\n{{.OutputDirSection}}\n\n先核对任务的执行代次与上述值一致，再读取任务和历史动态，再按 Skill 指引取得并绑定当前真实会话 ID；取不到 ID 时不要绑定，省略 thread_id，仍上报用户消息、最终答复和状态，不要编造 ID。绑定请求的 type 必须等于工具类型。Codex 的 thread_id 只读取环境变量 CODEX_THREAD_ID（Windows 用 $env:CODEX_THREAD_ID）；这是当前会话提供的线程 ID，不要猜测或扫描历史会话。Claude Code、CodeBuddy、Qoder 使用当前会话 ID；Pi 从当前原生 shell 读取 PI_SESSION_ID。若取不到真实会话 ID，则不要绑定，省略 thread_id，仍上报用户消息、最终答复和状态；继续处理原业务请求。\n\n本会话持续绑定该任务；后续每轮均按 Skill 规则同步用户消息、最终答复和任务状态，直到会话结束。"

@@ -29,6 +29,9 @@
   "markdown": {
     "empty": "No Markdown content",
     "attachmentLoadFailed": "Attachment failed to load",
+    "imageLoading": "Loading image…",
+    "imageUnavailable": "Image unavailable",
+    "previewAttachment": "Preview image: {name}",
     "attachmentDownloadFailed": "Attachment download failed",
     "revealInFolder": "Show in folder",
     "revealFailed": "Unable to show this file in its folder",
@@ -198,6 +201,8 @@
     "composeFilePath": "Compose file path"
   },
   "taskProgress": {
+    "codexAnswered": "Answered",
+    "codexHidden": "Private content hidden",
     "running": "Running, please wait…",
     "noResult": "This run returned no result",
     "pastedImage": "Pasted image"

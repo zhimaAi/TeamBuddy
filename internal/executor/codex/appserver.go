@@ -119,6 +119,7 @@ func startAppServer(ctx context.Context, execPath, workDir string) (*AppServerSe
 		return nil, err
 	}
 
+	cmd.Cancel = sync.OnceValue(func() error { return executor.StopProbeProcessTree(cmd.Process.Pid) })
 	cmd.Dir = workDir
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
@@ -182,7 +183,7 @@ func (s *AppServerSession) Close() error {
 		_ = s.stdin.Close()
 		_ = s.stdout.Close()
 		<-s.readDone
-		terminateErr := terminateProcessTreeForPID(s.cmd.Process.Pid)
+		terminateErr := s.cmd.Cancel()
 		s.closeErr = s.cmd.Wait()
 		if terminateErr != nil {
 			s.closeErr = terminateErr

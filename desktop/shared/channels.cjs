@@ -5,6 +5,7 @@ module.exports = Object.freeze({
   OPEN_DIRECTORY: 'desktop:open-directory',
   REVEAL_TASK_FILE: 'desktop:reveal-task-file',
   OPEN_TERMINAL: 'desktop:open-terminal',
+  CODEX_REPORTING: 'desktop:codex-reporting',
   OPEN_CODEX_THREAD: 'desktop:open-codex-thread',
   OPEN_QODER_IDE: 'desktop:open-qoder-ide',
   OPEN_VIBE_CLI: 'desktop:open-vibe-cli',

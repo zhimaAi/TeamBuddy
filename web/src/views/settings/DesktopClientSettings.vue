@@ -10,6 +10,7 @@ import {
 } from '@/composables/useDesktop'
 import { apiClient, ApiError } from '@/api/client'
 import { useAppI18n } from '@/i18n'
+import CodexReportingSettings from './CodexReportingSettings.vue'
 import { useUpdateStore } from '@/stores/update'
 
 const { t } = useAppI18n()
@@ -241,6 +242,7 @@ async function manualCheck() {
       </a-spin>
     </a-card>
 
+    <CodexReportingSettings class="settings-card" />
     <a-card :title="t('settings.workspaceTitle')" :bordered="true" class="settings-card">
       <a-alert
         v-if="workspaceError"

@@ -61,6 +61,13 @@ func TerminateProcessTree(pgid int) error {
 	return terminateProcessGroup(pgid, terminateGracePeriod, terminateKillWait)
 }
 
+// StopProbeProcessTree ends a read-only probe after its RPC pipes have closed.
+// The caller reaps the root with Wait; polling an unreaped PID for seconds on
+// the interactive launch path adds latency without protecting user work.
+func StopProbeProcessTree(pgid int) error {
+	return terminateProcessGroup(pgid, 100*time.Millisecond, 0)
+}
+
 func terminateProcessGroup(pgid int, termGrace, killWait time.Duration) error {
 	if pgid <= 0 {
 		return nil

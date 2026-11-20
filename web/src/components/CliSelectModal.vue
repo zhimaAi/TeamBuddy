@@ -6,6 +6,7 @@ import { useCLIModelCatalogStore } from '@/stores/cli-models'
 import { message } from 'ant-design-vue'
 import apiClient from '@/api/client'
 import { useAppI18n } from '@/i18n'
+import { cliModelChoices } from '@/utils/cliModelOptions'
 
 const { t } = useAppI18n()
 const directories = useCLIModelCatalogStore()
@@ -73,11 +74,12 @@ function saveCustomModel(cliType: string, model: string) {
 }
 
 /** Merge freshly probed models + locally recorded custom models */
-function mergedModels(probed: string[]): { name: string; custom: boolean }[] {
-  const result: { name: string; custom: boolean }[] = probed.map(m => ({ name: m, custom: false }))
+function mergedModels(probed: string[]): { name: string; label: string; custom: boolean }[] {
+  const result = cliModelChoices(selectedType.value, probed, probed.includes(selectedModel.value) ? selectedModel.value : '')
+    .map(model => ({ name: model.value, label: model.label, custom: false }))
   for (const m of loadCustomModels(selectedType.value)) {
     if (!probed.includes(m)) {
-      result.push({ name: m, custom: true })
+      result.push({ name: m, label: m, custom: true })
     }
   }
   return result
@@ -222,7 +224,7 @@ function handleCancel() {
               :filter-option="(input: string, option: any) => (option?.value || '').toLowerCase().includes(input.toLowerCase())"
             >
               <a-select-option v-for="m in mergedModels(models)" :key="m.name" :value="m.name">
-                {{ m.name }}
+                {{ m.label }}
                 <a-tag v-if="m.custom" color="blue" size="small" style="margin-left: 6px">{{ t('components.cliSelect.custom') }}</a-tag>
               </a-select-option>
             </a-select>
