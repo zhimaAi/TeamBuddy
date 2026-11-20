@@ -44,7 +44,7 @@ async function locateTaskOutputFile(input) {
         'X-GoTeams-Api-Token': apiToken,
         'X-GoTeams-Lang': normalizeLocale(locale),
       },
-      body: JSON.stringify({ path: reference, session_uuid: typeof sessionUuid === 'string' ? sessionUuid : '' }),
+      body: JSON.stringify({ path: reference, literal: true, session_uuid: typeof sessionUuid === 'string' ? sessionUuid : '' }),
       signal: controller.signal,
     })
     const text = await response.text()

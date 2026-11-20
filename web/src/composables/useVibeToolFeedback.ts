@@ -1,9 +1,31 @@
-import { message, Modal } from 'ant-design-vue'
+import { h } from 'vue'
+import { Button, message, Modal } from 'ant-design-vue'
 import { t } from '@/i18n'
 import type { VibeToolOpenResult } from '@/composables/useTaskVibeTool'
 
 // 各创建、指派和详情入口共享反馈顺序，避免工具分支在页面中扩散。
 export function showVibeToolOpenResult(result: VibeToolOpenResult, toolName: string): void {
+  if (result.cancelled) return
+  if (result.setup && result.retry) {
+    const retry = result.retry
+    const review = result.review
+    Modal.confirm({
+      title: t('workflows.task.detail.codexSetupTitle'),
+      content: h('div', [
+        h('p', t(`workflows.task.detail.codexSetup.${result.setup}`)),
+        ...(review ? [h(Button, { onClick: () => void review().catch(error => message.error(error.message)) },
+          () => t('workflows.task.detail.codexReview'))] : []),
+      ]),
+      cancelText: t('workflows.task.detail.qoderIDELater'),
+      okText: t('workflows.task.detail.codexRecheck'),
+      maskClosable: false,
+      async onOk() {
+        try { showVibeToolOpenResult(await retry(), toolName) }
+        catch (error) { message.error(error instanceof Error ? error.message : t('workflows.task.detail.toolOpenFailed', { tool: toolName })) }
+      },
+    })
+    return
+  }
   if (result.requiresIDEExit && result.retry) {
     const retry = result.retry
     let retrying = false
@@ -48,10 +70,10 @@ export function showVibeToolOpenResult(result: VibeToolOpenResult, toolName: str
       keyboard: false,
       maskClosable: false,
     })
+  } else if (result.error && result.copied) {
+    message.warning(result.error.message + ' ' + t(result.guidanceKey ?? 'workflows.task.detail.qoderIDEPromptCopied'))
   } else if (result.guidanceKey) message.info(t(result.guidanceKey))
-  else if (result.error && result.copied) {
-    message.warning(result.error.message + ' ' + t('workflows.task.detail.qoderIDEPromptCopied'))
-  } else if (result.opened) message.success(t('workflows.task.detail.toolOpened', { tool: toolName }))
+  else if (result.opened) message.success(t('workflows.task.detail.toolOpened', { tool: toolName }))
   else if (result.copied) message.warning(t('workflows.task.detail.toolCopiedFallback', { tool: toolName }))
   else if (result.error) message.error(result.error.message)
   else message.warning(t('workflows.task.detail.toolUnavailable', { tool: toolName }))

@@ -10,7 +10,7 @@ const runFile = promisify(execFile)
 /**
  * 开发态 go run 的临时程序不能写入持久 Hook。编译独立回调程序到宿主
  * 用户数据目录，发布态则继续使用打包 sidecar；不改变正在运行的服务。
- * @param {{isPackaged: boolean, resourcesPath: string, repoRoot: string, stateRoot: string, platform: string, signal?: AbortSignal}} options
+ * @param {{isPackaged: boolean, resourcesPath: string, repoRoot: string, stateRoot: string, platform: string, codex?: boolean, signal?: AbortSignal}} options
  * @param {(file: string, args: string[], options: object) => Promise<{stdout?: string | Buffer}>} [run]
  */
 async function resolveQoderBackend(options, run = runFile) {
@@ -18,7 +18,7 @@ async function resolveQoderBackend(options, run = runFile) {
   const executable = platform === 'win32' ? 'client.exe' : 'client'
   if (isPackaged) return path.join(resourcesPath, 'backend', executable)
   if (!path.isAbsolute(repoRoot) || !path.isAbsolute(stateRoot)) throw new Error('backend_unavailable')
-  const dir = path.join(stateRoot, 'qoder-backend')
+  const dir = path.join(stateRoot, options.codex ? 'codex-backend' : 'qoder-backend')
   await fs.mkdir(dir, { recursive: true, mode: 0o700 })
   const target = path.join(dir, executable)
   const cacheFile = path.join(dir, 'build-cache.json')

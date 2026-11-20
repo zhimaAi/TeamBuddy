@@ -16,6 +16,8 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 
+	"goteams-client/internal/codexhook"
+	"goteams-client/internal/codexreply"
 	"goteams-client/internal/executor"
 	"goteams-client/internal/i18n"
 	builtinskills "goteams-client/internal/skills"
@@ -42,17 +44,53 @@ type taskSkillHistoryItem struct {
 // teambuddy Skill. The route group applies the dedicated loopback guard.
 func (h *TasksHandler) RegisterSkillRoutes(r *gin.RouterGroup) {
 	r.GET("/tasks/:uuid", h.getTaskForSkill)
+	r.GET("/tasks/:uuid/binding-context", h.getTaskBindingContext)
 	r.PUT("/tasks/:uuid/status", h.updateTaskStatusFromSkill)
 	r.PUT("/tasks/:uuid/vibe-session", h.updateVibeCodingSessionFromSkill)
 	r.POST("/tasks/:uuid/activities", h.createSkillActivity)
 }
 
 type vibeCodingSession struct {
-	Type        string `json:"type"`
-	ToolName    string `json:"tool_name,omitempty"`
-	ThreadID    string `json:"thread_id"`
-	BindingKind string `json:"binding_kind,omitempty"`
-	BindingKey  string `json:"binding_key,omitempty"`
+	ExplicitPrivacy bool   `json:"explicit_privacy,omitempty"`
+	Type            string `json:"type"`
+	ToolName        string `json:"tool_name,omitempty"`
+	ThreadID        string `json:"thread_id"`
+	BindingKind     string `json:"binding_kind,omitempty"`
+	BindingKey      string `json:"binding_key,omitempty"`
+	ReportingOwner  string `json:"reporting_owner,omitempty"`
+}
+
+// getTaskBindingContext exposes only bounded execution metadata, never history.
+func (h *TasksHandler) getTaskBindingContext(c *gin.Context) {
+	id, ok := validateTaskSkillUUID(c)
+	if !ok {
+		return
+	}
+	var mode, tool, workDir, boundJSON string
+	var index int
+	err := h.taskDB().QueryRowContext(c.Request.Context(), `SELECT execution_mode, execution_tool, work_dir, execution_index, vibe_coding_session_json FROM gt_tasks WHERE uuid=?`, id).Scan(&mode, &tool, &workDir, &index, &boundJSON)
+	if err == sql.ErrNoRows {
+		i18n.Error(c, http.StatusNotFound, "localserver_task_not_found", "task_not_found")
+		return
+	}
+	if err != nil {
+		i18n.LocalServerError(c, http.StatusInternalServerError, err)
+		return
+	}
+	if mode != taskruntime.ExecutionModeVibeCoding || tool != taskruntime.ExecutionToolCodex {
+		i18n.Error(c, http.StatusConflict, "localserver_task_not_codex", "task_not_codex")
+		return
+	}
+	dirs, err := h.loadTaskWorkDirs(id, workDir)
+	if err != nil {
+		i18n.LocalServerError(c, http.StatusInternalServerError, err)
+		return
+	}
+	task := gin.H{"execution_mode": mode, "execution_tool": tool, "execution_index": index, "work_dirs": dirs}
+	if bound, ok := validVibeCodingSession(boundJSON, tool); ok {
+		task["bound_thread"], task["reporting_owner"] = bound.ThreadID, bound.ReportingOwner
+	}
+	c.JSON(http.StatusOK, gin.H{"task": task})
 }
 
 func (h *TasksHandler) getCodexCapability(c *gin.Context) {
@@ -120,12 +158,12 @@ func (h *TasksHandler) getTaskForSkill(c *gin.Context) {
 	if !ok {
 		return
 	}
-	var sourceType, title, description, status, legacyWorkDir, taskDir, executionMode, executionTool string
+	var sourceType, title, description, status, legacyWorkDir, taskDir, executionMode, executionTool, bindingJSON string
 	var createdAt, updatedAt int64
 	var executionIndex int
 	err := h.taskDB().QueryRowContext(c.Request.Context(), `SELECT source_type, title, content_snapshot, status, work_dir,
-		COALESCE(task_dir,''), execution_mode, execution_tool, created_at, updated_at, execution_index FROM gt_tasks WHERE uuid=?`, taskUUID).Scan(
-		&sourceType, &title, &description, &status, &legacyWorkDir, &taskDir, &executionMode, &executionTool, &createdAt, &updatedAt, &executionIndex,
+		COALESCE(task_dir,''), execution_mode, execution_tool, created_at, updated_at, execution_index,vibe_coding_session_json FROM gt_tasks WHERE uuid=?`, taskUUID).Scan(
+		&sourceType, &title, &description, &status, &legacyWorkDir, &taskDir, &executionMode, &executionTool, &createdAt, &updatedAt, &executionIndex, &bindingJSON,
 	)
 	if err == sql.ErrNoRows {
 		i18n.Error(c, http.StatusNotFound, "localserver_task_not_found", "task_not_found")
@@ -144,14 +182,19 @@ func (h *TasksHandler) getTaskForSkill(c *gin.Context) {
 		i18n.LocalServerError(c, http.StatusInternalServerError, err)
 		return
 	}
-	history, err := h.loadTaskSkillHistory(c.Request.Context(), taskUUID)
+	history, err := h.loadTaskSkillHistory(c.Request.Context(), taskUUID, codexreply.ExplicitThread(bindingJSON))
 	if err != nil {
 		i18n.LocalServerError(c, http.StatusInternalServerError, err)
 		return
 	}
+	nativeThread := ""
+	if b, ok := validVibeCodingSession(bindingJSON, executionTool); ok && b.ReportingOwner == "hooks" {
+		nativeThread = b.ThreadID
+	}
 	c.JSON(http.StatusOK, gin.H{
 		"task": gin.H{
-			"uuid": taskUUID, "source_type": sourceType, "title": title, "description": description,
+			"native_hook_thread": nativeThread,
+			"uuid":               taskUUID, "source_type": sourceType, "title": title, "description": description,
 			"status": taskSkillPublicStatus(status), "execution_mode": executionMode, "execution_tool": executionTool,
 			"work_dirs": workDirs, "task_dir": taskDir,
 			"created_at": createdAt, "updated_at": updatedAt, "execution_index": executionIndex,
@@ -202,6 +245,11 @@ func (h *TasksHandler) getCodexContext(c *gin.Context) {
 	skillPath := filepath.Join(skillRoot, builtinskills.TaskSkillName, "SKILL.md")
 	linkPath := encodeMarkdownLocalPath(skillPath)
 	promptKey := "localserver_codex_task_prompt"
+	boundSession, hasSession := validVibeCodingSession(sessionJSON, executionTool)
+	nativeHooks := executionTool == taskruntime.ExecutionToolCodex && (!hasSession || boundSession.ReportingOwner == "hooks")
+	if nativeHooks {
+		promptKey = "localserver_codex_hooks_task_prompt"
+	}
 	if executionTool == taskruntime.ExecutionToolGeneric {
 		promptKey = "localserver_generic_task_prompt"
 	}
@@ -218,6 +266,13 @@ func (h *TasksHandler) getCodexContext(c *gin.Context) {
 	response := gin.H{
 		"task_uuid": taskUUID, "work_dir": workDirs[0], "prompt": prompt,
 		"tool": executionTool, "launch": vibeLaunchKind(executionTool), "model_name": model,
+	}
+	if nativeHooks {
+		if hasSession {
+			response["delivery_warning"] = codexhook.DeliveryWarning(taskUUID, boundSession.ThreadID, executionIndex)
+		}
+		response["reporting_owner"] = "hooks"
+		response["execution_index"] = executionIndex
 	}
 	if vibeLaunchKind(executionTool) == "terminal" {
 		execPath, err := executor.ResolveVibeCodingExecutable(executionTool)
@@ -250,9 +305,14 @@ func (h *TasksHandler) updateVibeCodingSessionFromSkill(c *gin.Context) {
 	if !decodeTaskSkillJSON(c, &body) {
 		return
 	}
+	body.ExplicitPrivacy = false // Assigned from the verified local claim, never by the caller.
 	body.Type = strings.ToLower(strings.TrimSpace(body.Type))
 	body.ThreadID = strings.TrimSpace(body.ThreadID)
 	body.ToolName = strings.TrimSpace(body.ToolName)
+	if body.ReportingOwner != "" && (body.Type != taskruntime.ExecutionToolCodex || body.ReportingOwner != "hooks") {
+		i18n.Error(c, http.StatusBadRequest, "localserver_vibe_session_type_invalid", "vibe_session_type_invalid")
+		return
+	}
 	if !validGenericToolName(body.ToolName) {
 		i18n.Error(c, http.StatusBadRequest, "common_request_invalid", "request_invalid")
 		return
@@ -335,13 +395,39 @@ func (h *TasksHandler) updateVibeCodingSessionFromSkill(c *gin.Context) {
 		return
 	}
 	body.ThreadID = normalizedThreadID
-	if bound, ok := validVibeCodingSession(boundJSON, body.Type); ok && bound.ThreadID != body.ThreadID {
-		i18n.Error(c, http.StatusConflict, "localserver_vibe_session_stale", "vibe_session_stale")
-		return
+	if bound, ok := validVibeCodingSession(boundJSON, body.Type); ok {
+		if bound.ThreadID != body.ThreadID || body.ReportingOwner != "" && body.ReportingOwner != bound.ReportingOwner {
+			i18n.Error(c, http.StatusConflict, "localserver_vibe_session_stale", "vibe_session_stale")
+			return
+		}
+		// An idempotent legacy bind must not remove the native callback owner.
+		body.ReportingOwner = bound.ReportingOwner
+		body.ExplicitPrivacy = bound.ExplicitPrivacy
 	}
 	// Remote dispatch may resume this exact binding. Its handshake is
 	// idempotent; only a new binding must wait for remote execution to settle.
 	if _, bound := validVibeCodingSession(boundJSON, body.Type); !bound {
+		if body.Type == "codex" {
+			claimed, explicit := codexhook.ClaimedSession(taskUUID, body.ThreadID, executionIndex)
+			if body.ReportingOwner != "hooks" || !claimed {
+				i18n.Error(c, 409, "localserver_vibe_session_stale", "vibe_session_stale")
+				return
+			}
+			var taken, hasRecords bool
+			err = tx.QueryRowContext(c.Request.Context(), `SELECT
+                EXISTS(SELECT 1 FROM gt_tasks WHERE uuid<>? AND execution_mode='vibe_coding' AND execution_tool='codex' AND json_extract(CASE WHEN json_valid(vibe_coding_session_json) THEN vibe_coding_session_json END,'$.thread_id')=?),
+                EXISTS(SELECT 1 FROM gt_task_progress WHERE task_uuid=? AND external_session_id=?)`, taskUUID, body.ThreadID, taskUUID, body.ThreadID).Scan(&taken, &hasRecords)
+			if err != nil {
+				i18n.LocalServerError(c, 500, err)
+				return
+			}
+			// A recovered binding must not reclassify already recorded messages.
+			body.ExplicitPrivacy = explicit && !hasRecords && (strings.TrimSpace(boundJSON) == "" || strings.TrimSpace(boundJSON) == "{}")
+			if taken {
+				i18n.Error(c, 409, "localserver_vibe_session_stale", "vibe_session_stale")
+				return
+			}
+		}
 		status, err := remoteExecutionBlock(c.Request.Context(), tx, taskUUID)
 		if err != nil {
 			i18n.LocalServerError(c, http.StatusInternalServerError, err)
@@ -420,7 +506,13 @@ func vibeOutputDirSection(c *gin.Context, taskDir string) string {
 	if taskDir == "" {
 		return ""
 	}
-	return i18n.Format(c, "localserver_vibe_output_dir", i18n.Params{"TaskDir": taskDir})
+	// Markdown interprets Windows' \\. as an escape outside code spans. Choose
+	// a delimiter absent from the path, including paths containing backticks.
+	delimiter := "`"
+	for strings.Contains(taskDir, delimiter) {
+		delimiter += "`"
+	}
+	return i18n.Format(c, "localserver_vibe_output_dir", i18n.Params{"TaskDir": delimiter + " " + taskDir + " " + delimiter})
 }
 
 // 工具名称仅作展示，不能参与工具路由、绑定校验或外部应用启动。
@@ -594,6 +686,10 @@ func (h *TasksHandler) updateTaskStatusFromSkill(c *gin.Context) {
 		return
 	}
 	executionTool = strings.ToLower(strings.TrimSpace(executionTool))
+	if bound, ok := validVibeCodingSession(boundJSON, executionTool); executionTool == taskruntime.ExecutionToolCodex && (!ok || bound.ReportingOwner == "hooks" && strings.TrimSpace(body.ThreadID) == "") {
+		i18n.Error(c, http.StatusConflict, "localserver_vibe_session_stale", "vibe_session_stale")
+		return
+	}
 	body.ThreadID = resolveReportedThreadID(boundJSON, executionTool, body.ThreadID)
 	if body.ThreadID == "" && !taskruntime.RequiresVibeReportID(executionTool) {
 		tool := strings.ToLower(strings.TrimSpace(body.Tool))
@@ -657,6 +753,7 @@ func (h *TasksHandler) createSkillActivity(c *gin.Context) {
 	var body struct {
 		ExecutionIndex *int   `json:"execution_index"`
 		EventID        string `json:"event_id"`
+		Source         string `json:"source"`
 		Type           string `json:"type"`
 		Content        string `json:"content"`
 		Tool           string `json:"tool"`
@@ -703,10 +800,10 @@ func (h *TasksHandler) createSkillActivity(c *gin.Context) {
 		return
 	}
 	defer tx.Rollback()
-	var executionMode, executionTool, boundJSON string
+	var executionMode, executionTool, boundJSON, attachmentTaskDir string
 	var executionIndex int
-	if err := tx.QueryRowContext(c.Request.Context(), `SELECT execution_mode, execution_tool, vibe_coding_session_json, execution_index FROM gt_tasks WHERE uuid=?`, taskUUID).
-		Scan(&executionMode, &executionTool, &boundJSON, &executionIndex); err == sql.ErrNoRows {
+	if err := tx.QueryRowContext(c.Request.Context(), `SELECT execution_mode, execution_tool, vibe_coding_session_json, execution_index, COALESCE(task_dir,'') FROM gt_tasks WHERE uuid=?`, taskUUID).
+		Scan(&executionMode, &executionTool, &boundJSON, &executionIndex, &attachmentTaskDir); err == sql.ErrNoRows {
 		i18n.Error(c, http.StatusNotFound, "localserver_task_not_found", "task_not_found")
 		return
 	} else if err != nil {
@@ -737,17 +834,59 @@ func (h *TasksHandler) createSkillActivity(c *gin.Context) {
 			return
 		}
 	}
+	bound, hasBinding := validVibeCodingSession(boundJSON, executionTool)
+	native := executionTool == taskruntime.ExecutionToolCodex && (!hasBinding || bound.ReportingOwner == "hooks")
+	if (body.Source == "hooks") != native || native && body.ThreadID == "" {
+		i18n.Error(c, http.StatusConflict, "localserver_codex_hooks_activity_owned", "native_activity_owned")
+		return
+	}
 	body.ThreadID = resolveReportedThreadID(boundJSON, executionTool, body.ThreadID)
 	if (taskruntime.RequiresVibeReportID(executionTool) || body.ThreadID != "") && !requireBoundSkillSession(c, boundJSON, executionTool, body.Tool, body.ThreadID) {
 		return
+	}
+	// Older callback binaries may replay an unsanitized spool with its original event ID.
+	if native {
+		if r := codexreply.Parse(prompt, bound.ExplicitPrivacy); r != nil {
+			prompt = r.Stored()
+			body.Content = prompt
+		}
+	}
+	// A pre-upgrade callback may have queued the final reply before masking its turn.
+	// For a replay, use the question preceding the original row, not today's last question.
+	privateResult := false
+	if native && !bound.ExplicitPrivacy && result != "" {
+		var preceding string
+		e := tx.QueryRowContext(c.Request.Context(), `SELECT q.user_prompt FROM gt_task_progress q WHERE q.task_uuid=? AND q.external_session_id=?
+          AND q.record_type='user_question' AND q.rowid<COALESCE((SELECT rowid FROM gt_task_progress WHERE uuid=?),9223372036854775807)
+          ORDER BY q.rowid DESC LIMIT 1`, taskUUID, body.ThreadID, progressUUID).Scan(&preceding)
+		if e != nil && e != sql.ErrNoRows {
+			i18n.LocalServerError(c, http.StatusInternalServerError, e)
+			return
+		}
+		privateResult = codexreply.Parse(preceding, false).Private()
+		if privateResult {
+			result = codexreply.HiddenResult
+			body.Content = result
+		}
 	}
 	var existingTask, existingTool, existingThread, existingPrompt, existingResult string
 	err = tx.QueryRowContext(c.Request.Context(), `SELECT task_uuid, cli_type, external_session_id, user_prompt, final_result
 		FROM gt_task_progress WHERE uuid=?`, progressUUID).Scan(&existingTask, &existingTool, &existingThread, &existingPrompt, &existingResult)
 	if err == nil {
+		if native {
+			if r := codexreply.Parse(existingPrompt, bound.ExplicitPrivacy); r != nil {
+				existingPrompt = r.Stored()
+			}
+		}
+		if privateResult && existingResult != "" {
+			existingResult = codexreply.HiddenResult
+		}
 		if existingTask != taskUUID || existingTool != body.Tool || existingThread != body.ThreadID || existingPrompt != prompt || existingResult != result {
 			i18n.Error(c, http.StatusConflict, "localserver_skill_event_conflict", "skill_event_conflict")
 			return
+		}
+		if native && prompt != "" {
+			h.importCodexImages(c.Request.Context(), attachmentTaskDir, progressUUID, prompt)
 		}
 		c.JSON(http.StatusOK, gin.H{"uuid": progressUUID, "duplicate": true})
 		return
@@ -755,6 +894,9 @@ func (h *TasksHandler) createSkillActivity(c *gin.Context) {
 	if err != sql.ErrNoRows {
 		i18n.LocalServerError(c, http.StatusInternalServerError, err)
 		return
+	}
+	if native && prompt != "" {
+		h.importCodexImages(c.Request.Context(), attachmentTaskDir, progressUUID, prompt)
 	}
 	if _, err := tx.ExecContext(c.Request.Context(), `INSERT INTO gt_task_progress
 		(uuid, task_uuid, task_pipeline_snapshot_uuid, task_step_uuid, session_uuid, record_type, user_prompt,
@@ -787,19 +929,28 @@ func (h *TasksHandler) createSkillActivity(c *gin.Context) {
 	})
 }
 
-func (h *TasksHandler) loadTaskSkillHistory(ctx context.Context, taskUUID string) ([]taskSkillHistoryItem, error) {
+func (h *TasksHandler) loadTaskSkillHistory(ctx context.Context, taskUUID, explicitThread string) ([]taskSkillHistoryItem, error) {
 	rows, err := h.taskDB().QueryContext(ctx, `SELECT uuid, record_type, user_prompt, final_result, cli_type,
 		external_session_id, status, created_at, finished_at FROM gt_task_progress WHERE task_uuid=? ORDER BY created_at, rowid`, taskUUID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
+	protected := map[string]bool{}
+	view := newCodexReplyView(ctx)
 	items := make([]taskSkillHistoryItem, 0)
 	for rows.Next() {
 		var id, recordType, prompt, result, tool, threadID, status string
 		var createdAt, finishedAt int64
 		if err := rows.Scan(&id, &recordType, &prompt, &result, &tool, &threadID, &status, &createdAt, &finishedAt); err != nil {
 			return nil, err
+		}
+		if tool == "codex" && threadID != "" {
+			if threadID == explicitThread {
+				view.Project(threadID, &prompt, &result, true)
+			} else if codexreply.Parse(prompt, false) != nil {
+				protected[threadID] = true
+			}
 		}
 		if recordType == "user_question" && strings.TrimSpace(prompt) != "" {
 			items = append(items, taskSkillHistoryItem{UUID: id, Type: "question", Content: prompt, Tool: tool, ThreadID: threadID, Status: status, CreatedAt: createdAt})
@@ -809,6 +960,15 @@ func (h *TasksHandler) loadTaskSkillHistory(ctx context.Context, taskUUID string
 				finishedAt = createdAt
 			}
 			items = append(items, taskSkillHistoryItem{UUID: id, Type: "result", Content: result, Tool: tool, ThreadID: threadID, Status: status, CreatedAt: finishedAt})
+		}
+	}
+	// Keep the historical trial’s form conversations private on replay.
+	if len(protected) > 0 {
+		hidden := i18n.WithLocale(i18n.LocaleFromContext(ctx), "codex_reply_hidden")
+		for j, v := range items {
+			if v.Tool == "codex" && protected[v.ThreadID] {
+				items[j].Content = hidden
+			}
 		}
 	}
 	return items, rows.Err()

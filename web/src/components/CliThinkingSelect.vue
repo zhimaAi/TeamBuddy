@@ -14,7 +14,7 @@
         <div class="thinking-header">
           <div class="thinking-heading">
             <div :id="`${menuId}-title`" class="thinking-title">{{ menuTitle }}</div>
-            <p class="thinking-model" :title="modelName">{{ modelName }}</p>
+            <p class="thinking-model" :title="modelLabel">{{ modelLabel }}</p>
           </div>
           <a-button type="text" size="small" class="thinking-refresh" :loading="loading" :disabled="disabled" :aria-label="t('components.cliThinking.refresh')" :title="t('components.cliThinking.refresh')" @click="load(true)">
             <template #icon><ReloadOutlined aria-hidden="true" /></template>
@@ -84,6 +84,7 @@ import { computed, nextTick, ref, useId, watch } from 'vue'
 import { BulbOutlined, CheckOutlined, ExclamationCircleOutlined, InfoCircleOutlined, LoadingOutlined, ReloadOutlined } from '@ant-design/icons-vue'
 import { useCLIModelCatalogStore } from '@/stores/cli-models'
 import { useCLIThinkingPreferencesStore } from '@/stores/cli-thinking-preferences'
+import { cliModelFamily } from '@/utils/cliModelOptions'
 import { useAppI18n } from '@/i18n'
 
 const props = withDefaults(defineProps<{
@@ -103,6 +104,7 @@ const trigger = ref<HTMLButtonElement>()
 const menu = ref<HTMLDivElement>()
 const directories = useCLIModelCatalogStore()
 const preferences = useCLIThinkingPreferencesStore()
+const modelLabel = computed(() => cliModelFamily(props.cliType, props.modelName))
 const scope = computed(() => ({ taskUuid: props.taskUuid || undefined, channelType: props.channelType || undefined }))
 const loading = computed(() => directories.isLoading(props.cliType, scope.value))
 const error = computed(() => directories.error(props.cliType, scope.value))

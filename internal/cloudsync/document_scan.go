@@ -34,10 +34,11 @@ const (
 // 产出文档扫描需要跳过的目录：版本库/依赖目录体积大且不是任务产出，
 // 附件目录是历史链路落盘位置，点号目录统一跳过（.git/.DS_Store 等）。
 const (
-	documentSkippedDirGit        = ".git"
-	documentSkippedDirModules    = "node_modules"
-	documentSkippedDirAttachment = ".goteams-attachments"
-	documentSkippedDirAppSuffix  = ".app"
+	documentSkippedDirGit              = ".git"
+	documentSkippedDirModules          = "node_modules"
+	documentSkippedDirAttachment       = "attachments"
+	documentSkippedDirLegacyAttachment = ".goteams-attachments"
+	documentSkippedDirAppSuffix        = ".app"
 )
 
 // documentScanMaxFiles 是单任务扫描时最多读取的行数保护上限，避免异常目录把内存吃满。
@@ -326,7 +327,7 @@ func collectDocumentCandidates(root string) ([]documentCandidate, error) {
 		if entry.IsDir() {
 			// .app 是 macOS 的应用包（本质是目录），与单文件扩展名一样不参与上报
 			if name == documentSkippedDirGit || name == documentSkippedDirModules ||
-				name == documentSkippedDirAttachment || strings.HasPrefix(name, ".") ||
+				name == documentSkippedDirAttachment || name == documentSkippedDirLegacyAttachment || strings.HasPrefix(name, ".") ||
 				strings.HasSuffix(strings.ToLower(name), documentSkippedDirAppSuffix) {
 				return fs.SkipDir
 			}

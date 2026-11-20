@@ -11,6 +11,7 @@ import (
 
 	"goteams-client/internal/applog"
 	"goteams-client/internal/bootstrap"
+	"goteams-client/internal/codexhook"
 	"goteams-client/internal/mcpbridge"
 	"goteams-client/internal/qoderhook"
 	"goteams-client/internal/skillcall"
@@ -24,6 +25,13 @@ var (
 )
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "codex-hook" {
+		if err := codexhook.Run(context.Background(), os.Args[2:], os.Stdin, os.Stdout); err != nil {
+			fmt.Fprintf(os.Stderr, "TeamBuddy Codex callback: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
 	if len(os.Args) > 1 && os.Args[1] == "qoder-hook" {
 		if len(os.Args) != 2 {
 			os.Exit(1)

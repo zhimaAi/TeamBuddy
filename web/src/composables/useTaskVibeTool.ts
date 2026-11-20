@@ -1,6 +1,7 @@
 import apiClient from '@/api/client'
-import type { MessageKey } from '@/i18n'
+import { t, type MessageKey } from '@/i18n'
 import { isDesktopRuntime, openCodexThread, openVibeCli, openQoderIDE } from '@/composables/useDesktop'
+import { ensureCodexSync, syncDescription } from '@/composables/useCodexSync'
 import { copyText } from '@/utils/clipboard'
 
 export interface VibeToolCapability {
@@ -16,6 +17,9 @@ export interface VibeToolCapability {
 }
 
 export interface TaskVibeToolContext {
+  delivery_warning?: boolean
+  reporting_owner?: 'hooks'
+  execution_index?: number
   task_uuid: string
   work_dir: string
   prompt: string
@@ -36,10 +40,13 @@ export interface VibeToolsCapability {
 }
 
 export interface VibeToolOpenResult {
+  cancelled?: boolean
   opened: boolean
   copied: boolean
   guidanceKey?: MessageKey
   error?: Error
+  setup?: CodexSetupReason
+  review?: () => Promise<void>
   requiresIDEExit?: boolean
   retry?: () => Promise<VibeToolOpenResult>
 }
@@ -60,10 +67,13 @@ export async function loadTaskVibeToolContext(taskUuid: string): Promise<TaskVib
   return apiClient.get<TaskVibeToolContext>(`/tasks/${encodeURIComponent(taskUuid)}/codex-context`)
 }
 
-export async function copyTaskVibeToolPrompt(taskUuid: string): Promise<TaskVibeToolContext> {
+export async function copyTaskVibeToolPrompt(taskUuid: string): Promise<VibeToolOpenResult> {
   const context = await loadTaskVibeToolContext(taskUuid)
-  await copyText(context.prompt)
-  return context
+  if (context.reporting_owner) return nativeCodex(context, 'copy')
+  const result = await copyPrompt(context.prompt)
+  if (result.copied) result.guidanceKey = context.tool === 'generic'
+    ? 'workflows.task.detail.genericPromptCopied' : 'workflows.task.detail.codexPromptCopied'
+  return result
 }
 
 export async function openTaskVibeTool(taskUuid: string): Promise<VibeToolOpenResult> {
@@ -132,16 +142,10 @@ export async function openTaskVibeTool(taskUuid: string): Promise<VibeToolOpenRe
 }
 
 async function openLoadedCodex(context: TaskVibeToolContext): Promise<VibeToolOpenResult> {
+  if (context.reporting_owner) return nativeCodex(context, 'open')
   if (!isDesktopRuntime()) return copyPrompt(context.prompt)
-  if (!context.thread_id) {
-    try {
-      await apiClient.post(`/tasks/${encodeURIComponent(context.task_uuid)}/codex-session-watch`, {})
-    } catch {
-      // 监听失败不阻止打开 Codex。用户仍可手动粘贴提示词。
-    }
-  }
   try {
-    await openCodexThread(context.work_dir, context.prompt, context.thread_id)
+    await openCodexThread({ directoryPath: context.work_dir, prompt: context.prompt, threadId: context.thread_id })
     return { opened: true, copied: false }
   } catch (openError) {
     const copied = await copyPrompt(context.prompt)
@@ -149,6 +153,37 @@ async function openLoadedCodex(context: TaskVibeToolContext): Promise<VibeToolOp
       ? copied
       : { opened: false, copied: false, error: asError(openError) }
   }
+}
+
+async function nativeCodex(context: TaskVibeToolContext, action: 'open' | 'copy'): Promise<VibeToolOpenResult> {
+  if (!isDesktopRuntime()) return { opened: false, copied: false, error: new Error(t('components.errors.openCodexUnsupported')) }
+  const payload: DesktopCodexRequest = {
+    directoryPath: context.work_dir, prompt: context.prompt, threadId: context.thread_id,
+    taskUuid: context.task_uuid, executionIndex: context.execution_index, reportingOwner: context.reporting_owner, action,
+  }
+  try {
+    let result = await openCodexThread(payload)
+    if (result.setup && result.userSetup) {
+      if (!await ensureCodexSync(result.setup)) return { opened: false, copied: false, cancelled: true }
+      // 原任务、目录与代次仍由 Main/Go 重新核对；不把延迟的确认用于另一代任务。
+      result = await openCodexThread(payload)
+      if (result.setup) throw new Error(syncDescription(result.setup))
+    }
+    if (result.setup) return {
+      opened: false, copied: false, setup: result.setup,
+      retry: () => action === 'copy' ? copyTaskVibeToolPrompt(context.task_uuid) : openTaskVibeTool(context.task_uuid),
+      review: ['project_untrusted', 'hooks_untrusted'].includes(result.setup) ? async () => {
+        try { await openCodexThread({ ...payload, action: 'review' }) }
+        catch (error) { throw asError(error) }
+      } : undefined,
+    }
+    return {
+      opened: result.opened, copied: !!result.copied, error: result.openError ? new Error(result.openError) : undefined,
+      guidanceKey: context.delivery_warning && result.opened ? 'workflows.task.detail.codexDeliveryWarning' : result.copied ? context.thread_id
+        ? 'workflows.task.detail.codexBoundCopy' : 'workflows.task.detail.codexNativeCopy'
+        : !context.thread_id && result.opened ? 'workflows.task.detail.codexAwaitSend' : undefined,
+    }
+  } catch (error) { return { opened: false, copied: false, error: asError(error) } }
 }
 
 async function copyPrompt(prompt: string): Promise<VibeToolOpenResult> {

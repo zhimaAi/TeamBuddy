@@ -5,9 +5,13 @@
       v-else
       ref="previewRef"
       class="markdown-preview"
+      :class="{ 'image-thumbnails': imageThumbnails }"
       @click="handleAttachmentClick"
       v-html="renderedContent"
     ></article>
+    <a-modal :open="Boolean(previewImage)" :footer="null" width="min(90vw, 1000px)" centered destroy-on-close @update:open="previewImage = undefined">
+      <img v-if="previewImage" class="full-image" :src="previewImage.src" :alt="previewImage.alt" />
+    </a-modal>
   </div>
 </template>
 
@@ -18,7 +22,7 @@ import MarkdownIt from 'markdown-it'
 import apiClient from '@/api/client'
 import { revealTaskOutputFile } from '@/composables/useDesktop'
 import { useAppI18n } from '@/i18n'
-import { allowLocalFileLinks, LOCAL_FILE_LINK_ATTRIBUTE, localFileTarget, renderInlineFileCode } from '@/utils/localFileLink'
+import { allowLocalFileLinks, LOCAL_FILE_LINK_ATTRIBUTE, localFileTarget } from '@/utils/localFileLink'
 
 const { t } = useAppI18n()
 
@@ -28,6 +32,7 @@ const props = withDefaults(defineProps<{
   taskUuid?: string
   sessionUuid?: string
   fileRoots?: string[]
+  imageThumbnails?: boolean
   resolveImage?: (source: string, signal: AbortSignal) => Promise<Blob | undefined>
   openLink?: (href: string) => boolean
 }>(), {
@@ -47,8 +52,38 @@ const markdown = new MarkdownIt({
 })
 allowLocalFileLinks(markdown)
 
+// 仅合并连续的纯图片段落，保留正文、说明和代码的原有顺序。
+markdown.core.ruler.after('inline', 'image_thumbnail_groups', (state) => {
+  if (!props.imageThumbnails) return
+  const grouped: typeof state.tokens = []
+  let previousImages = false
+  for (let index = 0; index < state.tokens.length; index++) {
+    const open = state.tokens[index]
+    const inline = state.tokens[index + 1]
+    const close = state.tokens[index + 2]
+    const children = inline?.children || []
+    const imagesOnly = open?.type === 'paragraph_open' && inline?.type === 'inline' && close?.type === 'paragraph_close' &&
+      children.some(child => child.type === 'image') &&
+      children.every(child => child.type === 'image' || child.type === 'softbreak' || child.type === 'hardbreak' || child.type === 'text' && !child.content.trim())
+    if (imagesOnly) {
+      open.tag = close.tag = 'div'
+      open.attrJoin('class', 'markdown-image-grid')
+      inline.children = children.filter(child => child.type === 'image')
+      if (previousImages) grouped.pop()
+      else grouped.push(open)
+      grouped.push(inline, close)
+      index += 2
+    } else if (open) {
+      grouped.push(open)
+    }
+    previousImages = imagesOnly
+  }
+  state.tokens = grouped
+})
+
 const previewRef = ref<HTMLElement>()
 const objectUrls = new Set<string>()
+const previewImage = ref<{ src: string; alt: string }>()
 let hydrationVersion = 0
 let imageController: AbortController | undefined
 
@@ -63,15 +98,22 @@ markdown.renderer.rules.image = (tokens, index, options, env, self) => {
   const token = tokens[index]
   const source = token.attrGet('src') || ''
   const path = env.taskUuid ? taskAttachmentPath(source) : ''
-  if (props.resolveImage || path) {
+  const localImage = env.taskUuid && !/^(?:https?:|data:|blob:|\/\/)/i.test(source)
+  const managed = props.resolveImage || path || localImage
+  if (managed || props.imageThumbnails) {
     const sourceIndex = token.attrIndex('src')
     if (sourceIndex >= 0) token.attrs?.splice(sourceIndex, 1)
-    if (props.resolveImage) token.attrSet('data-preview-image-source', source)
-    else token.attrSet('data-task-attachment-path', path)
+    if (props.resolveImage || !managed) token.attrSet('data-preview-image-source', source)
+    else if (path) token.attrSet('data-task-attachment-path', path)
+    else token.attrSet('data-local-image-path', localFileTarget(source) || source)
+    token.attrSet('hidden', '')
   }
-  return originalImageRenderer
+  const html = originalImageRenderer
     ? originalImageRenderer(tokens, index, options, env, self)
     : self.renderToken(tokens, index, options)
+  if (!managed && !props.imageThumbnails) return html
+  const escape = markdown.utils.escapeHtml
+  return `<span class="markdown-local-image"><button type="button" class="markdown-image-preview" disabled aria-label="${escape(t('components.markdown.previewAttachment', { name: token.content }))}">${html}<span class="markdown-image-status" role="status">${escape(t('components.markdown.imageLoading'))}</span></button><button type="button" class="markdown-image-retry" hidden>${escape(t('common.actions.retry'))}</button></span>`
 }
 
 const originalLinkOpenRenderer = markdown.renderer.rules.link_open
@@ -79,12 +121,13 @@ markdown.renderer.rules.link_open = (tokens, index, options, env, self) => {
   const token = tokens[index]
   const href = token.attrGet('href') || ''
   const path = env.taskUuid ? taskAttachmentPath(href) : ''
+  const fileTarget = localFileTarget(href)
   if (path) {
     token.attrSet('href', '#')
     token.attrSet('data-task-attachment-path', path)
-  } else if (env.taskUuid && localFileTarget(href, env.fileRoots || [])) {
+  } else if (env.taskUuid && fileTarget) {
     token.attrSet('href', '#')
-    token.attrSet(LOCAL_FILE_LINK_ATTRIBUTE, href)
+    token.attrSet(LOCAL_FILE_LINK_ATTRIBUTE, fileTarget)
     token.attrSet('title', t('components.markdown.revealInFolder'))
   }
   return originalLinkOpenRenderer
@@ -150,30 +193,16 @@ function normalizeMarkdown(text: string) {
     .trim()
 }
 
-const originalCodeRenderer = markdown.renderer.rules.code_inline
-markdown.renderer.rules.code_inline = (tokens, index, options, env, self) => {
-  const html = renderInlineFileCode(
-    markdown,
-    tokens[index].content,
-    env.fileRoots || [],
-    t('components.markdown.revealInFolder'),
-    env.sessionUuid || '',
-  )
-  if (env.taskUuid && html) return html
-  return originalCodeRenderer
-    ? originalCodeRenderer(tokens, index, options, env, self)
-    : self.renderToken(tokens, index, options)
-}
-
 const renderedContent = computed(() =>
   markdown.render(normalizeMarkdown(props.content || ''), {
     taskUuid: props.taskUuid,
+    sessionUuid: props.sessionUuid,
     fileRoots: props.fileRoots,
   }),
 )
 
 watch(
-  () => [renderedContent.value, props.taskUuid] as const,
+  () => [renderedContent.value, props.taskUuid, props.sessionUuid, props.resolveImage] as const,
   () => void hydrateAttachmentImages(),
   { immediate: true },
 )
@@ -183,67 +212,96 @@ async function hydrateAttachmentImages() {
   imageController?.abort()
   const controller = new AbortController()
   imageController = controller
+  previewImage.value = undefined
   releaseObjectUrls()
   await nextTick()
   if (version !== hydrationVersion) return
-  const resolveImage = props.resolveImage
-  if (resolveImage) {
-    const images = [...(previewRef.value?.querySelectorAll<HTMLImageElement>('img[data-preview-image-source]') || [])]
-    // 自定义资源加载保持有限并发，避免长文档同时请求大量本地文件。
-    let nextImage = 0
-    await Promise.all(Array.from({ length: Math.min(4, images.length) }, async () => {
-      while (nextImage < images.length && !controller.signal.aborted) {
-        const image = images[nextImage++]
-        if (!image) break
-        const source = image.dataset.previewImageSource || ''
-        try {
-          const blob = await resolveImage(source, controller.signal)
-          if (version !== hydrationVersion || !image.isConnected) continue
-          if (blob) {
-            const objectUrl = URL.createObjectURL(blob)
-            objectUrls.add(objectUrl)
-            image.src = objectUrl
-          } else {
-            image.src = source
-          }
-        } catch {
-          if (version !== hydrationVersion || !image.isConnected) continue
-          image.classList.add('attachment-load-failed')
-          image.title = t('components.markdown.attachmentLoadFailed')
-        }
-      }
-    }))
-    if (version === hydrationVersion) emit('attachments-loaded')
-    return
-  }
-  if (!props.taskUuid || version !== hydrationVersion) return
-  const images = [...(previewRef.value?.querySelectorAll<HTMLImageElement>('img[data-task-attachment-path]') || [])]
-  await Promise.all(
-    images.map(async (image) => {
-      const path = image.dataset.taskAttachmentPath
-      if (!path) return
-      try {
-        const blob = await apiClient.getBlob(
-          `/tasks/${encodeURIComponent(props.taskUuid)}/files/raw`,
-          { path },
-        )
-        if (version !== hydrationVersion || !image.isConnected) return
-        const objectUrl = URL.createObjectURL(blob)
-        objectUrls.add(objectUrl)
-        image.src = objectUrl
-      } catch {
-        if (version !== hydrationVersion || !image.isConnected) return
-        image.classList.add('attachment-load-failed')
-        image.title = t('components.markdown.attachmentLoadFailed')
-      }
-    }),
-  )
+  const images = [...(previewRef.value?.querySelectorAll<HTMLImageElement>('.markdown-local-image img') || [])]
+  let nextImage = 0
+  await Promise.all(Array.from({ length: Math.min(4, images.length) }, async () => {
+    while (nextImage < images.length && !controller.signal.aborted) {
+      const image = images[nextImage++]
+      if (image) await loadPreviewImage(image, version, controller.signal)
+    }
+  }))
   if (version === hydrationVersion) emit('attachments-loaded')
+}
+
+async function loadPreviewImage(image: HTMLImageElement, version: number, signal: AbortSignal) {
+  if (image.dataset.loading === String(version) || signal.aborted) return
+  const card = image.closest('.markdown-local-image')
+  const button = card?.querySelector<HTMLButtonElement>('.markdown-image-preview')
+  const status = card?.querySelector<HTMLElement>('.markdown-image-status')
+  const retry = card?.querySelector<HTMLButtonElement>('.markdown-image-retry')
+  if (!button || !status || !retry) return
+  image.dataset.loading = String(version)
+  image.hidden = true
+  button.disabled = true
+  retry.hidden = true
+  status.hidden = false
+  status.textContent = t('components.markdown.imageLoading')
+  let objectUrl = ''
+  try {
+    const source = image.dataset.previewImageSource
+    let blob: Blob | undefined
+    if (source !== undefined) {
+      blob = await props.resolveImage?.(source, signal)
+    } else {
+      const attachment = image.dataset.taskAttachmentPath
+      blob = await apiClient.getBlob(
+        `/tasks/${encodeURIComponent(props.taskUuid)}/files/${attachment ? 'raw' : 'image'}`,
+        { path: attachment || image.dataset.localImagePath || '', ...(attachment ? {} : { session_uuid: props.sessionUuid }) },
+        signal,
+      )
+    }
+    if (version !== hydrationVersion || signal.aborted || !image.isConnected) return
+    if (blob) {
+      if (!blob.type.startsWith('image/')) throw new Error('Invalid image')
+      objectUrl = URL.createObjectURL(blob)
+      objectUrls.add(objectUrl)
+      image.src = objectUrl
+    } else if (source) {
+      image.src = source
+    } else {
+      throw new Error('Image unavailable')
+    }
+    await image.decode()
+    if (version !== hydrationVersion || signal.aborted || !image.isConnected) return
+    image.hidden = false
+    status.hidden = true
+    button.disabled = false
+  } catch {
+    if (objectUrl) {
+      URL.revokeObjectURL(objectUrl)
+      objectUrls.delete(objectUrl)
+    }
+    if (version !== hydrationVersion || signal.aborted || !image.isConnected) return
+    image.removeAttribute('src')
+    status.textContent = t('components.markdown.imageUnavailable')
+    retry.hidden = false
+  } finally {
+    if (image.dataset.loading === String(version)) delete image.dataset.loading
+  }
 }
 
 async function handleAttachmentClick(event: MouseEvent) {
   const target = event.target
   if (!(target instanceof Element)) return
+  const card = target.closest('.markdown-local-image')
+  const image = card?.querySelector<HTMLImageElement>('img')
+  if (image && target.closest('.markdown-image-retry')) {
+    event.preventDefault()
+    if (imageController) {
+      await loadPreviewImage(image, hydrationVersion, imageController.signal)
+      emit('attachments-loaded')
+    }
+    return
+  }
+  if (image && target.closest('.markdown-image-preview')) {
+    event.preventDefault()
+    if (image.naturalWidth && !image.hidden) previewImage.value = { src: image.src, alt: image.alt }
+    return
+  }
   const link = target.closest<HTMLAnchorElement>('a[href]')
   if (link && props.openLink?.(link.getAttribute('href') || '')) {
     event.preventDefault()
@@ -470,11 +528,75 @@ onBeforeUnmount(() => {
   max-width: 100%;
 }
 
-.markdown-preview :deep(img.attachment-load-failed) {
-  min-width: 120px;
-  min-height: 64px;
-  border: 1px dashed #d9d9d9;
+.markdown-preview :deep(.markdown-local-image) {
+  display: inline-flex;
+  flex-direction: column;
+  max-width: 100%;
+  overflow: hidden;
+  border: 1px solid #d9d9d9;
+  border-radius: 12px;
+  vertical-align: middle;
 }
+.markdown-preview :deep(.markdown-image-preview) {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 120px;
+  min-height: 80px;
+  padding: 0;
+  border: 0;
+  background: #f5f6f8;
+  cursor: zoom-in;
+}
+.markdown-preview :deep(.markdown-image-preview:disabled) { cursor: default; }
+.markdown-preview :deep(.markdown-local-image img:not([hidden])) {
+  display: block;
+  max-width: 100%;
+  max-height: 240px;
+  object-fit: contain;
+}
+.markdown-preview :deep(.markdown-image-status) { padding: 16px; color: #595959; font-size: 12px; }
+.markdown-preview :deep(.markdown-image-retry) {
+  min-height: 32px;
+  border: 0;
+  background: #fff;
+  color: #3157e2;
+  cursor: pointer;
+}
+.markdown-preview :deep(.markdown-local-image button:focus-visible) { outline: 2px solid #3157e2; outline-offset: -2px; }
+.image-thumbnails :deep(.markdown-image-grid) {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 8px 0;
+}
+.image-thumbnails :deep(.markdown-local-image) {
+  box-sizing: border-box;
+  flex: 0 0 160px;
+  width: 160px;
+  height: 120px;
+  border-radius: 8px;
+  background: #f5f6f8;
+}
+.image-thumbnails :deep(.markdown-image-preview) {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  width: 100%;
+  overflow: hidden;
+}
+.image-thumbnails :deep(.markdown-local-image img:not([hidden])) {
+  width: 100%;
+  height: 100%;
+  max-height: none;
+}
+.image-thumbnails :deep(.markdown-image-status) { padding: 8px; }
+.image-thumbnails :deep(.markdown-image-retry) {
+  flex-shrink: 0;
+  min-height: 28px;
+  background: transparent;
+}
+.full-image { display: block; max-width: 100%; max-height: 80vh; margin: auto; object-fit: contain; }
 
 @media (max-width: 640px) {
   .markdown-preview-shell {

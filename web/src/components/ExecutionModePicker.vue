@@ -198,7 +198,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import VibeModelPicker from '@/components/VibeModelPicker.vue'
 import CliThinkingSelect from '@/components/CliThinkingSelect.vue'
 import { useCliThinkingSelection } from '@/composables/useCliThinkingSelection'
@@ -215,6 +215,8 @@ import cliExecutionLogo from '@/assets/icons/task-composer-cli.svg'
 import { usePipelineStore } from '@/stores/pipeline'
 import { useExpertGroupStore } from '@/stores/expert-group'
 import { useCliModelOptions } from '@/composables/useCliModelOptions'
+import { isDesktopRuntime } from '@/composables/useDesktop'
+import { ensureCodexSync, syncError } from '@/composables/useCodexSync'
 import { loadVibeToolsCapability, type VibeToolsCapability } from '@/composables/useTaskVibeTool'
 import {
   VIBE_CODING_TOOLS,
@@ -262,7 +264,8 @@ const pipelineStore = usePipelineStore()
 const expertGroupStore = useExpertGroupStore()
 const {
   cliOptions,
-  modelOptions,
+  modelChoices,
+  modelLabel,
   cliLoading,
   modelLoading,
   loadCliOptions,
@@ -272,6 +275,7 @@ const {
 const isOpen = ref(false)
 const { vibeModels, resetVibeModels, setVibeModel, resolveVibeModel } = useVibeModelPreferences()
 let vibeSelectionRequest = 0
+onBeforeUnmount(() => { vibeSelectionRequest++ })
 watch(isOpen, open => {
   vibeSelectionRequest++
   if (open) resetVibeModels(props.modelValue?.mode === 'vibe_coding' ? props.modelValue.executionTool || '' : '', props.modelValue?.modelName || '')
@@ -297,7 +301,7 @@ const cliSelectOptions = computed(() =>
 )
 
 const modelSelectOptions = computed(() =>
-  modelOptions.value.map((m) => ({ label: m, value: m })),
+  modelChoices(selectedCliModel.value),
 )
 
 const displayLabel = computed(() => {
@@ -375,6 +379,14 @@ async function selectVibeTool(tool: VibeCodingToolId, model?: string) {
     return
   }
   if (request !== vibeSelectionRequest || !isOpen.value) return
+  if (tool === 'codex' && isDesktopRuntime()) {
+    // 收起下拉菜单再授权，避免弹窗抢焦点触发菜单关闭而丢失已选工具。
+    isOpen.value = false
+    await nextTick()
+    const revision = vibeSelectionRequest
+    try { if (!await ensureCodexSync() || revision !== vibeSelectionRequest) return }
+    catch (e) { message.error(syncError(e)); return }
+  }
   writeRecentVibeTool(tool)
   const selection: ExecutionModeSelection = {
     mode: 'vibe_coding',
@@ -406,7 +418,7 @@ function confirmCliSelection() {
     executionTool: selectedCliType.value,
     modelName: selectedCliModel.value,
     thinkingLevel: selectedThinkingLevel.value,
-    displayName: `${t('workflows.task.common.directExecution')} · ${cliName} (${selectedCliModel.value})`,
+    displayName: `${t('workflows.task.common.directExecution')} · ${cliName} (${modelLabel(selectedCliModel.value)})`,
   }
   emit('update:modelValue', selection)
   emit('select', selection)

@@ -16,6 +16,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 
+	"goteams-client/internal/codexhook"
 	"goteams-client/internal/i18n"
 )
 
@@ -38,6 +39,7 @@ func (h *TasksHandler) locateTaskOutputFile(c *gin.Context) {
 	taskUUID := c.Param("uuid")
 	var body struct {
 		Path        string `json:"path"`
+		Literal     bool   `json:"literal"`
 		SessionUUID string `json:"session_uuid"`
 	}
 	if err := c.ShouldBindJSON(&body); err != nil {
@@ -45,39 +47,9 @@ func (h *TasksHandler) locateTaskOutputFile(c *gin.Context) {
 		return
 	}
 
-	var taskDir string
-	var legacyWorkDir sql.NullString
-	err := h.taskDB().QueryRowContext(
-		c.Request.Context(),
-		`SELECT task_dir, work_dir FROM gt_tasks WHERE uuid=?`,
-		taskUUID,
-	).Scan(&taskDir, &legacyWorkDir)
-	if errors.Is(err, sql.ErrNoRows) {
-		i18n.Error(c, http.StatusNotFound, "localserver_task_not_found", "task_not_found")
-		return
-	}
+	roots, preferred, err := h.loadTaskOutputRoots(c.Request.Context(), taskUUID, body.SessionUUID)
 	if err != nil {
-		i18n.LocalServerError(c, http.StatusInternalServerError, err)
-		return
-	}
-	workDirs, err := h.loadTaskWorkDirs(taskUUID, legacyWorkDir.String)
-	if err != nil {
-		i18n.LocalServerError(c, http.StatusInternalServerError, err)
-		return
-	}
-
-	roots := make([]string, 0, len(workDirs)+1)
-	roots = append(roots, workDirs...)
-	if strings.TrimSpace(taskDir) != "" {
-		roots = append(roots, taskDir)
-	}
-	preferred, err := h.preferredOutputRoots(c.Request.Context(), taskUUID, body.SessionUUID)
-	if errors.Is(err, errOutputFileInvalid) {
-		i18n.Error(c, http.StatusBadRequest, "localserver_output_file_invalid", "output_file_invalid")
-		return
-	}
-	if err != nil {
-		i18n.LocalServerError(c, http.StatusInternalServerError, err)
+		writeOutputFileError(c, err)
 		return
 	}
 	workspaceRoots, err := h.configuredWorkspaceRoots(c.Request.Context())
@@ -85,8 +57,55 @@ func (h *TasksHandler) locateTaskOutputFile(c *gin.Context) {
 		i18n.LocalServerError(c, http.StatusInternalServerError, err)
 		return
 	}
-	located, err := locateOutputFile(roots, preferred, body.Path, workspaceRoots...)
+	located, err := locateOutputFile(roots, preferred, body.Path, body.Literal, workspaceRoots...)
+	if err != nil {
+		writeOutputFileError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"path": located})
+}
+
+func (h *TasksHandler) loadTaskOutputRoots(ctx context.Context, taskUUID, sessionUUID string) ([]string, []string, error) {
+	var taskDir, binding string
+	var executionIndex int
+	var legacyWorkDir sql.NullString
+	err := h.taskDB().QueryRowContext(
+		ctx,
+		`SELECT task_dir, work_dir, COALESCE(vibe_coding_session_json,''), execution_index FROM gt_tasks WHERE uuid=?`,
+		taskUUID,
+	).Scan(&taskDir, &legacyWorkDir, &binding, &executionIndex)
+	if err != nil {
+		return nil, nil, err
+	}
+	workDirs, err := h.loadTaskWorkDirs(taskUUID, legacyWorkDir.String)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	roots := make([]string, 0, len(workDirs)+1)
+	roots = append(roots, workDirs...)
+	if strings.TrimSpace(taskDir) != "" {
+		roots = append(roots, taskDir)
+	}
+	preferred, err := h.preferredOutputRoots(ctx, taskUUID, sessionUUID)
+	if err != nil {
+		return nil, nil, err
+	}
+	if sessionUUID != "" {
+		if bound, valid := validVibeCodingSession(binding, "codex"); valid && bound.ReportingOwner == "hooks" && bound.ThreadID == sessionUUID {
+			if directory := codexhook.BoundWorkspace(taskUUID, bound.ThreadID, executionIndex); directory != "" {
+				roots = appendUniquePath(roots, directory)
+				preferred = []string{directory}
+			}
+		}
+	}
+	return roots, preferred, nil
+}
+
+func writeOutputFileError(c *gin.Context, err error) {
 	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		i18n.Error(c, http.StatusNotFound, "localserver_task_not_found", "task_not_found")
 	case errors.Is(err, errOutputFileInvalid):
 		i18n.Error(c, http.StatusBadRequest, "localserver_output_file_invalid", "output_file_invalid")
 	case errors.Is(err, errOutputFileOutside):
@@ -99,10 +118,8 @@ func (h *TasksHandler) locateTaskOutputFile(c *gin.Context) {
 		i18n.Error(c, http.StatusBadRequest, "localserver_file_path_symlink", "file_path_symlink")
 	case errors.Is(err, errOutputFileAmbiguous):
 		i18n.Error(c, http.StatusConflict, "localserver_output_file_ambiguous", "output_file_ambiguous")
-	case err != nil:
-		i18n.LocalServerError(c, http.StatusInternalServerError, err)
 	default:
-		c.JSON(http.StatusOK, gin.H{"path": located})
+		i18n.LocalServerError(c, http.StatusInternalServerError, err)
 	}
 }
 
@@ -163,8 +180,8 @@ func (h *TasksHandler) configuredWorkspaceRoots(ctx context.Context) ([]string, 
 // references stay in the task roots; a .. path is not opened. Multiple matches
 // are rejected instead of guessed. extraAbsoluteRoots are other configured
 // workspace or project directories and apply only to absolute references.
-func locateOutputFile(roots []string, preferred []string, raw string, extraAbsoluteRoots ...string) (string, error) {
-	candidate, err := parseLocalFileReference(raw)
+func locateOutputFile(roots []string, preferred []string, raw string, literal bool, extraAbsoluteRoots ...string) (string, error) {
+	candidate, err := parseLocalFileReference(raw, literal)
 	if err != nil {
 		return "", err
 	}
@@ -273,9 +290,10 @@ func appendUniquePath(paths []string, path string) []string {
 	return append(paths, path)
 }
 
-var lineFragmentPattern = regexp.MustCompile(`(?i)^L?\d+$`)
+var lineFragmentPattern = regexp.MustCompile(`(?i)^L?\d+(?:C\d+)?(?:-L?\d+(?:C\d+)?)?$`)
+var lineCitationPattern = regexp.MustCompile(`(?::\d+){1,2}(?:\s*[-–—]\s*\d+)?$`)
 
-func parseLocalFileReference(raw string) (string, error) {
+func parseLocalFileReference(raw string, literal bool) (string, error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" || len(raw) > maxOutputFileReferenceLength || strings.ContainsRune(raw, 0) || strings.ContainsAny(raw, "\r\n") {
 		return "", errOutputFileInvalid
@@ -293,9 +311,19 @@ func parseLocalFileReference(raw string) (string, error) {
 	if strings.Contains(raw, "://") || strings.HasPrefix(raw, `\\`) || strings.HasPrefix(raw, `//`) {
 		return "", errOutputFileInvalid
 	}
-	decoded, err := url.PathUnescape(stripLineFragment(raw))
-	if err != nil || strings.TrimSpace(decoded) == "" || strings.ContainsRune(decoded, 0) {
+	decoded, err := raw, error(nil)
+	if !literal {
+		decoded, err = url.PathUnescape(lineCitationPattern.ReplaceAllString(stripLineFragment(raw), ""))
+	}
+	if err != nil || strings.TrimSpace(decoded) == "" || strings.ContainsAny(decoded, "\x00\r\n") || strings.Contains(decoded, "://") || strings.HasPrefix(decoded, `\\`) || strings.HasPrefix(decoded, `//`) {
 		return "", errOutputFileInvalid
+	}
+	if !filepath.IsAbs(decoded) {
+		for _, part := range strings.FieldsFunc(decoded, func(r rune) bool { return r == '/' || r == '\\' }) {
+			if part == ".." {
+				return "", errOutputFileInvalid
+			}
+		}
 	}
 	return decoded, nil
 }
@@ -319,7 +347,7 @@ func parseFileURL(raw string) (string, error) {
 	if parsed.RawQuery != "" || (parsed.Fragment != "" && !lineFragmentPattern.MatchString(parsed.Fragment)) {
 		return "", errOutputFileInvalid
 	}
-	filePath := parsed.Path
+	filePath := lineCitationPattern.ReplaceAllString(parsed.Path, "")
 	if runtime.GOOS == "windows" && len(filePath) >= 3 && filePath[0] == '/' && filePath[2] == ':' {
 		filePath = filePath[1:]
 	}

@@ -246,7 +246,7 @@ export async function request<T = unknown>(
   return result as unknown as T
 }
 
-async function requestBlob(path: string, params?: RequestOptions['params']): Promise<Blob> {
+async function requestBlob(path: string, params?: RequestOptions['params'], signal?: AbortSignal): Promise<Blob> {
   const url = buildUrl(path, params)
   if (getActivePinia() && !useAuthStore().sessionReady) await useAuthStore().waitForSessionReady()
   const headers: Record<string, string> = accountRequestHeaders()
@@ -259,6 +259,7 @@ async function requestBlob(path: string, params?: RequestOptions['params']): Pro
     headers,
     credentials: 'same-origin',
     cache: 'no-store',
+    signal,
   })
   if (!response.ok) {
     const error = await createApiError(response, requestLocale)
@@ -288,7 +289,7 @@ export const apiClient = {
   get: <T = unknown>(path: string, params?: RequestOptions['params'], signal?: AbortSignal) =>
     request<T>(path, { method: 'GET', params, signal }),
 
-  getBlob: (path: string, params?: RequestOptions['params']) => requestBlob(path, params),
+  getBlob: (path: string, params?: RequestOptions['params'], signal?: AbortSignal) => requestBlob(path, params, signal),
 
   post: <T = unknown>(path: string, body?: unknown) => request<T>(path, { method: 'POST', body }),
 

@@ -435,7 +435,6 @@ func (s *Server) buildRouter() *gin.Engine {
 	// Cloud credentials use account-scoped namespaces inside the application secret backend.
 	local := r.Group("/api/local")
 	configHandler.RegisterRoutes(local.Group("/config"))
-
 	local.GET("/skills", s.listSkills)
 	local.POST("/skills", s.createSkill)
 

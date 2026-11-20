@@ -1,4 +1,18 @@
 {
+  "codexReporting": {
+    "title": "Codex app task sync",
+    "scope": "Sync only chats launched from TeamBuddy and bound to a task. Other Codex chats are not recorded.",
+    "enable": "Enable sync and review in Codex",
+    "trust": "Review hooks in Codex",
+    "review": "Open Codex settings",
+    "ready": "Task sync is enabled.",
+    "awaitTrust": "The hooks are configured. Authorize them in Codex to start syncing tasks.",
+    "selectHooks": "In the Codex settings sidebar, select Hooks.",
+    "trustCallbacks": "Under User config, find TeamBuddy’s SessionStart, UserPromptSubmit and Stop hooks and select Trust for each.",
+    "returnToTask": "Return to TeamBuddy. It will continue once the hooks are trusted.",
+    "reloadHint": "Missing the three hooks? Select Reload hooks on the Hooks page.",
+    "checking": "Reading configuration…"
+  },
   "gitProjects": "Git projects",
   "desktop": "Client",
   "name": "Name",

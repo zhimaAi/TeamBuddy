@@ -171,9 +171,9 @@
                   @change="chooseCLIModel"
                 >
                   <template #optionLabel>
-                    <span class="assign-runtime__value" :title="selectedModelName">
+                    <span class="assign-runtime__value" :title="modelLabel(selectedModelName)">
                       <img class="assign-runtime__logo" :src="modelLogo(selectedModelName, selectedTarget)" alt="" />
-                      <span class="assign-runtime__name">{{ selectedModelName }}</span>
+                      <span class="assign-runtime__name">{{ modelLabel(selectedModelName) }}</span>
                     </span>
                   </template>
                   <template #option="{ label, value }">
@@ -388,6 +388,8 @@ import {
   type VibeCodingToolId,
 } from '@/composables/useVibeCoding'
 import { useCliModelOptions } from '@/composables/useCliModelOptions'
+import { isDesktopRuntime } from '@/composables/useDesktop'
+import { ensureCodexSync, syncError } from '@/composables/useCodexSync'
 import { useCliKickoffNavigation } from '@/composables/useCliKickoff'
 import { useAppI18n } from '@/i18n'
 import { usePipelineStore } from '@/stores/pipeline'
@@ -488,7 +490,8 @@ const {
   loadModelOptions,
   modelCounts,
   modelLoading,
-  modelOptions,
+  modelChoices,
+  modelLabel,
   prefetchModelCounts,
 } = useCliModelOptions(true, () => ({ taskUuid: props.taskUuid || undefined }))
 
@@ -514,7 +517,7 @@ const cliSelectOptions = computed(() => {
 })
 const selectedCliLabel = computed(() => cliSelectOptions.value.find(cli => cli.value === selectedTarget.value)?.label || selectedTarget.value || '')
 const modelSelectOptions = computed(() =>
-  modelOptions.value.map((model) => ({ value: model, label: model, title: '' })),
+  modelChoices(selectedModelName.value).map((model) => ({ ...model, title: '' })),
 )
 
 const configuredPipelines = computed(() => pipelines.value.filter(isPipelineConfigured))
@@ -688,6 +691,15 @@ async function confirm() {
       saving.value = false
     }
     if (!props.open || selectedMode.value !== 'vibe_coding' || selectedTarget.value !== tool) return
+  }
+  if (selectedMode.value === 'vibe_coding' && selectedTarget.value === 'codex' && isDesktopRuntime()
+    && (props.selectOnly || props.initialMode !== 'vibe_coding' || props.initialVibeTool !== 'codex')) {
+    const task = props.taskUuid
+    saving.value = true
+    try { if (!await ensureCodexSync()) return }
+    catch (e) { message.error(syncError(e)); return }
+    finally { saving.value = false }
+    if (!props.open || props.taskUuid !== task || selectedMode.value !== 'vibe_coding' || selectedTarget.value !== 'codex') return
   }
   if (props.intent === 'create' || props.selectOnly) {
     if (selectedMode.value === 'vibe_coding' && selectedTarget.value) writeRecentVibeTool(selectedTarget.value)

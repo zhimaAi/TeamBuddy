@@ -51,6 +51,9 @@ func TerminateProcessTree(pid int) error {
 	return terminateTreeWithTaskKill(pid)
 }
 
+// StopProbeProcessTree uses the same descendant-first Windows termination.
+func StopProbeProcessTree(pid int) error { return TerminateProcessTree(pid) }
+
 // terminateTreeImmediately force-kills every process in the tree via
 // TerminateProcess without waiting for the targets to exit.
 func terminateTreeImmediately(pid int) error {

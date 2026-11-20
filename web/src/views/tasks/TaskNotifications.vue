@@ -1189,7 +1189,7 @@ async function loadSelectedTask(silent = false) {
     }
     taskError.value = ''
     void persistTaskView(taskUuid, loadedTask, sortedProgress)
-    await locateTarget('auto')
+    if (!silent) await locateTarget('auto')
   } catch (error) {
     if (requestVersion === taskLoadVersion && !silent) {
       if (task.value?.uuid === taskUuid) {

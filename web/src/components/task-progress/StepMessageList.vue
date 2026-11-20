@@ -131,10 +131,30 @@
                 v-if="isUserMessage(item)"
                 class="message-card-body"
               >
-                <MarkdownPreview
+                <section v-if="item.codex_reply" class="codex-reply" :aria-label="t('components.taskProgress.codexAnswered')">
+                  <strong>{{ t('components.taskProgress.codexAnswered') }}</strong>
+                  <p v-if="item.codex_reply.unavailable">{{ userMessageText(item) }}</p>
+                  <p v-if="item.codex_reply.prefix">{{ item.codex_reply.prefix }}</p>
+                  <dl v-for="(row, index) in item.codex_reply.items" :key="index">
+                    <template v-if="!row.isSecret">
+                      <dt>{{ row.question }}</dt>
+                      <dd>{{ row.answer }}</dd>
+                    </template>
+                    <dt v-else>{{ t('components.taskProgress.codexHidden') }}</dt>
+                  </dl>
+                </section>
+                <CodexMessage v-else-if="item.codex_message"
+                  :content="item.codex_message"
+                  :task-uuid="taskUuid || ''"
+                  :progress-uuid="item.uuid"
+                  :session-uuid="messageSessionUuid(item)"
+                  :file-roots="fileRoots"
+                />
+                <MarkdownPreview v-else
                   :content="userMessageText(item)"
+                  image-thumbnails
                   :task-uuid="taskUuid"
-                  :session-uuid="item.session_uuid"
+                  :session-uuid="messageSessionUuid(item)"
                   :file-roots="fileRoots"
                 />
               </div>
@@ -145,8 +165,9 @@
               >
                 <MarkdownPreview
                   :content="resultText(item)"
+                  image-thumbnails
                   :task-uuid="taskUuid"
-                  :session-uuid="item.session_uuid"
+                  :session-uuid="messageSessionUuid(item)"
                   :file-roots="fileRoots"
                 />
               </div>
@@ -196,6 +217,7 @@ import {
 } from '@ant-design/icons-vue'
 import { message } from 'ant-design-vue'
 import MarkdownPreview from '@/components/MarkdownPreview.vue'
+import CodexMessage from './CodexMessage.vue'
 import ExecutionProcess from './ExecutionProcess.vue'
 import { retryTaskSync } from '@/api/taskSync'
 import type { PipelineStep, SessionEventItem, TaskProgress } from '@/types/pipeline'
@@ -205,6 +227,10 @@ import { useLocale } from '@/composables/useLocale'
 
 const { t } = useAppI18n()
 const { locale } = useLocale()
+
+function messageSessionUuid(item: TaskProgress) {
+  return item.session_uuid || (item.execution_mode === 'vibe_coding' && item.cli_type === 'codex' ? item.external_session_id || '' : '')
+}
 
 const props = withDefaults(
   defineProps<{
@@ -406,6 +432,11 @@ defineExpose({ scrollToItem })
 </script>
 
 <style scoped>
+.codex-reply { overflow-wrap: anywhere; white-space: pre-wrap; }
+.codex-reply strong { color: #526174; font-size: 12px; }
+.codex-reply dl { margin: 8px 0; border-inline-start: 2px solid #adc6ed; padding-inline-start: 12px; }
+.codex-reply dt { font-weight: 600; }
+.codex-reply dd { margin: 4px 0 0; }
 .message-list-card {
   overflow: hidden;
   border: 1px solid #d9d9d9;

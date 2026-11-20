@@ -1,6 +1,25 @@
 export {}
 
 declare global {
+  type CodexSyncState = CodexSetupReason | 'ready'
+  type CodexSetupReason = 'not_configured' | 'project_untrusted' | 'hooks_untrusted' | 'hooks_disabled' | 'inspection_failed'
+  interface DesktopCodexRequest {
+    directoryPath: string
+    prompt: string
+    threadId?: string
+    taskUuid?: string
+    executionIndex?: number
+    reportingOwner?: 'hooks'
+    action?: 'open' | 'copy' | 'review'
+  }
+  interface DesktopCodexResult {
+    opened: boolean
+    copied?: boolean
+    openError?: string
+    userSetup?: boolean
+    setup?: CodexSetupReason
+  }
+
   interface DesktopUpdateState {
     currentVersion: string
     status: 'idle' | 'checking' | 'current' | 'available' | 'downloading' | 'downloaded' | 'installing' | 'error'
@@ -70,11 +89,8 @@ declare global {
         hooksUpdated: boolean
         requiresRestart?: boolean
       }>
-      openCodexThread(payload: {
-        directoryPath: string
-        prompt: string
-        threadId?: string
-      }): Promise<{ opened: true }>
+      configureCodexReporting(action: 'status' | 'enable' | 'review'): Promise<CodexSyncState>
+      openCodexThread(payload: DesktopCodexRequest): Promise<DesktopCodexResult>
       /** 本次启动的本地 API 鉴权 token（由 Electron 主进程生成） */
       getApiToken(): Promise<string>
       getCloseBehavior(): Promise<{ closeBehavior: 'hide' | 'quit' }>

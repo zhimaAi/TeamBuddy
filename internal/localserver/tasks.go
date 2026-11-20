@@ -25,6 +25,7 @@ import (
 	"goteams-client/internal/artifactstore"
 	"goteams-client/internal/cloud"
 	"goteams-client/internal/cloudsync"
+	"goteams-client/internal/codexreply"
 	"goteams-client/internal/executor"
 	"goteams-client/internal/expertgroup"
 	"goteams-client/internal/i18n"
@@ -207,6 +208,8 @@ func (h *TasksHandler) RegisterRoutes(r *gin.RouterGroup) {
 	r.GET("/:uuid/files/content", h.getTaskFileContent)
 	r.POST("/:uuid/files/locate", h.locateTaskOutputFile)
 	r.GET("/:uuid/files/raw", h.getTaskAttachmentContent)
+	r.GET("/:uuid/files/image", h.getTaskOutputImage)
+	r.GET("/:uuid/progress/:progress_uuid/attachments/:index", h.getCodexMessageAttachment)
 	r.POST("/:uuid/files/content", h.saveTaskFileContent)
 	// 产出文档上报状态与手动重报（独立旁路通道）
 	r.GET("/:uuid/files/upload-status", h.taskDocumentUploadStatus)
@@ -2298,12 +2301,14 @@ func (h *TasksHandler) completeStep(c *gin.Context) {
 
 func (h *TasksHandler) listTaskProgress(c *gin.Context) {
 	// 只有云端来源的任务参与上报，本地任务不返回上报状态，避免界面误显示「待上报」。
-	var sourceType string
+	var sourceType, binding string
 	if err := h.taskDB().QueryRowContext(c.Request.Context(),
-		`SELECT COALESCE(source_type,'') FROM gt_tasks WHERE uuid=?`, c.Param("uuid")).Scan(&sourceType); err != nil && err != sql.ErrNoRows {
+		`SELECT COALESCE(source_type,''),COALESCE(vibe_coding_session_json,'') FROM gt_tasks WHERE uuid=?`, c.Param("uuid")).Scan(&sourceType, &binding); err != nil && err != sql.ErrNoRows {
 		i18n.LocalServerError(c, http.StatusInternalServerError, err)
 		return
 	}
+	view := newCodexReplyView(c.Request.Context())
+	explicitThread := codexreply.ExplicitThread(binding)
 	reportsToCloud := sourceType == "cloud"
 	rows, err := h.taskDB().QueryContext(c.Request.Context(), `SELECT p.uuid, p.task_uuid, p.task_step_uuid, p.session_uuid,
 		p.record_type, p.user_prompt, p.cli_type, p.model_name, p.status, p.final_result,
@@ -2363,7 +2368,11 @@ func (h *TasksHandler) listTaskProgress(c *gin.Context) {
 			}
 			itemSyncError, itemSyncedAt = progressSyncError, progressSyncedAt
 		}
-		items = append(items, gin.H{"uuid": id, "task_uuid": taskID, "task_step_uuid": stepID,
+		var reply *codexreply.Reply
+		if executionMode == "vibe_coding" && cliType == "codex" {
+			reply = view.Project(externalSessionID, &prompt, &result, externalSessionID != "" && externalSessionID == explicitThread)
+		}
+		items = append(items, gin.H{"codex_reply": reply, "codex_message": projectCodexMessage(id, prompt, executionMode, cliType), "uuid": id, "task_uuid": taskID, "task_step_uuid": stepID,
 			"session_uuid": sessionID, "record_type": recordType, "user_prompt": prompt, "question": prompt,
 			"cli_type": cliType, "model": model, "model_name": model, "status": status,
 			"thinking_level": thinkingLevel, "thinking_level_sent": thinkingSent, "thinking_resolution": thinkingResolution,
@@ -2372,7 +2381,7 @@ func (h *TasksHandler) listTaskProgress(c *gin.Context) {
 			"final_result": result, "result": result, "created_at": createdAt, "started_at": startedAt, "finished_at": finishedAt,
 			"latest_event_type": latestEventType, "latest_event_content": latestEventContent, "latest_event_at": latestEventAt,
 			"input_tokens": inputTokens, "output_tokens": outputTokens, "total_tokens": totalTokens, "duration_ms": durationMs,
-			"cloud_sync_status": syncState, "cloud_sync_error": itemSyncError, "cloud_synced_at": itemSyncedAt})
+			"cloud_sync_status": syncState, "cloud_sync_error": codexSyncError(c, itemSyncError), "cloud_synced_at": itemSyncedAt})
 	}
 	c.JSON(http.StatusOK, gin.H{"items": items})
 }
@@ -2412,6 +2421,8 @@ func (h *TasksHandler) getTaskExecutionHistory(c *gin.Context) {
 		i18n.LocalServerError(c, http.StatusInternalServerError, err)
 		return
 	}
+	detail.ProjectCodexReplies(newCodexReplyView(c.Request.Context()))
+	detail.CloudSyncError = codexSyncError(c, detail.CloudSyncError)
 	c.JSON(http.StatusOK, detail)
 }
 

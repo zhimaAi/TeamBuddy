@@ -39,11 +39,11 @@
       :placeholder="batchCliType ? t('agents.selectModel') : t('agents.selectCliFirst')"
     >
       <a-select-option
-        v-for="model in modelOptions"
-        :key="model"
-        :value="model"
+        v-for="model in choices"
+        :key="model.value"
+        :value="model.value"
       >
-        {{ model }}
+        {{ model.label }}
       </a-select-option>
     </a-select>
     <a-checkbox v-model:checked="configureThinking" :disabled="saving">{{ t('components.cliThinking.configure') }}</a-checkbox>
@@ -100,9 +100,10 @@ const {
   loadCliOptions,
   loadModelOptions,
   modelLoading,
-  modelOptions,
+  modelChoices,
   resetModelOptions,
 } = useCliModelOptions()
+const choices = computed(() => modelChoices(batchModelName.value))
 
 const canApply = computed(
   () =>

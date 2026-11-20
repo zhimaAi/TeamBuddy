@@ -74,16 +74,19 @@ func DefaultRuntimePath() string {
 }
 
 type TaskSnapshot struct {
-	Mode  string   `json:"execution_mode"`
-	Tool  string   `json:"execution_tool"`
-	Index int      `json:"execution_index"`
-	Dirs  []string `json:"work_dirs"`
+	BoundThread    string   `json:"bound_thread,omitempty"`
+	ReportingOwner string   `json:"reporting_owner,omitempty"`
+	Mode           string   `json:"execution_mode"`
+	Tool           string   `json:"execution_tool"`
+	Index          int      `json:"execution_index"`
+	Dirs           []string `json:"work_dirs"`
 }
 
 type SessionBinding struct {
 	ExecutionIndex int    `json:"execution_index"`
 	Type           string `json:"type"`
 	ThreadID       string `json:"thread_id"`
+	ReportingOwner string `json:"reporting_owner,omitempty"`
 }
 
 type Activity struct {
@@ -93,10 +96,20 @@ type Activity struct {
 	Content        string `json:"content"`
 	Tool           string `json:"tool"`
 	ThreadID       string `json:"thread_id"`
+	Source         string `json:"source,omitempty"`
 }
 
 func (c *Client) ReadTask(ctx context.Context, id, language string) (TaskSnapshot, error) {
-	data, err := c.Do(ctx, http.MethodGet, id, "", language, nil)
+	return c.readTask(ctx, id, "", language)
+}
+
+// ReadBindingContext avoids loading a conversation's history on every Hook.
+func (c *Client) ReadBindingContext(ctx context.Context, id, language string) (TaskSnapshot, error) {
+	return c.readTask(ctx, id, "/binding-context", language)
+}
+
+func (c *Client) readTask(ctx context.Context, id, suffix, language string) (TaskSnapshot, error) {
+	data, err := c.Do(ctx, http.MethodGet, id, suffix, language, nil)
 	if err != nil {
 		return TaskSnapshot{}, err
 	}

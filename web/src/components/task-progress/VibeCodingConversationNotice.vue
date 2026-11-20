@@ -66,6 +66,7 @@ const emit = defineEmits<{ open: [] }>()
 const { t } = useAppI18n()
 
 const noticeKey = computed<MessageKey>(() => {
+  if (props.toolId === 'codex') return 'workflows.task.detail.codexNotice'
   if (props.toolId === 'generic') return 'workflows.task.detail.genericNotice'
   if (props.toolId === 'qoder_ide') return 'workflows.task.detail.qoderIDENotice'
   return 'workflows.task.detail.vibeCodingNoticeDescription'

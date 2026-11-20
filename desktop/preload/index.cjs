@@ -165,6 +165,10 @@ contextBridge.exposeInMainWorld('goteamsDesktop', Object.freeze({
       prompt: payload.prompt, threadId: payload.threadId,
     })
   },
+  configureCodexReporting(action) {
+    if (!['status', 'enable', 'review'].includes(action)) return Promise.reject(new TypeError('Invalid Codex setting'))
+    return ipcRenderer.invoke('desktop:codex-reporting', action)
+  },
   openCodexThread(payload) {
     if (
       !payload ||
@@ -175,6 +179,8 @@ contextBridge.exposeInMainWorld('goteamsDesktop', Object.freeze({
       return Promise.reject(new TypeError('Codex thread payload is invalid'))
     }
     return ipcRenderer.invoke(OPEN_CODEX_THREAD_CHANNEL, {
+      taskUuid: payload.taskUuid, executionIndex: payload.executionIndex,
+      reportingOwner: payload.reportingOwner, action: payload.action,
       directoryPath: payload.directoryPath,
       prompt: payload.prompt,
       threadId: payload.threadId,

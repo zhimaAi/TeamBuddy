@@ -266,6 +266,13 @@ func (h *TasksHandler) taskDirectory(ctx context.Context, taskUUID string) (stri
 }
 
 func saveTaskAttachment(taskDir, originalName string, data []byte) (savedTaskAttachment, error) {
+	return saveTaskAttachmentWithID(taskDir, originalName, uuid.NewString(), data)
+}
+
+func saveTaskAttachmentWithID(taskDir, originalName, id string, data []byte) (savedTaskAttachment, error) {
+	if _, err := uuid.Parse(id); err != nil {
+		return savedTaskAttachment{}, err
+	}
 	if len(data) == 0 {
 		return savedTaskAttachment{}, fmt.Errorf("文件内容为空")
 	}
@@ -285,7 +292,7 @@ func saveTaskAttachment(taskDir, originalName string, data []byte) (savedTaskAtt
 		return savedTaskAttachment{}, fmt.Errorf("创建附件目录失败: %w", err)
 	}
 
-	filename := uuid.NewString() + extension
+	filename := id + extension
 	relativePath := filepath.Join(taskAttachmentDirectory, filename)
 	target := filepath.Join(attachmentDir, filename)
 	temporary, err := os.CreateTemp(attachmentDir, ".attachment-upload-*")
@@ -456,6 +463,10 @@ func (h *TasksHandler) getTaskAttachmentContent(c *gin.Context) {
 		i18n.LocalServerError(c, http.StatusBadRequest, err)
 		return
 	}
+	serveTaskAttachment(c, absPath)
+}
+
+func serveTaskAttachment(c *gin.Context, absPath string) {
 	file, err := os.Open(absPath)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {

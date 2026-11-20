@@ -1,5 +1,6 @@
 import { defineStore } from 'pinia'
 import { useAuthStore } from '@/stores/auth'
+import { cliModelFamily } from '@/utils/cliModelOptions'
 
 const storageKey = 'goteams.cli-thinking.preferences.v1'
 const pairKey = (cliType: string, model: string) => JSON.stringify([cliType, model])
@@ -31,13 +32,15 @@ export const useCLIThinkingPreferencesStore = defineStore('cli-thinking-preferen
   }
 
   function get(cliType: string, model: string): string | undefined {
-    return cliType && model ? preferences()[pairKey(cliType, model)] : undefined
+    if (!cliType || !model) return undefined
+    const values = preferences()
+    return values[pairKey(cliType, cliModelFamily(cliType, model))] ?? values[pairKey(cliType, model)]
   }
 
   function remember(cliType: string, model: string, level: string) {
     if (!cliType || !model) return
     const values = preferences()
-    values[pairKey(cliType, model)] = level
+    values[pairKey(cliType, cliModelFamily(cliType, model))] = level
     try {
       localStorage.setItem(`${storageKey}:${encodeURIComponent(scope())}`, JSON.stringify(values))
     } catch { /* 写入失败不影响本次选择和当前进程内记忆。 */ }

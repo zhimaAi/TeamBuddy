@@ -230,6 +230,7 @@ import pipelineIcon from '@/assets/icons/task-composer-pipeline.svg'
 import cliTriggerIcon from '@/assets/icons/task-composer-cli-trigger.svg'
 import directoryIcon from '@/assets/icons/task-header-directory.svg'
 import { cliLogo } from '@/composables/useCliLogo'
+import { cliModelFamily } from '@/utils/cliModelOptions'
 import WorkDirectoryPicker from '@/components/WorkDirectoryPicker.vue'
 import MessageSendButton from '@/components/task-progress/MessageSendButton.vue'
 import { useComposerPreferencesStore } from '@/stores/composer-preferences'
@@ -427,7 +428,7 @@ function selectionDisplayName(selection: AssignedExecutionMode): string {
   }
   const cliName = cliDisplayName(selection.tool)
   return selection.modelName
-    ? `${t('workflows.task.common.directExecution')} · ${cliName} (${selection.modelName})`
+    ? `${t('workflows.task.common.directExecution')} · ${cliName} (${cliModelFamily(selection.tool, selection.modelName)})`
     : `${t('workflows.task.common.directExecution')} · ${cliName}`
 }
 

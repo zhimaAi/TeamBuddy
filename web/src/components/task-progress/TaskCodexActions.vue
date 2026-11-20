@@ -16,6 +16,7 @@ import { message } from 'ant-design-vue'
 import { CopyOutlined, DesktopOutlined } from '@ant-design/icons-vue'
 import codexLogo from '@/assets/icons/codex-logo.svg'
 import { assignTaskToCodex, copyTaskCodexPrompt, loadCodexCapability, openTaskInCodex, type CodexCapability } from '@/composables/useTaskCodex'
+import { showVibeToolOpenResult } from '@/composables/useVibeToolFeedback'
 import { vibeToolLabelKey, vibeToolLogo } from '@/composables/useVibeCoding'
 import { useAppI18n } from '@/i18n'
 import type { TaskWithDetails } from '@/types/task-detail'
@@ -57,16 +58,8 @@ async function performAction(copy: boolean) {
       await assignTaskToCodex(task.uuid, false)
       emit('changed')
     }
-    if (copy) {
-      await copyTaskCodexPrompt(task.uuid)
-      message.success(t('workflows.task.detail.codexPromptCopied'))
-    } else {
-      const result = await openTaskInCodex(task.uuid)
-      if (result.opened) message.success(t('workflows.task.detail.codexOpened'))
-      else if (result.copied) message.warning(t('workflows.task.detail.codexCopiedFallback'))
-      else if (result.error) message.error(result.error.message)
-      else message.warning(t('workflows.task.detail.codexOpenFailed'))
-    }
+    const result = copy ? await copyTaskCodexPrompt(task.uuid) : await openTaskInCodex(task.uuid)
+    showVibeToolOpenResult(result, toolLabel.value)
   } catch (error) {
     message.error(error instanceof Error ? error.message : t(copy ? 'workflows.task.detail.codexCopyFailed' : 'workflows.task.detail.codexOpenFailed'))
   } finally { busy.value = false }

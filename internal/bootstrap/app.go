@@ -18,6 +18,7 @@ import (
 	"goteams-client/internal/applog"
 	"goteams-client/internal/cloud"
 	"goteams-client/internal/cloudsync"
+	"goteams-client/internal/codexhook"
 	"goteams-client/internal/config"
 	"goteams-client/internal/executor"
 	"goteams-client/internal/localserver"
@@ -100,6 +101,7 @@ func New(ctx context.Context) (*App, error) {
 		return nil, fmt.Errorf("初始化引导密钥存储失败: %w", bErr)
 	}
 	app.bootstrapStore = bootstrapStore
+	cloudsync.SetCodexPrivacyStore(bootstrapStore)
 	store.SetBackend(bootstrapStore)
 
 	// 5. Generate browser Ticket
@@ -219,6 +221,7 @@ func (a *App) Run(ctx context.Context) error {
 	//Restore the account session from the persistent login state (no need to log in again after restart)
 	a.server.RestoreSession(runCtx)
 	a.server.StartRemoteChannels(runCtx)
+	go codexhook.DrainPending(runCtx)
 
 	// Start the cloud session sync service: it periodically pushes the created/updated
 	// CLI session records of cloud tasks to the cloud, in per-task creation order.
