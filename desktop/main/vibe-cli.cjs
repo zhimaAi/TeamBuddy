@@ -92,10 +92,11 @@ function codebuddyUpdateGuard(tool) {
   return tool === 'codebuddy' ? 'DISABLE_AUTOUPDATER=1 ' : ''
 }
 
-function darwinLaunchOptions(directory, execPath, args, tool, prefixArgs = [], cleanupDir = '') {
+function darwinLaunchOptions(directory, execPath, args, tool, prefixArgs = [], cleanupDir = '', codexHome = '', launcher = '') {
   const command = [shellQuote(execPath), ...prefixArgs.map(shellQuote), ...args.map(shellQuote)].join(' ')
   const cleanup = cleanupDir ? ` ; rm -rf ${shellQuote(cleanupDir)}` : ''
-  const script = `cd ${shellQuote(directory)} && ${codebuddyUpdateGuard(tool)}${command}${cleanup}`
+  const home = codexHome ? `CODEX_HOME=${shellQuote(codexHome)} ` : ''
+  const script = launcher ? `/bin/sh ${shellQuote(launcher)}` : `cd ${shellQuote(directory)} && ${home}${codebuddyUpdateGuard(tool)}${command}${cleanup}`
   const source = [
     'on run argv',
     'tell application "Terminal"',
@@ -161,12 +162,8 @@ async function readNpmShimTarget(execPath) {
   }
 }
 
-function windowsPromptLauncherLines(execPath, promptPath, shimRelative, prefixArgs = []) {
-  // cmd.exe 按行读取命令，Windows PowerShell 5.1 的调用运算符也不能把含换行的参数完整交给 .cmd。
-  // 提示词第一行是 Skill 链接，后面的任务 UUID 和工具类型会被截掉，Skill 因此拒绝启用。
+function windowsProcessLauncherLines(execPath, argumentsList, shimRelative = '') {
   const lines = [
-    `$prompt = ${windowsUtf8Reader(promptPath)}`,
-    `Remove-Item -LiteralPath ${powershellQuote(promptPath)} -Force`,
     'function ConvertTo-CommandLineArgument([string]$Value) {',
     '  $builder = New-Object System.Text.StringBuilder',
     '  [void]$builder.Append([char]34)',
@@ -199,9 +196,8 @@ function windowsPromptLauncherLines(execPath, promptPath, shimRelative, prefixAr
     '  $process.WaitForExit()',
     '}',
   ]
-  const prefixList = prefixArgs.map(powershellQuote).join(', ')
-  const withPrefix = rest => (prefixList ? `${prefixList}, ${rest}` : rest)
-  const startPrompt = `Start-VibeProcess ${powershellQuote(execPath)} @(${withPrefix('$prompt')})`
+  const list = argumentsList.join(', ')
+  const start = `Start-VibeProcess ${powershellQuote(execPath)} @(${list})`
   if (shimRelative) {
     const quotedShim = powershellQuote(shimRelative)
     lines.push(`$shimScript = Join-Path (Split-Path -Parent ${powershellQuote(execPath)}) ${quotedShim}`)
@@ -211,56 +207,17 @@ function windowsPromptLauncherLines(execPath, promptPath, shimRelative, prefixAr
     lines.push('  if ($null -ne $found) { $node = $found.Source } else { $node = "" }')
     lines.push('}')
     lines.push('if ((Test-Path -LiteralPath $shimScript) -and $node) {')
-    lines.push(`  Start-VibeProcess $node @($shimScript, ${withPrefix('$prompt')})`)
+    lines.push(`  Start-VibeProcess $node @($shimScript, ${list})`)
     lines.push('} else {')
-    lines.push(`  ${startPrompt}`)
+    lines.push(`  ${start}`)
     lines.push('}')
     return lines
   }
-  lines.push(startPrompt)
+  lines.push(start)
   return lines
 }
 
-function windowsArgumentLauncherLines(execPath, args) {
-  const list = args.map(powershellQuote).join(', ')
-  const invocation = list ? `@(${list})` : '@()'
-  return [
-    'function ConvertTo-CommandLineArgument([string]$Value) {',
-    '  $builder = New-Object System.Text.StringBuilder',
-    '  [void]$builder.Append([char]34)',
-    '  $slashes = 0',
-    '  foreach ($char in $Value.ToCharArray()) {',
-    '    if ($char -eq [char]92) { $slashes++; continue }',
-    '    if ($char -eq [char]34) {',
-    '      if ($slashes -gt 0) { [void]$builder.Append([char]92, ($slashes * 2)) }',
-    '      [void]$builder.Append([char]92)',
-    '      [void]$builder.Append([char]34)',
-    '      $slashes = 0',
-    '      continue',
-    '    }',
-    '    if ($slashes -gt 0) { [void]$builder.Append([char]92, $slashes); $slashes = 0 }',
-    '    [void]$builder.Append($char)',
-    '  }',
-    '  if ($slashes -gt 0) { [void]$builder.Append([char]92, ($slashes * 2)) }',
-    '  [void]$builder.Append([char]34)',
-    '  return $builder.ToString()',
-    '}',
-    'function Start-VibeProcess([string]$FileName, [string[]]$ArgumentList) {',
-    '  $quoted = foreach ($item in $ArgumentList) { ConvertTo-CommandLineArgument $item }',
-    "  $start = New-Object System.Diagnostics.ProcessStartInfo",
-    '  $start.FileName = $FileName',
-    "  $start.Arguments = ($quoted -join ' ')",
-    '  $start.UseShellExecute = $false',
-    '  $start.WorkingDirectory = (Get-Location).ProviderPath',
-    '  $process = [System.Diagnostics.Process]::Start($start)',
-    '  if ($null -eq $process) { throw "Vibe CLI process did not start" }',
-    '  $process.WaitForExit()',
-    '}',
-    `Start-VibeProcess ${powershellQuote(execPath)} ${invocation}`,
-  ]
-}
-
-async function writeWindowsLauncher(directory, execPath, args, tool, prefixArgs = [], cleanupDir = '') {
+async function writeWindowsLauncher(directory, execPath, args, tool, prefixArgs = [], cleanupDir = '', codexHome = '', agyTicket = '') {
   const stamp = `${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}`
   const directoryPath = path.join(os.tmpdir(), `goteams-vibe-${stamp}`)
   await fs.mkdir(directoryPath, { mode: 0o700 })
@@ -282,6 +239,8 @@ async function writeWindowsLauncher(directory, execPath, args, tool, prefixArgs 
   lines.push(inheritedPolicy == null
     ? 'Remove-Item Env:PSExecutionPolicyPreference -ErrorAction SilentlyContinue'
     : `$env:PSExecutionPolicyPreference = ${powershellQuote(inheritedPolicy)}`)
+  if (agyTicket) lines.push(`$env:TEAMBUDDY_AGY_LAUNCH = ${powershellQuote(agyTicket)}`)
+  if (codexHome) lines.push(`$env:CODEX_HOME = ${powershellQuote(codexHome)}`)
   if (tool === 'codebuddy') {
     lines.push("$env:DISABLE_AUTOUPDATER = '1'")
   }
@@ -290,11 +249,16 @@ async function writeWindowsLauncher(directory, execPath, args, tool, prefixArgs 
     const promptPath = path.join(directoryPath, 'prompt.txt')
     await fs.writeFile(promptPath, interactivePrompt ? args[1] : args[0], { encoding: 'utf8', mode: 0o600 })
     const basePrefix = interactivePrompt ? ['--prompt-interactive'] : []
-    lines.push(...windowsPromptLauncherLines(execPath, promptPath, await readNpmShimTarget(execPath), [...prefixArgs, ...basePrefix]))
+    // 多行提示词不能让 cmd.exe 重新解析；npm 安装使用与垫片相同的 Node 入口。
+    lines.push(`$prompt = ${windowsUtf8Reader(promptPath)}`, `Remove-Item -LiteralPath ${powershellQuote(promptPath)} -Force`)
+    lines.push(...windowsProcessLauncherLines(execPath, [...prefixArgs, ...basePrefix].map(powershellQuote).concat('$prompt'), await readNpmShimTarget(execPath)))
   } else {
-    lines.push(...windowsArgumentLauncherLines(execPath, [...prefixArgs, ...args]))
+    // Hook 会话恢复也可能定位到 npm 的 codex.cmd，而非原生 exe。
+    const shim = codexHome && tool === 'codex_cli' ? await readNpmShimTarget(execPath) : ''
+    lines.push(...windowsProcessLauncherLines(execPath, [...prefixArgs, ...args].map(powershellQuote), shim))
   }
   lines.push('} finally {')
+  if (agyTicket) lines.push('  Remove-Item Env:TEAMBUDDY_AGY_LAUNCH -ErrorAction SilentlyContinue')
   if (cleanupDir) {
     lines.push(`  Remove-Item -LiteralPath ${powershellQuote(cleanupDir)} -Recurse -Force -ErrorAction SilentlyContinue`)
   }
@@ -315,7 +279,8 @@ function windowsLaunchOptions(scriptPath, directory) {
   }
 }
 
-async function vibeLaunchPlan(directory, tool, execPath, prompt, threadId, platform = process.platform, mcp = undefined, model = '') {
+async function vibeLaunchPlan(directory, tool, execPath, prompt, threadId, platform = process.platform, mcp = undefined, model = '', codexHome = '', agyTicket = '') {
+  if (agyTicket && (tool !== 'antigravity' || !CODEX_THREAD_ID_PATTERN.test(agyTicket))) throw new Error('Invalid Antigravity launch ticket')
   const modelArgs = vibeModelArguments(tool, model)
   // 恢复已有会话时沿用该会话配置，模型只用于首次启动。
   let prefixArgs = threadId ? [] : modelArgs
@@ -337,22 +302,33 @@ async function vibeLaunchPlan(directory, tool, execPath, prompt, threadId, platf
     throw error
   }
   if (platform === 'darwin') {
+    let launcher = ''
+    if (agyTicket) {
+      // Terminal echoes its do-script command into the user's shell history.
+      // Only the disposable script path, not the ticket or task, belongs there.
+      const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'teambuddy-agy-'))
+      launcher = path.join(dir, 'launch.sh')
+      const command = [built.execPath, ...prefixArgs, ...built.args].map(shellQuote).join(' ')
+      const script = `rm -f -- "$0"\nrmdir ${shellQuote(dir)}\ncd ${shellQuote(directory)} || exit 1\nTEAMBUDDY_AGY_LAUNCH=${shellQuote(agyTicket)} exec ${command}\n`
+      try { await fs.writeFile(launcher, script, { mode: 0o600, flag: 'wx' }) }
+      catch (error) { await fs.rmdir(dir).catch(() => {}); throw error }
+    }
     return {
-      launch: darwinLaunchOptions(directory, built.execPath, built.args, tool, prefixArgs, cleanupDir),
-      cleanup: null,
+      launch: darwinLaunchOptions(directory, built.execPath, built.args, tool, prefixArgs, cleanupDir, codexHome, launcher),
+      cleanup: launcher || null,
       cleanupDir,
     }
   }
   if (platform === 'win32') {
-    const scriptPath = await writeWindowsLauncher(directory, built.execPath, built.args, tool, prefixArgs, cleanupDir)
+    const scriptPath = await writeWindowsLauncher(directory, built.execPath, built.args, tool, prefixArgs, cleanupDir, codexHome, agyTicket)
     return { launch: windowsLaunchOptions(scriptPath, directory), cleanup: scriptPath, cleanupDir }
   }
   if (cleanupDir) await fs.rm(cleanupDir, { recursive: true, force: true })
   throw new Error('Unsupported desktop platform')
 }
 
-async function openVibeCli(directory, tool, execPath, prompt, threadId, platform = process.platform, spawnProcess = spawn, mcp = undefined, model = '') {
-  const plan = await vibeLaunchPlan(directory, tool, execPath, prompt, threadId, platform, mcp, model)
+async function openVibeCli(directory, tool, execPath, prompt, threadId, platform = process.platform, spawnProcess = spawn, mcp = undefined, model = '', codexHome = '', agyTicket = '') {
+  const plan = await vibeLaunchPlan(directory, tool, execPath, prompt, threadId, platform, mcp, model, codexHome, agyTicket)
   await new Promise((resolve, reject) => {
     const options = /** @type {import('node:child_process').SpawnOptions} */ (plan.launch.options)
     const child = spawnProcess(plan.launch.command, plan.launch.args, options)

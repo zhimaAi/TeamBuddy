@@ -1,6 +1,9 @@
+import { h } from 'vue'
+import { Modal } from 'ant-design-vue'
 import apiClient from '@/api/client'
 import { t, type MessageKey } from '@/i18n'
-import { isDesktopRuntime, openCodexThread, openVibeCli, openQoderIDE } from '@/composables/useDesktop'
+import router from '@/router'
+import { isDesktopRuntime, openCodexThread, openVibeCli, openQoderIDE, openAntigravityApp } from '@/composables/useDesktop'
 import { ensureCodexSync, syncDescription } from '@/composables/useCodexSync'
 import { copyText } from '@/utils/clipboard'
 
@@ -23,6 +26,7 @@ export interface TaskVibeToolContext {
   task_uuid: string
   work_dir: string
   prompt: string
+  launch_prompt?: string
   bound?: boolean
   tool_name?: string
   thread_id?: string
@@ -48,6 +52,14 @@ export interface VibeToolOpenResult {
   setup?: CodexSetupReason
   review?: () => Promise<void>
   requiresIDEExit?: boolean
+  antigravityProject?: {
+    directoryPath: string
+    reason: 'missing' | 'ambiguous' | 'unavailable'
+    createFailed: boolean
+    recheck: (beforeConsent: () => void) => Promise<VibeToolOpenResult>
+    createAndOpen?: (beforeConsent: () => void) => Promise<VibeToolOpenResult>
+    openSetup?: () => Promise<void>
+  }
   retry?: () => Promise<VibeToolOpenResult>
 }
 
@@ -69,6 +81,10 @@ export async function loadTaskVibeToolContext(taskUuid: string): Promise<TaskVib
 
 export async function copyTaskVibeToolPrompt(taskUuid: string): Promise<VibeToolOpenResult> {
   const context = await loadTaskVibeToolContext(taskUuid)
+  if (context.tool === 'antigravity_app') return nativeAntigravityApp(context, 'copy')
+  if (context.tool === 'antigravity' && context.reporting_owner === 'hooks') {
+    return { opened: false, copied: false, error: new Error(t('components.errors.antigravityOpenFromDesktop')) }
+  }
   if (context.reporting_owner) return nativeCodex(context, 'copy')
   const result = await copyPrompt(context.prompt)
   if (result.copied) result.guidanceKey = context.tool === 'generic'
@@ -88,6 +104,7 @@ export async function openTaskVibeTool(taskUuid: string): Promise<VibeToolOpenRe
     const result = await copyPrompt(context.prompt)
     return { ...result, guidanceKey: result.copied ? 'workflows.task.detail.genericPromptCopied' : undefined }
   }
+  if (context.tool === 'antigravity_app') return nativeAntigravityApp(context, 'open')
   if (context.tool === 'qoder_ide') {
     if (!isDesktopRuntime()) {
       const copied = await copyPrompt(context.prompt)
@@ -120,25 +137,116 @@ export async function openTaskVibeTool(taskUuid: string): Promise<VibeToolOpenRe
     }
   }
   if ((context.launch || 'app') === 'terminal') {
+    if (context.tool === 'codex_cli' && context.reporting_owner === 'hooks') return nativeCodex(context, 'open')
+    const nativeAgy = context.tool === 'antigravity' && context.reporting_owner === 'hooks'
     if (!isDesktopRuntime() || !context.exec_path || !context.tool) {
+      if (nativeAgy) return { opened: false, copied: false, error: new Error(t('components.errors.antigravityOpenFromDesktop')) }
       return copyPrompt(context.prompt)
     }
     try {
-      await openVibeCli({
+      const result = await openVibeCli({
         tool: context.tool,
         execPath: context.exec_path,
         directoryPath: context.work_dir,
-        prompt: context.prompt,
+        prompt: nativeAgy ? context.launch_prompt || '' : context.prompt,
         threadId: context.thread_id,
         modelName: context.model_name,
+        ...(nativeAgy ? { nativeHook: { taskUuid: context.task_uuid, executionIndex: context.execution_index ?? -1, instruction: context.prompt } } : {}),
       })
-      return { opened: true, copied: false }
+      return {
+        opened: result.opened, copied: false, cancelled: !result.opened,
+        guidanceKey: nativeAgy && context.delivery_warning && result.opened ? 'workflows.task.detail.codexDeliveryWarning' : undefined,
+      }
     } catch (openError) {
+      if (nativeAgy) return { opened: false, copied: false, error: asError(openError) }
       const copied = await copyPrompt(context.prompt)
       return copied.copied ? copied : { opened: false, copied: false, error: asError(openError) }
     }
   }
   return openLoadedCodex(context)
+}
+
+let antigravityConsentActive = false
+
+async function confirmAntigravityAppHooks(payload: DesktopAntigravityAppRequest, route: string) {
+  if (antigravityConsentActive || router.currentRoute.value.fullPath !== route) return null
+  antigravityConsentActive = true
+  try {
+    return await new Promise<DesktopAntigravityAppResult | null>((resolve, reject) => {
+      let closed = false
+      const dialog = Modal.confirm({
+        title: t('workflows.task.detail.antigravityAppSetup.hookTitle'),
+        content: h('div', [
+          h('p', t('workflows.task.detail.antigravityAppSetup.hookDescription')),
+          h('p', t('workflows.task.detail.antigravityAppSetup.hookSettings')),
+        ]),
+        okText: t(payload.action === 'copy' ? 'workflows.task.detail.antigravityAppSetup.enableAndCopy'
+          : 'workflows.task.detail.antigravityAppSetup.enableAndOpen'),
+        cancelText: t('workflows.task.detail.qoderIDELater'),
+        maskClosable: false,
+        async onOk() {
+          try { finish(await openAntigravityApp({ ...payload, confirmHooks: true })) }
+          catch (error) { finish(null, asError(error)) }
+        },
+        onCancel: onExit,
+        afterClose: onExit,
+      })
+      const removeRoute = router.afterEach(() => { if (router.currentRoute.value.fullPath !== route) onExit() })
+      window.addEventListener('pagehide', onExit)
+      function onExit() { finish(null) }
+      function finish(result: DesktopAntigravityAppResult | null, error?: Error) {
+        if (closed) return
+        closed = true
+        window.removeEventListener('pagehide', onExit)
+        removeRoute()
+        dialog.destroy()
+        if (error) reject(error)
+        else resolve(result)
+      }
+    })
+  } finally { antigravityConsentActive = false }
+}
+
+async function nativeAntigravityApp(
+  context: TaskVibeToolContext, action: 'open' | 'copy' | 'create-project', beforeConsent?: () => void,
+): Promise<VibeToolOpenResult> {
+  const route = router.currentRoute.value.fullPath
+  const payload: DesktopAntigravityAppRequest = {
+    directoryPath: context.work_dir, taskUuid: context.task_uuid, executionIndex: context.execution_index ?? -1,
+    prompt: context.launch_prompt || '', instruction: context.prompt, threadId: context.thread_id, action,
+  }
+  try {
+    let result = await openAntigravityApp(payload)
+    if (router.currentRoute.value.fullPath !== route) return { opened: false, copied: false, cancelled: true }
+    if (result.setup === 'hook_consent') {
+      beforeConsent?.()
+      const confirmed = await confirmAntigravityAppHooks(payload, route)
+      if (!confirmed) return { opened: false, copied: false, cancelled: true }
+      result = confirmed
+    }
+    if (result.setup === 'project_required') {
+      const reason = result.reason ?? 'missing'
+      const continueWith = (nextAction: 'open' | 'create-project', onConsent: () => void) =>
+        router.currentRoute.value.fullPath !== route
+          ? Promise.resolve({ opened: false, copied: false, cancelled: true })
+          : nativeAntigravityApp(context, nextAction, onConsent)
+      return { opened: false, copied: false, antigravityProject: {
+        directoryPath: result.directoryPath, reason, createFailed: !!result.createFailed,
+        recheck: onConsent => continueWith('open', onConsent),
+        createAndOpen: result.canCreate ? onConsent => continueWith('create-project', onConsent) : undefined,
+        openSetup: reason === 'missing' ? async () => {
+          if (router.currentRoute.value.fullPath === route) await openAntigravityApp({ ...payload, action: 'open-project-setup' })
+        } : undefined,
+      } }
+    }
+    return {
+      opened: result.opened, copied: result.copied, cancelled: result.cancelled,
+      guidanceKey: result.copied ? result.projectRequested ? 'workflows.task.detail.antigravityAppProjectOpened'
+        : 'workflows.task.detail.antigravityAppPaste' : result.opened
+        ? context.delivery_warning ? 'workflows.task.detail.codexDeliveryWarning' : 'workflows.task.detail.antigravityAppResume'
+        : undefined,
+    }
+  } catch (error) { return { opened: false, copied: false, error: asError(error) } }
 }
 
 async function openLoadedCodex(context: TaskVibeToolContext): Promise<VibeToolOpenResult> {
@@ -157,17 +265,23 @@ async function openLoadedCodex(context: TaskVibeToolContext): Promise<VibeToolOp
 
 async function nativeCodex(context: TaskVibeToolContext, action: 'open' | 'copy'): Promise<VibeToolOpenResult> {
   if (!isDesktopRuntime()) return { opened: false, copied: false, error: new Error(t('components.errors.openCodexUnsupported')) }
+  const cli = context.tool === 'codex_cli'
   const payload: DesktopCodexRequest = {
     directoryPath: context.work_dir, prompt: context.prompt, threadId: context.thread_id,
     taskUuid: context.task_uuid, executionIndex: context.execution_index, reportingOwner: context.reporting_owner, action,
+    ...(cli ? { tool: 'codex_cli' as const, modelName: context.model_name } : {}),
   }
   try {
     let result = await openCodexThread(payload)
     if (result.setup && result.userSetup) {
-      if (!await ensureCodexSync(result.setup)) return { opened: false, copied: false, cancelled: true }
+      if (!await ensureCodexSync({
+        initial: result.setup,
+        configureCLI: cli ? async setupAction =>
+          (await openCodexThread({ ...payload, action: setupAction })).setup ?? 'ready' : undefined,
+      })) return { opened: false, copied: false, cancelled: true }
       // 原任务、目录与代次仍由 Main/Go 重新核对；不把延迟的确认用于另一代任务。
       result = await openCodexThread(payload)
-      if (result.setup) throw new Error(syncDescription(result.setup))
+      if (result.setup) throw new Error(syncDescription(result.setup, cli))
     }
     if (result.setup) return {
       opened: false, copied: false, setup: result.setup,
@@ -181,7 +295,7 @@ async function nativeCodex(context: TaskVibeToolContext, action: 'open' | 'copy'
       opened: result.opened, copied: !!result.copied, error: result.openError ? new Error(result.openError) : undefined,
       guidanceKey: context.delivery_warning && result.opened ? 'workflows.task.detail.codexDeliveryWarning' : result.copied ? context.thread_id
         ? 'workflows.task.detail.codexBoundCopy' : 'workflows.task.detail.codexNativeCopy'
-        : !context.thread_id && result.opened ? 'workflows.task.detail.codexAwaitSend' : undefined,
+        : !cli && !context.thread_id && result.opened ? 'workflows.task.detail.codexAwaitSend' : undefined,
     }
   } catch (error) { return { opened: false, copied: false, error: asError(error) } }
 }

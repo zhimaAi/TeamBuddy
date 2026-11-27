@@ -308,22 +308,20 @@ func (s *SkillSurface) resolveExpertGroupIndex(ctx context.Context, index int) (
 
 // cliDefinition 是 R5/R6 列表返回时所依赖的精简视图。
 type cliDefinition struct {
-	Type       string
-	Name       string
-	Installed  bool
-	ExecPath   string
-	Version    string
-	ModelNames []string
+	Type      string
+	Name      string
+	Installed bool
+	ExecPath  string
+	Version   string
 }
 
 func (s *SkillSurface) collectCLIs(ctx context.Context) []cliDefinition {
 	items := executor.GetCLIDiscovery(ctx)
 	out := make([]cliDefinition, 0, len(items))
 	for _, def := range items {
-		models := executor.GetCLIModels(ctx, def.Type)
 		out = append(out, cliDefinition{
 			Type: def.Type, Name: def.Name, Installed: def.Installed,
-			ExecPath: def.ExecPath, Version: def.Version, ModelNames: models,
+			ExecPath: def.ExecPath, Version: def.Version,
 		})
 	}
 	sort.SliceStable(out, func(i, j int) bool { return out[i].Type < out[j].Type })
@@ -352,10 +350,11 @@ func (s *SkillSurface) resolveModelIndex(ctx context.Context, cliIndex, modelInd
 	if err != nil {
 		return "", "", err
 	}
-	if modelIndex > len(cliDef.ModelNames) {
+	models := executor.ReadCLIModelCatalog(ctx, cliDef.Type, "", "").Models()
+	if modelIndex > len(models) {
 		return "", "", newSkillBadRequest("localserver_skill_model_index_invalid")
 	}
-	return cliDef.Type, cliDef.ModelNames[modelIndex-1], nil
+	return cliDef.Type, models[modelIndex-1], nil
 }
 
 // resolveModelForCurrentCLI 供「独立 -mid」使用：按任务当前 execution_tool 直接解析模型序号，
@@ -368,10 +367,10 @@ func (s *SkillSurface) resolveModelForCurrentCLI(ctx context.Context, taskUUID s
 	if tool == "" {
 		return "", "", newSkillBadRequest("localserver_skill_cli_required")
 	}
-	models := executor.GetCLIModels(ctx, tool)
 	if modelIndex < 1 {
 		return "", "", newSkillBadRequest("localserver_skill_model_index_invalid")
 	}
+	models := executor.ReadCLIModelCatalog(ctx, tool, "", "").Models()
 	if modelIndex > len(models) {
 		return "", "", newSkillBadRequest("localserver_skill_model_index_invalid")
 	}
@@ -513,7 +512,7 @@ func (s *SkillSurface) lookupCLIs(c *gin.Context) {
 	for idx, def := range items {
 		out = append(out, indexItem(idx+1, gin.H{
 			"type": def.Type, "name": def.Name, "installed": def.Installed,
-			"version": def.Version, "models": def.ModelNames, "model_count": len(def.ModelNames),
+			"version": def.Version, "models": []string{}, "model_count": 0,
 		}))
 	}
 	c.JSON(http.StatusOK, lookupItems(out))
@@ -530,8 +529,9 @@ func (s *SkillSurface) lookupModels(c *gin.Context) {
 		s.writeSkillError(c, err)
 		return
 	}
-	items := make([]gin.H, 0, len(def.ModelNames))
-	for i, name := range def.ModelNames {
+	models := executor.ReadCLIModelCatalog(c.Request.Context(), def.Type, "", "").Models()
+	items := make([]gin.H, 0, len(models))
+	for i, name := range models {
 		items = append(items, indexItem(i+1, gin.H{"model": name, "cli_type": def.Type}))
 	}
 	c.JSON(http.StatusOK, lookupItems(items))
@@ -1852,7 +1852,7 @@ func (s *SkillSurface) WechatFormatCLIs(ctx context.Context) (string, error) {
 		if !def.Installed {
 			status = s.trFromCtx(ctx, "localserver_skill_cli_missing", nil)
 		}
-		lines = append(lines, fmt.Sprintf("%d  %s  %s  (%d 模型)", i+1, def.Name, status, len(def.ModelNames)))
+		lines = append(lines, fmt.Sprintf("%d  %s  %s", i+1, def.Name, status))
 	}
 	return s.trFromCtx(ctx, "localserver_skill_clis_list", i18n.Params{"Items": strings.Join(lines, "\n\n")}), nil
 }
@@ -1866,11 +1866,12 @@ func (s *SkillSurface) WechatFormatModels(ctx context.Context, cliIndex int) (st
 		}
 		return s.trFromCtx(ctx, key, nil), err
 	}
-	if len(def.ModelNames) == 0 {
+	models := executor.ReadCLIModelCatalog(ctx, def.Type, "", "").Models()
+	if len(models) == 0 {
 		return s.trFromCtx(ctx, "localserver_skill_models_empty", i18n.Params{"CLI": def.Name}), nil
 	}
-	lines := make([]string, 0, len(def.ModelNames))
-	for i, name := range def.ModelNames {
+	lines := make([]string, 0, len(models))
+	for i, name := range models {
 		lines = append(lines, fmt.Sprintf("%d  %s", i+1, name))
 	}
 	return s.trFromCtx(ctx, "localserver_skill_models_list", i18n.Params{

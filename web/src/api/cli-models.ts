@@ -14,15 +14,15 @@ export interface ModelThinking {
 export interface CLIModelsResponse {
   models: string[]
   model_options?: { id: string; aliases?: string[]; thinking: ModelThinking }[]
-  catalog_meta?: { state: 'fresh' | 'stale' | 'unknown'; cli_version?: string; updated_at?: string }
+  catalog_meta?: { reason?: 'login_required' | 'read_failed' | 'unsupported_version'; state: 'fresh' | 'stale' | 'unknown'; cli_version?: string; updated_at?: string }
 }
 
-export function getCLIModelCatalog(cliType: string, options: { modelName?: string; taskUuid?: string; channelType?: string; refresh?: boolean; signal?: AbortSignal } = {}) {
+export function getCLIModelCatalog(cliType: string, options: { modelName?: string; taskUuid?: string; channelType?: string; signal?: AbortSignal } = {}) {
   return apiClient.get<CLIModelsResponse>('/tasks/cli-models', {
     cli_type: cliType,
     model_name: options.modelName,
     task_uuid: options.taskUuid,
     channel_type: options.channelType,
-    refresh: options.refresh ?? false,
+    refresh: true,
   }, options.signal)
 }

@@ -16,6 +16,7 @@ const { registerCodexIPC } = require('./ipc/codex.cjs')
 const { resolveQoderBackend } = require('./qoder-backend.cjs')
 const { registerQoderIDEIPC } = require('./ipc/qoder-ide.cjs')
 const { registerVibeCliIPC } = require('./ipc/vibe-cli.cjs')
+const { registerAntigravityAppIPC } = require('./ipc/antigravity-app.cjs')
 const { mcpBackendPath } = require('./vibe-mcp/codex-cli.cjs')
 const { registerTaskNotificationIPC } = require('./ipc/notification.cjs')
 const { registerTrayIPC } = require('./ipc/tray.cjs')
@@ -52,6 +53,7 @@ let removeApiTokenIPC = null
 let removeBrowserLoginIPC = null
 let removeCodexIPC = null
 let removeVibeCliIPC = null
+let removeAntigravityAppIPC = null
 let removeQoderIDEIPC = null
 let removeTaskNotificationIPC = null
 let removeTrayIPC = null
@@ -322,18 +324,18 @@ async function startApplication() {
       signal,
     })
   const hookBackend = { backendPath: signal => callbackBackend(signal) }
+  const skillBackendPath = () => mcpBackendPath(resolveBackendLaunch({
+    isPackaged: app.isPackaged,
+    resourcesPath: process.resourcesPath,
+    repoRoot,
+    platform: process.platform,
+  }).command)
   const userBackend = { backendPath: signal => callbackBackend(signal, true) }
-  const removeLaunch = registerCodexIPC(created.allowedOrigins, userBackend, hookBackend.backendPath)
+  const removeLaunch = registerCodexIPC(created.allowedOrigins, { ...userBackend, skillBackendPath }, hookBackend.backendPath)
   const removeReporting = registerCodexReportingIPC(created.allowedOrigins, userBackend)
   removeCodexIPC = () => { removeReporting(); removeLaunch() }
-  removeVibeCliIPC = registerVibeCliIPC(created.allowedOrigins, {
-    backendPath: () => mcpBackendPath(resolveBackendLaunch({
-      isPackaged: app.isPackaged,
-      resourcesPath: process.resourcesPath,
-      repoRoot,
-      platform: process.platform,
-    }).command),
-  })
+  removeVibeCliIPC = registerVibeCliIPC(created.allowedOrigins, { backendPath: skillBackendPath, antigravityBackendPath: userBackend.backendPath })
+  removeAntigravityAppIPC = registerAntigravityAppIPC(created.allowedOrigins, userBackend)
   removeQoderIDEIPC = registerQoderIDEIPC(created.allowedOrigins, hookBackend)
   removeTaskNotificationIPC = registerTaskNotificationIPC(created.allowedOrigins, {
     getMainWindow: () => mainWindow,
@@ -387,6 +389,7 @@ if (!singleInstance) {
     removeBrowserLoginIPC?.()
     removeCodexIPC?.()
     removeVibeCliIPC?.()
+    removeAntigravityAppIPC?.()
     removeQoderIDEIPC?.()
     removeTaskNotificationIPC?.()
     removeTrayIPC?.()

@@ -1098,6 +1098,10 @@ func startAdapterConversation(
 	resume bool,
 	externalSessionID string,
 ) (<-chan executor.ExecutorEvent, error) {
+	// 快照中保留显式“跟随”以区别未配置；原生 CLI 不接收这个保留值。
+	if runOptions.ModelProfile == executor.DefaultCLIModel {
+		runOptions.ModelProfile = ""
+	}
 	if !resume {
 		return adapter.NewConversation(ctx, runOptions)
 	}

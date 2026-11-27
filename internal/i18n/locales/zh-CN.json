@@ -696,6 +696,9 @@
   "localserver_agent_upload_local_only": {
     "other": "仅本地 Agent 支持上传头像"
   },
+  "localserver_antigravity_launch_prompt": {
+    "other": "请处理 TeamBuddy 任务：{{.Title}}"
+  },
   "localserver_api_not_found": {
     "other": "接口不存在"
   },

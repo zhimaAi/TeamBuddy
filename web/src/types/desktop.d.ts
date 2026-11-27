@@ -3,6 +3,20 @@ export {}
 declare global {
   type CodexSyncState = CodexSetupReason | 'ready'
   type CodexSetupReason = 'not_configured' | 'project_untrusted' | 'hooks_untrusted' | 'hooks_disabled' | 'inspection_failed'
+  interface DesktopAntigravityAppRequest {
+    directoryPath: string
+    taskUuid: string
+    executionIndex: number
+    threadId?: string
+    prompt: string
+    instruction: string
+    action: 'open' | 'copy' | 'open-project-setup' | 'create-project'
+    confirmHooks?: true
+  }
+  type DesktopAntigravityAppResult = { opened: boolean; copied: boolean; cancelled?: boolean; projectRequested?: boolean } & (
+    { setup: 'project_required'; directoryPath: string; reason: 'missing' | 'ambiguous' | 'unavailable'; canCreate: boolean; createFailed: boolean } | { setup?: 'hook_consent' }
+  )
+
   interface DesktopCodexRequest {
     directoryPath: string
     prompt: string
@@ -10,7 +24,9 @@ declare global {
     taskUuid?: string
     executionIndex?: number
     reportingOwner?: 'hooks'
-    action?: 'open' | 'copy' | 'review'
+    tool?: 'codex_cli'
+    modelName?: string
+    action?: 'open' | 'copy' | 'review' | 'status' | 'enable'
   }
   interface DesktopCodexResult {
     opened: boolean
@@ -74,7 +90,9 @@ declare global {
         prompt: string
         threadId?: string
         modelName?: string
-      }): Promise<{ opened: true }>
+        nativeHook?: { taskUuid: string; executionIndex: number; instruction: string }
+      }): Promise<{ opened: boolean }>
+      openAntigravityApp?(payload: DesktopAntigravityAppRequest): Promise<DesktopAntigravityAppResult>
       openQoderIDE?(payload: {
         directoryPath: string
         prompt: string

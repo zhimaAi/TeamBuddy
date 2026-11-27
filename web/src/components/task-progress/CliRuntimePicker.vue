@@ -42,12 +42,6 @@
                 />
                 <span class="cli-picker-label">{{ cli.name }}</span>
               </span>
-              <span
-                v-if="modelCount(cli) != null"
-                class="cli-picker-count"
-              >
-                {{ modelCount(cli) }}
-              </span>
             </button>
             <p
               v-if="!cliLoading && !visibleCliOptions.length"
@@ -57,17 +51,16 @@
             </p>
           </a-spin>
         </div>
-        <div class="cli-picker-models" role="listbox" :aria-label="t('workflows.task.progress.modelList')">
+        <div class="cli-picker-models" role="group" :aria-label="t('workflows.task.progress.modelList')">
+          <CliModelReadButton :cli-type="selectedCliType" :task-uuid="taskUuid" />
           <a-spin :spinning="modelLoading">
             <div
               v-for="model in visibleModelOptions"
               :key="model.value"
               class="cli-picker-model"
               :class="{ 'is-selected': model.value === selectedModelName }"
-              role="option"
-              :aria-selected="model.value === selectedModelName"
             >
-              <button type="button" class="cli-picker-model-name" :title="model.label" @click="selectModel(model.value)">
+              <button type="button" class="cli-picker-model-name" :title="model.label" :aria-pressed="model.value === selectedModelName" @click="selectModel(model.value)">
                 <img class="cli-picker-model-logo" :src="modelLogo(model.value, selectedCliType)" alt="" aria-hidden="true" />
                 <span class="cli-picker-model-label">{{ model.label }}</span>
               </button>
@@ -111,6 +104,7 @@
 
 <script setup lang="ts">
 import { computed } from 'vue'
+import CliModelReadButton from '@/components/CliModelReadButton.vue'
 import CliThinkingSelect from '@/components/CliThinkingSelect.vue'
 import { SwapOutlined } from '@ant-design/icons-vue'
 import cliPickerCheckIcon from '@/assets/icons/cli-picker-check.svg'
@@ -132,7 +126,6 @@ const props = defineProps<{
   taskUuid?: string
   modelOptions: string[]
   modelLoading: boolean
-  modelCounts?: Record<string, number>
   showExecutionSwitch?: boolean
 }>()
 
@@ -156,17 +149,9 @@ const visibleCliOptions = computed(() => {
   return items
 })
 
-const visibleModelOptions = computed(() => cliModelChoices(props.selectedCliType, props.modelOptions, props.selectedModelName))
+const visibleModelOptions = computed(() => cliModelChoices(props.selectedCliType, props.modelOptions, props.selectedModelName, t('components.cliSelect.modelDefault')))
 
-function modelCount(cli: DiscoveredCLI) {
-  if (cli.type === props.selectedCliType && props.modelOptions.length) {
-    return cliModelChoices(cli.type, props.modelOptions).length
-  }
-  const cached = props.modelCounts?.[cli.type]
-  if (cached != null) return cached
-  if (cli.models?.length) return cliModelChoices(cli.type, cli.models).length
-  return undefined
-}
+
 
 function selectCli(cli: DiscoveredCLI) {
   if (!cli.installed) return
@@ -306,16 +291,6 @@ function selectModel(model: string) {
   background: #bfbfbf;
 }
 
-.cli-picker-count {
-  flex: 0 0 auto;
-  color: #7a8699;
-  font-size: 12px;
-  line-height: 20px;
-}
-
-.cli-picker-item.is-unavailable .cli-picker-count {
-  color: #bfbfbf;
-}
 
 .cli-picker-model {
   min-height: 36px;

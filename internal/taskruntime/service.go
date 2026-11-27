@@ -26,6 +26,9 @@ var (
 	ErrTaskTitleAndDescriptionRequired = errors.New("任务标题与任务描述不能同时为空")
 	ErrTaskContextLocked               = errors.New("任务已开始，不能修改流水线、关联项目或任务目录")
 	ErrPipelineSnapshotLocked          = errors.New("任务已经分配流水线，不能覆盖永久快照")
+	ErrWorkDirRequired                 = errors.New("至少需要一个项目目录")
+	ErrWorkDirInvalid                  = errors.New("项目目录无效")
+	ErrWorkDirUnavailable              = errors.New("项目目录不存在或不是目录")
 	// ErrCloudUserIDRequired 关联线上的任务缺少账号归属：这类任务进不了上报队列。
 	ErrCloudUserIDRequired = errors.New("关联线上的任务必须包含云端账号归属")
 	// ErrCloudSourceKeyRequired 关联线上的任务缺少云端地址标识。
@@ -1074,18 +1077,18 @@ func (s *Service) CompleteStep(ctx context.Context, taskUUID, stepUUID string) (
 
 func normalizeWorkDirs(values []string) ([]string, error) {
 	if len(values) == 0 {
-		return nil, fmt.Errorf("至少需要一个项目目录")
+		return nil, ErrWorkDirRequired
 	}
 	result := make([]string, 0, len(values))
 	seen := map[string]struct{}{}
 	for _, value := range values {
 		abs, err := filepath.Abs(strings.TrimSpace(value))
 		if err != nil || strings.TrimSpace(value) == "" {
-			return nil, fmt.Errorf("项目目录无效: %s", value)
+			return nil, fmt.Errorf("%w: %s", ErrWorkDirInvalid, value)
 		}
 		info, err := os.Stat(abs)
 		if err != nil || !info.IsDir() {
-			return nil, fmt.Errorf("项目目录不存在或不是目录: %s", abs)
+			return nil, fmt.Errorf("%w: %s", ErrWorkDirUnavailable, abs)
 		}
 		key := filepath.Clean(abs)
 		if runtime.GOOS == "windows" {

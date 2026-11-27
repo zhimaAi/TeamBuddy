@@ -26,8 +26,8 @@ import { useCreateTaskDefaults } from '@/composables/useCreateTaskDefaults'
 import { useCliKickoffNavigation } from '@/composables/useCliKickoff'
 import { isDesktopRuntime, selectDirectory } from '@/composables/useDesktop'
 import { openTaskVibeTool } from '@/composables/useTaskVibeTool'
-import { isVibeCodingTool, vibeToolLabelKey, vibeToolLogo } from '@/composables/useVibeCoding'
-import { readRecentVibeModels, useVibeModelPreferences } from '@/composables/useVibeModelPreferences'
+import { isVibeCodingTool, supportsVibeModel, vibeToolLabelKey, vibeToolLogo } from '@/composables/useVibeCoding'
+import { readRecentVibeModels } from '@/composables/useVibeModelPreferences'
 import { useTaskImageAttachments } from '@/composables/useTaskImageAttachments'
 import { usePipelineStore } from '@/stores/pipeline'
 import { useExpertGroupStore } from '@/stores/expert-group'
@@ -213,23 +213,7 @@ async function load() {
 	if (expertResult.status === 'rejected') message.warning(t('expertGroups.loadFailed'))
   if (projectResult.status === 'rejected') message.warning(t('workflows.task.create.projectLoadFailed'))
   applyCreateTaskDefaults()
-  try {
-    await validateVibeFormModel()
-  } catch {
-    // 提交时重试校验，暂时保留历史偏好。
-  }
   loading.value = false
-}
-
-const { resetVibeModels, resolveVibeModel } = useVibeModelPreferences()
-
-async function validateVibeFormModel() {
-  if (form.execution_mode !== 'vibe_coding') return
-  const tool = form.execution_tool
-  const candidate = form.model_name || ''
-  resetVibeModels(tool, candidate)
-  const model = await resolveVibeModel(tool)
-  if (form.execution_mode === 'vibe_coding' && form.execution_tool === tool && (form.model_name || '') === candidate) form.model_name = model
 }
 
 function applyCreateTaskDefaults() {
@@ -267,7 +251,8 @@ function applyCreateTaskDefaults() {
   ) {
     form.execution_mode = 'vibe_coding'
     form.execution_tool = defaults.execution_tool
-    form.model_name = readRecentVibeModels()[defaults.execution_tool] ?? defaults.model_name ?? ''
+    form.model_name = supportsVibeModel(defaults.execution_tool)
+      ? readRecentVibeModels()[defaults.execution_tool] ?? defaults.model_name ?? '' : ''
   } else if (
     executionMode === 'cli' &&
     defaults.execution_tool &&
@@ -342,7 +327,6 @@ async function create() {
   const shouldOpenVibe = form.execution_mode === 'vibe_coding'
   const vibeTool = form.execution_tool
   try {
-    await validateVibeFormModel()
     const attachments = await buildDraftAttachmentInputs(form.description)
     const result = await apiClient.post<{ uuid: string }>('/tasks', {
       title: form.title.trim(),
@@ -785,7 +769,7 @@ watch(
         <span v-if="selectedPipeline"
           >{{ t('workflows.task.create.selectedPipeline', { name: selectedPipeline.name }) }}</span
         ><span v-else-if="isCLISelected && form.execution_tool && form.model_name"
-          >{{ t('workflows.task.assign.cliSelected', { cli: form.execution_tool, model: cliModelFamily(form.execution_tool, form.model_name) }) }}</span
+          >{{ t('workflows.task.assign.cliSelected', { cli: form.execution_tool, model: cliModelFamily(form.execution_tool, form.model_name, t('components.cliSelect.modelDefault')) }) }}</span
         ><span v-else-if="form.execution_mode === 'vibe_coding' && form.execution_tool">{{ t(vibeToolLabelKey(form.execution_tool)) }}</span
         ><span v-else-if="form.execution_mode === 'expert_group' && selectedExpertGroup">{{ t('workflows.task.create.selectedExpertGroup', { name: selectedExpertGroup.name }) }}</span
         ><span v-else-if="form.execution_mode">{{ t('workflows.task.create.executionTargetRequired') }}</span

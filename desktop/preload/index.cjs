@@ -12,6 +12,7 @@ const OPEN_TERMINAL_CHANNEL = 'desktop:open-terminal'
 const OPEN_CODEX_THREAD_CHANNEL = 'desktop:open-codex-thread'
 const OPEN_QODER_IDE_CHANNEL = 'desktop:open-qoder-ide'
 const OPEN_VIBE_CLI_CHANNEL = 'desktop:open-vibe-cli'
+const OPEN_ANTIGRAVITY_APP_CHANNEL = 'desktop:open-antigravity-app'
 const GET_API_TOKEN_CHANNEL = 'desktop:get-api-token'
 const GET_CLOSE_BEHAVIOR_CHANNEL = 'desktop:get-close-behavior'
 const SET_CLOSE_BEHAVIOR_CHANNEL = 'desktop:set-close-behavior'
@@ -131,7 +132,7 @@ contextBridge.exposeInMainWorld('goteamsDesktop', Object.freeze({
     return ipcRenderer.invoke(OPEN_TERMINAL_CHANNEL, directoryPath)
   },
   /**
-   * @param {{ tool: string, execPath: string, directoryPath: string, prompt: string, threadId?: string, modelName?: string }} payload
+   * @param {{ tool: string, execPath: string, directoryPath: string, prompt: string, threadId?: string, modelName?: string, nativeHook?: {taskUuid: string, executionIndex: number, instruction: string} }} payload
    */
   openVibeCli(payload) {
     if (
@@ -141,7 +142,10 @@ contextBridge.exposeInMainWorld('goteamsDesktop', Object.freeze({
       typeof payload.directoryPath !== 'string' ||
       typeof payload.prompt !== 'string' ||
       (payload.threadId !== undefined && typeof payload.threadId !== 'string') ||
-      (payload.modelName !== undefined && typeof payload.modelName !== 'string')
+      (payload.modelName !== undefined && typeof payload.modelName !== 'string') ||
+      (payload.nativeHook !== undefined && (payload.tool !== 'antigravity' || !payload.nativeHook ||
+        typeof payload.nativeHook.taskUuid !== 'string' || !Number.isSafeInteger(payload.nativeHook.executionIndex) ||
+        typeof payload.nativeHook.instruction !== 'string'))
     ) {
       return Promise.reject(new TypeError('Vibe CLI payload is invalid'))
     }
@@ -152,7 +156,12 @@ contextBridge.exposeInMainWorld('goteamsDesktop', Object.freeze({
       prompt: payload.prompt,
       threadId: payload.threadId,
       modelName: payload.modelName,
+      nativeHook: payload.nativeHook,
     })
+  },
+  /** @param {{directoryPath: string, taskUuid: string, executionIndex: number, threadId?: string, prompt: string, instruction: string, action: 'open' | 'copy' | 'open-project-setup', confirmHooks?: true}} payload */
+  openAntigravityApp(payload) {
+    return ipcRenderer.invoke(OPEN_ANTIGRAVITY_APP_CHANNEL, payload)
   },
   /** @param {{ directoryPath: string, prompt: string, threadId?: string }} payload */
   openQoderIDE(payload) {
@@ -181,6 +190,7 @@ contextBridge.exposeInMainWorld('goteamsDesktop', Object.freeze({
     return ipcRenderer.invoke(OPEN_CODEX_THREAD_CHANNEL, {
       taskUuid: payload.taskUuid, executionIndex: payload.executionIndex,
       reportingOwner: payload.reportingOwner, action: payload.action,
+      tool: payload.tool, modelName: payload.modelName,
       directoryPath: payload.directoryPath,
       prompt: payload.prompt,
       threadId: payload.threadId,

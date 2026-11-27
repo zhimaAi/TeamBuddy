@@ -4,12 +4,15 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os/exec"
 	"strconv"
 	"strings"
 )
+
+var errCatalogAuthenticationRequired = errors.New("cli_catalog_authentication_required")
 
 // catalogRPC owns a bounded CLI control process for metadata and pre-turn session setup.
 // It never sends generation prompts or exposes raw account/provider data.
@@ -152,6 +155,13 @@ func (r *catalogRPC) call(method string, params any, result any) error {
 				continue
 			}
 			if len(frame.Error) > 0 && string(frame.Error) != "null" {
+				var failure struct {
+					Code    int    `json:"code"`
+					Message string `json:"message"`
+				}
+				if json.Unmarshal(frame.Error, &failure) == nil && failure.Code == -32000 && failure.Message == "Authentication required" {
+					return errCatalogAuthenticationRequired
+				}
 				return ErrThinkingUnavailable
 			}
 			if result == nil {

@@ -118,7 +118,7 @@
             v-model:value="form.cli_type"
             :loading="cliLoading"
             :placeholder="t('agents.selectCli')"
-            @change="loadModels(String($event))"
+            @change="form.model = form.cli_type ? DEFAULT_CLI_MODEL : ''"
           >
             <a-select-option
               v-for="cli in cliOptions"
@@ -176,8 +176,9 @@
             {{ model.label }}
           </a-select-option>
         </a-select>
+        <CliModelReadButton :cli-type="form.cli_type" :disabled="saving" />
       </a-form-item>
-      <a-form-item v-if="form.cli_type && form.model" :label="t('components.cliThinking.title')">
+      <a-form-item v-if="form.cli_type && form.model && form.model !== DEFAULT_CLI_MODEL" :label="t('components.cliThinking.title')">
         <CliThinkingSelect v-model="form.thinking_level" :cli-type="form.cli_type" :model-name="form.model" />
       </a-form-item>
     </a-form>
@@ -202,10 +203,11 @@ import { computed, reactive, ref, toRef, watch } from 'vue'
 import { CloudDownloadOutlined } from '@ant-design/icons-vue'
 import { message } from 'ant-design-vue'
 import apiClient from '@/api/client'
+import CliModelReadButton from '@/components/CliModelReadButton.vue'
 import CliThinkingSelect from '@/components/CliThinkingSelect.vue'
 import { useCliThinkingSelection } from '@/composables/useCliThinkingSelection'
 import { useCLIModelCatalogStore } from '@/stores/cli-models'
-import { cliModelChoices } from '@/utils/cliModelOptions'
+import { DEFAULT_CLI_MODEL, cliModelChoices } from '@/utils/cliModelOptions'
 import agentCliReloadIcon from '@/assets/icons/agent-cli-reload.svg'
 import projectModalCameraIcon from '@/assets/icons/project-modal-camera.svg'
 import { ICON_FILE_ACCEPT, useIconFile } from '@/composables/useIconFile'
@@ -241,9 +243,7 @@ const emit = defineEmits<{
 
 const saving = ref(false)
 const cliLoading = ref(false)
-const modelLoading = ref(false)
 const cliOptions = ref<DiscoveredCLI[]>([])
-const modelOptions = ref<string[]>([])
 const fileInput = ref<HTMLInputElement>()
 const form = reactive({
   name: '',
@@ -255,11 +255,12 @@ const form = reactive({
   thinking_level: '',
 })
 const { resetThinkingDrafts } = useCliThinkingSelection(() => form.cli_type, () => form.model, toRef(form, 'thinking_level'))
-const modelChoices = computed(() => cliModelChoices(form.cli_type, modelOptions.value, form.model))
+const modelLoading = computed(() => modelDirectories.isLoading(form.cli_type))
+const modelChoices = computed(() => cliModelChoices(form.cli_type, modelDirectories.catalog(form.cli_type)?.models || [],
+  form.model, t('components.cliSelect.modelDefault')))
 const { file: avatarFile, previewUrl, selectFile, reset: resetAvatarFile } = useIconFile()
 // 设计稿约束：Agent 头像大小不超过 100KB，比共享图标校验（2MB）更严格，仅作用于本弹窗
 const MAX_AVATAR_FILE_SIZE = 100 * 1024
-let modelRequestId = 0
 
 // 云端资源（流水线步骤/专家团成员）仅锁编排字段，仍允许本地配置 CLI 与模型
 const cloudLocked = computed(
@@ -282,8 +283,6 @@ watch(
 )
 
 async function initialiseForm() {
-  modelRequestId += 1
-  modelOptions.value = []
 	const agent = editingAgent.value
 	form.name = agent?.name || ''
 	form.description = agent?.description || ''
@@ -333,36 +332,12 @@ async function detectCli(showSuccess = true) {
     const result = await apiClient.get<{ items: DiscoveredCLI[] }>('/tasks/cli-discovery', { refresh: showSuccess })
     // 已安装的 CLI 排在前面，未安装的置后且不可选择
     cliOptions.value = [...(result.items || [])].sort((a, b) => Number(b.installed) - Number(a.installed))
-    // 手动检测必须同步刷新模型，而不是重新读取旧快照。
-    await loadModels(form.cli_type, form.model, showSuccess)
+    modelDirectories.reconcileInstallations(cliOptions.value)
     if (showSuccess) message.success(t('agents.cliDetected'))
   } catch (error) {
     if (showSuccess) message.error(error instanceof Error ? error.message : t('agents.cliDetectionFailed'))
   } finally {
     cliLoading.value = false
-  }
-}
-
-async function loadModels(cliType: string, keepModel = '', refresh = false) {
-  const requestId = ++modelRequestId
-  modelOptions.value = modelDirectories.catalog(cliType)?.models || []
-  form.model = keepModel
-  if (!cliType) {
-    modelLoading.value = false
-    return
-  }
-
-  modelLoading.value = true
-  try {
-    const result = await modelDirectories.load(cliType, {}, refresh)
-    if (requestId !== modelRequestId || cliType !== form.cli_type) return
-    modelOptions.value = result.models || []
-    if (!form.model) form.model = modelOptions.value[0] || ''
-  } catch {
-    if (requestId !== modelRequestId || cliType !== form.cli_type) return
-    modelOptions.value = cliOptions.value.find((item) => item.type === cliType)?.models || []
-  } finally {
-    if (requestId === modelRequestId) modelLoading.value = false
   }
 }
 

@@ -16,7 +16,7 @@
             <div :id="`${menuId}-title`" class="thinking-title">{{ menuTitle }}</div>
             <p class="thinking-model" :title="modelLabel">{{ modelLabel }}</p>
           </div>
-          <a-button type="text" size="small" class="thinking-refresh" :loading="loading" :disabled="disabled" :aria-label="t('components.cliThinking.refresh')" :title="t('components.cliThinking.refresh')" @click="load(true)">
+          <a-button v-if="canRead" type="text" size="small" class="thinking-refresh" :loading="loading" :disabled="disabled" :aria-label="t('components.cliThinking.refresh')" :title="t('components.cliThinking.refresh')" @click="readThinking">
             <template #icon><ReloadOutlined aria-hidden="true" /></template>
           </a-button>
         </div>
@@ -24,10 +24,12 @@
           <ExclamationCircleOutlined aria-hidden="true" />
           <span>{{ t('components.cliThinking.saved', { level: levelLabel(modelValue) }) }}</span>
         </p>
-        <p v-else-if="!loading && !canChooseLevel" class="thinking-warning" role="status">
-          <ExclamationCircleOutlined aria-hidden="true" />
-          <span>{{ error || t('components.cliThinking.unavailable') }}</span>
-        </p>
+        <div role="status">
+          <p v-if="notice" class="thinking-warning">
+            <ExclamationCircleOutlined aria-hidden="true" />
+            <span>{{ notice }}</span>
+          </p>
+        </div>
         <div :id="menuId" class="thinking-options" role="menu" :aria-labelledby="`${menuId}-title`" :aria-busy="loading">
           <button type="button" class="thinking-option thinking-follow" :class="{ selected: modelValue === '' }" role="menuitemradio" :aria-checked="modelValue === ''" :tabindex="modelValue === '' ? 0 : -1" :disabled="disabled" @click="choose('')">
             <span class="thinking-option__copy">
@@ -84,7 +86,7 @@ import { computed, nextTick, ref, useId, watch } from 'vue'
 import { BulbOutlined, CheckOutlined, ExclamationCircleOutlined, InfoCircleOutlined, LoadingOutlined, ReloadOutlined } from '@ant-design/icons-vue'
 import { useCLIModelCatalogStore } from '@/stores/cli-models'
 import { useCLIThinkingPreferencesStore } from '@/stores/cli-thinking-preferences'
-import { cliModelFamily } from '@/utils/cliModelOptions'
+import { DEFAULT_CLI_MODEL, cliModelFamily } from '@/utils/cliModelOptions'
 import { useAppI18n } from '@/i18n'
 
 const props = withDefaults(defineProps<{
@@ -104,31 +106,33 @@ const trigger = ref<HTMLButtonElement>()
 const menu = ref<HTMLDivElement>()
 const directories = useCLIModelCatalogStore()
 const preferences = useCLIThinkingPreferencesStore()
-const modelLabel = computed(() => cliModelFamily(props.cliType, props.modelName))
+const modelLabel = computed(() => cliModelFamily(props.cliType, props.modelName, t('components.cliSelect.modelDefault')))
 const scope = computed(() => ({ taskUuid: props.taskUuid || undefined, channelType: props.channelType || undefined }))
-const loading = computed(() => directories.isLoading(props.cliType, scope.value))
-const error = computed(() => directories.error(props.cliType, scope.value))
+const perModelRead = computed(() => ['pi', 'antigravity'].includes(props.cliType))
+const selectedScope = computed(() => perModelRead.value ? { ...scope.value, modelName: props.modelName } : scope.value)
+const canRead = computed(() => props.modelName !== DEFAULT_CLI_MODEL && (props.cliType === 'codex' || perModelRead.value))
+const loading = computed(() => directories.isLoading(props.cliType, selectedScope.value))
+const error = computed(() => directories.error(props.cliType, selectedScope.value))
+const catalog = computed(() => directories.catalog(props.cliType, selectedScope.value))
 const thinking = computed(() => {
-  const options = directories.catalog(props.cliType, scope.value)?.model_options || []
-  const exact = options.find(option => option.id === props.modelName) || options.find(option => option.aliases?.includes(props.modelName))
-  if (exact || props.cliType !== 'cursor') return exact?.thinking
-  const separator = props.modelName.indexOf('[')
-  if (separator < 1 || !props.modelName.endsWith(']')) return undefined
-  const base = props.modelName.slice(0, separator)
-  const pairs = props.modelName.slice(separator + 1, -1).split(',')
-  if (!pairs.every(pair => /^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}=[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/.test(pair))
-    || new Set(pairs.map(pair => pair.split('=')[0])).size !== pairs.length) return undefined
-  return options.find(option => option.id === base)?.thinking
+  const options = catalog.value?.model_options || []
+  return (options.find(option => option.id === props.modelName) || options.find(option => option.aliases?.includes(props.modelName)))?.thinking
 })
 const menuId = `cli-thinking-${useId()}`
 const menuTitle = computed(() => t(thinking.value?.kind === 'variant' ? 'components.cliThinking.variant'
   : thinking.value?.kind === 'toggle' ? 'components.cliThinking.toggle' : 'components.cliThinking.title'))
 const knownChoices = computed(() => thinking.value?.status === 'supported' && !!thinking.value.levels?.length)
-const visible = computed(() => !!props.cliType && !!props.modelName && (!!props.modelValue || knownChoices.value))
+const visible = computed(() => !!props.cliType && !!props.modelName && (!!props.modelValue || knownChoices.value || (perModelRead.value && canRead.value)))
 const popupStyle = computed(() => props.popupZIndex === undefined ? undefined : { zIndex: props.popupZIndex })
 const tooltipStyle = computed(() => props.popupZIndex === undefined ? undefined : { zIndex: props.popupZIndex + 1 })
 const canChooseLevel = computed(() => knownChoices.value && thinking.value?.state === 'fresh')
 const savedUnavailable = computed(() => !!props.modelValue && (!!thinking.value || !loading.value) && (!canChooseLevel.value || !thinking.value?.levels?.some(level => level.value === props.modelValue)))
+const notice = computed(() => {
+  const reason = catalog.value?.catalog_meta?.reason
+  if (reason) return t(`components.cliSelect.readIssue.${reason}`)
+  if (error.value) return error.value
+  return !loading.value && !canChooseLevel.value && !savedUnavailable.value ? t('components.cliThinking.unavailable') : ''
+})
 const triggerLabel = computed(() => t('components.cliThinking.triggerLabel', {
   title: menuTitle.value,
   level: savedUnavailable.value ? t('components.cliThinking.saved', { level: levelLabel(props.modelValue) })
@@ -137,9 +141,13 @@ const triggerLabel = computed(() => t('components.cliThinking.triggerLabel', {
 const levelKeys: Record<string, string> = { off: 'off', on: 'on', none: 'none', minimal: 'minimal', low: 'low', medium: 'medium', high: 'high', xhigh: 'xhigh', max: 'max' }
 function levelLabel(value: string) { return thinking.value?.kind !== 'variant' && levelKeys[value] ? t(`components.cliThinking.${levelKeys[value]}`) : value }
 
-async function load(refresh = false) {
-  if (!props.cliType) return
-  try { await directories.load(props.cliType, scope.value, refresh) } catch { /* The directory owner retains stale choices and the retry error. */ }
+async function readThinking() {
+  if (!canRead.value) return
+  try {
+    await directories.read(props.cliType, selectedScope.value)
+  } catch {
+    // 错误仅在当前选择器中展示。
+  }
 }
 
 async function close() {
@@ -170,7 +178,6 @@ function handleMenuKeydown(event: KeyboardEvent) {
 function handleOpen(value: boolean) {
   if (value && props.disabled) return
   open.value = value
-  if (value) void load()
 }
 // Portal 挂载后还要完成浮层定位；跨两帧再聚焦，关闭/切换/卸载时取消，不轮询。
 watch([open, menu], ([isOpen, element], _, onCleanup) => {
@@ -185,12 +192,7 @@ watch([open, menu], ([isOpen, element], _, onCleanup) => {
   })
   onCleanup(() => cancelAnimationFrame(frame))
 }, { flush: 'post' })
-watch(() => [props.cliType, props.taskUuid, props.channelType] as const, () => {
-  open.value = false
-  void load()
-}, { immediate: true })
-// Switching models only projects the already shared directory; never start a probe.
-watch(() => props.modelName, () => { open.value = false })
+watch(() => [props.cliType, props.taskUuid, props.channelType, props.modelName], () => { open.value = false })
 </script>
 
 <style scoped>

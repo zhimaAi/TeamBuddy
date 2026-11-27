@@ -3,7 +3,7 @@
     :open="open"
     :width="730"
     :title="modalTitle"
-    :confirm-loading="saving || Boolean(vibeModelResolving[selectedTarget || ''])"
+    :confirm-loading="saving"
     :ok-button-props="{ disabled: !canConfirm }"
     :cancel-button-props="{ disabled: saving }"
     :z-index="modalZIndex"
@@ -100,7 +100,6 @@
                 :selected="selectedMode === 'vibe_coding' && selectedTarget === tool.id"
                 :disabled="vibeToolDisabled(tool.id) || (!selectOnly && initialMode === 'vibe_coding' && initialVibeTool === tool.id)"
                 @update:model-value="selectVibeModel(tool.id, $event)"
-                @resolved="setVibeModel(tool.id, $event)"
               />
               <CheckCircleFilled
                 v-if="selectedMode === 'vibe_coding' && selectedTarget === tool.id"
@@ -147,11 +146,10 @@
                     <span class="assign-runtime__name">{{ selectedCliLabel }}</span>
                   </span>
                 </template>
-                <template #option="{ label, value, modelCount }">
+                <template #option="{ label, value }">
                   <span class="assign-cli-option">
                     <img class="assign-runtime__logo" :src="cliLogo(String(value))" alt="" />
                     <span class="assign-cli-option__name">{{ label ?? value }}</span>
-                    <span class="assign-cli-option__count">{{ modelCount ?? '…' }}</span>
                   </span>
                 </template>
               </a-select>
@@ -201,6 +199,7 @@
                   compact
                 />
               </div>
+              <CliModelReadButton v-if="selectedMode === 'cli' && selectedTarget && !cliModeLocked" :cli-type="selectedTarget" :task-uuid="taskUuid" :disabled="saving" />
             </div>
           </div>
           <p v-if="!cliLoading && !availableCliOptions.length" class="field-help">
@@ -367,6 +366,7 @@ import {
 import { storeToRefs } from 'pinia'
 import { useRouter } from 'vue-router'
 import apiClient from '@/api/client'
+import CliModelReadButton from '@/components/CliModelReadButton.vue'
 import CliThinkingSelect from '@/components/CliThinkingSelect.vue'
 import { useCliThinkingSelection } from '@/composables/useCliThinkingSelection'
 import cliExecutionLogo from '@/assets/icons/task-composer-cli.svg'
@@ -387,6 +387,7 @@ import {
   writeRecentVibeTool,
   type VibeCodingToolId,
 } from '@/composables/useVibeCoding'
+import { DEFAULT_CLI_MODEL } from '@/utils/cliModelOptions'
 import { useCliModelOptions } from '@/composables/useCliModelOptions'
 import { isDesktopRuntime } from '@/composables/useDesktop'
 import { ensureCodexSync, syncError } from '@/composables/useCodexSync'
@@ -475,7 +476,7 @@ const selectedTarget = ref<string>()
 const selectedModelName = ref('')
 const selectedThinkingLevel = ref('')
 const { resetThinkingDrafts } = useCliThinkingSelection(() => selectedMode.value === 'cli' ? selectedTarget.value || '' : '', () => selectedModelName.value, selectedThinkingLevel)
-const { vibeModels, resolving: vibeModelResolving, resetVibeModels, setVibeModel, resolveVibeModel } = useVibeModelPreferences()
+const { vibeModels, resetVibeModels, setVibeModel } = useVibeModelPreferences()
 
 interface ExecutionModeAssignmentResult {
   switched?: boolean
@@ -487,20 +488,16 @@ const {
   cliLoading,
   cliOptions,
   loadCliOptions,
-  loadModelOptions,
-  modelCounts,
   modelLoading,
   modelChoices,
   modelLabel,
-  prefetchModelCounts,
-} = useCliModelOptions(true, () => ({ taskUuid: props.taskUuid || undefined }))
+} = useCliModelOptions(() => selectedMode.value === 'cli' ? selectedTarget.value || '' : '', () => ({ taskUuid: props.taskUuid || undefined }))
 
 const availableCliOptions = computed(() => cliOptions.value.filter((cli) => cli.installed))
 const cliSelectOptions = computed(() => {
   const items = cliOptions.value.map((cli) => ({
     value: cli.type,
     label: cli.name,
-    modelCount: modelCounts.value[cli.type],
     disabled: !cli.installed,
   }))
   // 已指派任务的 CLI 可能来自其他设备（本机未安装），保留可回显。
@@ -509,7 +506,6 @@ const cliSelectOptions = computed(() => {
     items.unshift({
       value: current,
       label: current,
-      modelCount: modelCounts.value[current],
       disabled: false,
     })
   }
@@ -582,7 +578,7 @@ const canConfirm = computed(() => {
     return Boolean(selectedModelName.value)
   }
   if (selectedMode.value === 'vibe_coding') {
-    return isVibeCodingTool(selectedTarget.value) && !vibeToolDisabled(selectedTarget.value) && !vibeModelResolving.value[selectedTarget.value]
+    return isVibeCodingTool(selectedTarget.value) && !vibeToolDisabled(selectedTarget.value)
   }
   if (selectedMode.value === 'expert_group') {
     return expertGroups.value.some((group: ExpertGroup) => group.ready && group.uuid === selectedTarget.value)
@@ -612,8 +608,7 @@ function chooseCLIType(cliType: string) {
   if (selectedMode.value === 'cli' && selectedTarget.value === cliType) return
   selectedMode.value = 'cli'
   selectedTarget.value = cliType
-  selectedModelName.value = ''
-  void loadModelOptions(cliType)
+  selectedModelName.value = cliType ? DEFAULT_CLI_MODEL : ''
 }
 
 function vibeCapability(tool: string) {
@@ -678,25 +673,11 @@ function currentSelection(): ExecutionModeSelection | null {
 
 async function confirm() {
   if (!canConfirm.value || saving.value || !selectedMode.value) return
-  if (selectedMode.value === 'vibe_coding' && selectedTarget.value && supportsVibeModel(selectedTarget.value)
-    && (props.selectOnly || props.initialMode !== 'vibe_coding' || props.initialVibeTool !== selectedTarget.value)) {
-    const tool = selectedTarget.value
-    saving.value = true
-    try {
-      await resolveVibeModel(tool)
-    } catch (error) {
-      message.error(error instanceof Error ? error.message : t('workflows.task.assign.vibeModelLoadFailed'))
-      return
-    } finally {
-      saving.value = false
-    }
-    if (!props.open || selectedMode.value !== 'vibe_coding' || selectedTarget.value !== tool) return
-  }
   if (selectedMode.value === 'vibe_coding' && selectedTarget.value === 'codex' && isDesktopRuntime()
     && (props.selectOnly || props.initialMode !== 'vibe_coding' || props.initialVibeTool !== 'codex')) {
     const task = props.taskUuid
     saving.value = true
-    try { if (!await ensureCodexSync()) return }
+    try { if (!await ensureCodexSync({ parentModalZIndex: modalZIndex })) return }
     catch (e) { message.error(syncError(e)); return }
     finally { saving.value = false }
     if (!props.open || props.taskUuid !== task || selectedMode.value !== 'vibe_coding' || selectedTarget.value !== 'codex') return
@@ -783,17 +764,6 @@ async function confirm() {
 }
 
 watch(
-  [selectedMode, selectedTarget],
-  ([mode, tool]) => {
-    if (!props.open || mode !== 'vibe_coding' || !tool || !supportsVibeModel(tool)) return
-    if (!props.selectOnly && props.initialMode === 'vibe_coding' && props.initialVibeTool === tool) return
-    void resolveVibeModel(tool).catch(() => {
-      // 展开模型菜单或确认时展示加载错误，保留偏好以便重试。
-    })
-  },
-)
-
-watch(
   () => props.open,
   async (open) => {
     if (!open) return
@@ -812,28 +782,12 @@ watch(
     selectedThinkingLevel.value = props.initialMode === 'cli' ? props.initialThinkingLevel : ''
     resetThinkingDrafts()
     resetVibeModels(props.initialMode === 'vibe_coding' ? props.initialVibeTool : '', props.initialModelName)
-    if (selectedMode.value === 'vibe_coding' && selectedTarget.value
-      && (props.selectOnly || props.initialMode !== 'vibe_coding' || props.initialVibeTool !== selectedTarget.value)) {
-      void resolveVibeModel(selectedTarget.value).catch(() => {
-        // 确认前会再次校验，加载失败时允许从模型菜单重试。
-      })
-    }
-    const [pipelineResult, expertResult, codexResult, cliResult] = await Promise.allSettled([
+    const [pipelineResult, expertResult, codexResult] = await Promise.allSettled([
       pipelineStore.loadPipelines(true),
       expertGroupStore.load(true),
       loadVibeToolsCapability(),
       loadCliOptions(),
     ])
-    if (cliResult.status === 'fulfilled' && selectedMode.value === 'cli' && selectedTarget.value) {
-      void loadModelOptions(selectedTarget.value)
-    }
-    if (cliResult.status === 'fulfilled') {
-      const cliTypes = cliOptions.value.map((cli) => cli.type)
-      if (props.initialCliType && !cliTypes.includes(props.initialCliType)) {
-        cliTypes.unshift(props.initialCliType)
-      }
-      void prefetchModelCounts(cliTypes)
-    }
     codexCapability.value = codexResult.status === 'fulfilled'
       ? codexResult.value
       : { available: false, message: t('workflows.task.codex.capabilityUnavailable') }
@@ -1188,13 +1142,6 @@ watch(
   white-space: nowrap;
 }
 
-.assign-cli-option__count {
-  flex: 0 0 auto;
-  color: #7a8699;
-  font-size: 12px;
-  font-variant-numeric: tabular-nums;
-  line-height: 20px;
-}
 
 .assign-model-option {
   display: block;

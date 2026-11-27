@@ -96,6 +96,7 @@
     "created": "Local task created and linked",
     "createFailed": "Failed to create the local task",
     "workDirRequired": "Select a working directory",
+    "workDirUnavailable": "A working directory or related directory is unavailable. Check the directory and select it again.",
     "projectRequired": "Select a project"
   },
   "delete": {

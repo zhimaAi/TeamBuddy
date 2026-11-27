@@ -11,7 +11,16 @@
     "trustCallbacks": "在「用户配置」下，找到 TeamBuddy 的 SessionStart、UserPromptSubmit 和 Stop，分别点「信任」。",
     "returnToTask": "回到 TeamBuddy，授权生效后会自动继续。",
     "reloadHint": "没看到这三项？在钩子页面点「重新加载钩子」。",
-    "checking": "正在读取配置…"
+    "checking": "正在读取配置…",
+    "cli": {
+      "title": "Codex CLI 任务同步",
+      "enable": "启用同步并打开终端",
+      "review": "打开 CLI 审阅终端",
+      "awaitTrust": "已配置同步，请在 Codex CLI 中信任 TeamBuddy 的 Hooks。",
+      "disabled": "Codex CLI 的 Hook 功能或某项回调已禁用。请在 /hooks 中检查；如果由组织策略管理，请联系管理员。",
+      "inspectionFailed": "无法验证 TeamBuddy Hooks，请核对 Codex CLI 版本和配置。",
+      "selectHooks": "在打开的 Codex CLI 中输入 /hooks。"
+    }
   },
   "gitProjects": "Git 项目",
   "desktop": "客户端",

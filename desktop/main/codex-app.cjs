@@ -10,13 +10,42 @@ const { darwinLaunchOptions } = require('./vibe-cli.cjs')
 const { terminalLaunchOptions, windowsPowerShellPath } = require('./terminal-launcher.cjs')
 const runFile = promisify(execFile)
 const EVENTS = ['sessionStart', 'userPromptSubmit', 'stop']
+const CODEX_THREAD_URL = 'codex://threads/new'
 
-// Prefer the URI handler's bundle. MSIX can expose a broker instead of an exe;
-// only for the Codex handler query the exact official package for this user.
-/** @param {string} applicationPath @param {NodeJS.Platform} platform @param {string} name @param {AbortSignal} [signal] */
-async function findCodexAppRuntime(applicationPath, platform = process.platform, name = '', signal = undefined) {
+// MSIX 可以用 DelegateExecute 接收链接，导致 Electron 查不到 exe 路径。
+// 查询当前生效的 ProgID，再核对应用身份，避免把链接交给同名或其他处理程序。
+const WINDOWS_CODEX_PACKAGE_QUERY = String.raw`
+$ErrorActionPreference = 'Stop'
+[Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)
+Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+using System.Text;
+public static class CodexProtocolAssociation {
+    [DllImport("shlwapi.dll", EntryPoint = "AssocQueryStringW", CharSet = CharSet.Unicode, ExactSpelling = true)]
+    public static extern int Query(uint flags, uint kind, string scheme, IntPtr extra, StringBuilder result, ref uint length);
+}
+'@
+$progId = New-Object System.Text.StringBuilder 1024
+$length = [uint32]$progId.Capacity
+# ASSOCF_IS_PROTOCOL (0x1000), ASSOCSTR_PROGID (20)
+if ([CodexProtocolAssociation]::Query(0x1000, 20, 'codex', [IntPtr]::Zero, $progId, [ref]$length) -ne 0) { return }
+$association = $progId.ToString()
+if ($association -notmatch '^AppX[a-z0-9]+$') { return }
+$family = 'OpenAI.Codex_2p2nqsd0c76g0'
+$application = Get-ItemProperty -LiteralPath ('Registry::HKEY_CLASSES_ROOT\' + $association + '\Application') -ErrorAction SilentlyContinue
+if ($application.AppUserModelID -ne ($family + '!App')) { return }
+(Get-AppxPackage -Name OpenAI.Codex | Where-Object { $_.PackageFamilyName -eq $family } | Sort-Object { try { [version]$_.Version } catch { [version]'0.0.0.0' } } -Descending | Select-Object -First 1).InstallLocation
+`
+
+/** @param {Electron.App} app @param {AbortSignal} [signal] */
+async function findCodexAppRuntime(app, signal) {
+  const platform = process.platform
   if (platform !== 'win32' && platform !== 'darwin') throw new Error('runtime_unavailable')
+  const application = await app.getApplicationInfoForProtocol(CODEX_THREAD_URL).catch(() => null)
+  signal?.throwIfAborted()
   const native = platform === 'win32' ? path.win32 : path.posix
+  const applicationPath = application?.path
   const absolute = typeof applicationPath === 'string' && native.isAbsolute(applicationPath) && !/[\0\r\n]/.test(applicationPath)
   let base = ''
   if (absolute) {
@@ -26,7 +55,7 @@ async function findCodexAppRuntime(applicationPath, platform = process.platform,
   const locate = async base => {
     const candidates = platform === 'darwin'
       ? [native.join(base, 'codex-cli', 'CodexCLI.app', 'Contents', 'MacOS', 'codex'), native.join(base, 'codex')]
-      : [native.join(base, 'codex.exe'), native.join(base, 'codex-cli', 'codex.exe')]
+      : [native.join(base, 'codex.exe'), native.join(base, 'codex-cli', 'codex.exe'), native.join(base, 'codex-cli', 'bin', 'codex.exe')]
     for (const candidate of candidates) {
       try { if ((await fs.stat(candidate)).isFile()) return await fs.realpath(candidate) } catch { /* Try the next layout. */ }
     }
@@ -36,22 +65,32 @@ async function findCodexAppRuntime(applicationPath, platform = process.platform,
     const file = await locate(base)
     if (file) return file
   }
-  if (platform === 'win32' && /^(openai\s+)?codex$/i.test(name.trim())) {
-    const query = "[Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false); " +
-      "(Get-AppxPackage -Name OpenAI.Codex -ErrorAction Stop | Where-Object { $_.PackageFamilyName -eq 'OpenAI.Codex_2p2nqsd0c76g0' }).InstallLocation"
-    const result = await runFile(windowsPowerShellPath(), ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', query],
-      { timeout: 5000, maxBuffer: 32 * 1024, windowsHide: true, signal }).catch(() => null)
-    const install = String(result?.stdout || '').trim()
+  if (platform === 'win32') {
+    const query = Buffer.from(WINDOWS_CODEX_PACKAGE_QUERY, 'utf16le').toString('base64')
+    const result = await runFile(windowsPowerShellPath(), ['-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand', query],
+      { timeout: 10000, maxBuffer: 32 * 1024, windowsHide: true, signal }).catch(() => null)
+    signal?.throwIfAborted()
+    if (!result) throw new Error('runtime_unavailable')
+    const install = String(result.stdout || '').trim()
     if (native.isAbsolute(install) && !/[\0\r\n]/.test(install)) {
       const file = await locate(native.join(install, 'app', 'resources'))
       if (file) return file
+      throw new Error('runtime_unavailable')
     }
   }
-  throw new Error(absolute || name ? 'runtime_unavailable' : 'not_installed')
+  throw new Error(absolute || application?.name ? 'runtime_unavailable' : 'not_installed')
 }
 
 function codexHookCommand(backend, platform = process.platform, user = false) {
   const args = user ? 'codex-hook user' : 'codex-hook'
+  return nativeHookCommand(backend, platform, args)
+}
+
+function antigravityHookCommand(backend, platform = process.platform, app = false) {
+  return nativeHookCommand(backend, platform, app ? 'antigravity-hook app' : 'antigravity-hook')
+}
+
+function nativeHookCommand(backend, platform, args) {
   const native = platform === 'win32' ? path.win32 : path.posix
   if (!native.isAbsolute(backend) || /[\0\r\n]/.test(backend)) throw new Error('backend_unavailable')
   if (platform !== 'win32') return `'${backend.replace(/'/g, "'\\''")}' ${args}`
@@ -96,7 +135,7 @@ async function prepareCodexHooks(directory, backend, platform, stateRoot) {
 
 function userHookHome() {
   const home = process.env.CODEX_HOME || path.join(require('node:os').homedir(), '.codex')
-  if (!path.isAbsolute(home)) throw new Error('configuration_conflict')
+  if (!path.isAbsolute(home) || /[\0\r\n]/.test(home)) throw new Error('configuration_conflict')
   return path.normalize(home)
 }
 async function prepareUserCodexHooks(backend, platform, stateRoot) {
@@ -131,19 +170,21 @@ async function callCodexCallback(backend, args, signal, run = runFile) {
   return JSON.parse(String(result.stdout))
 }
 
-// Open the bundled CLI's native /hooks review. Only the user can grant trust.
-async function openCodexHookReview(runtime, directory, platform, signal) {
+// Open the matching CLI for native /hooks review. Only the user can grant trust.
+async function openCodexHookReview(runtime, directory, platform, signal, codexHome = '') {
+  if (typeof runtime !== 'string' || !path.isAbsolute(runtime) || /[\0\r\n]/.test(runtime)) throw new Error('runtime_unavailable')
   let launch
   if (platform === 'darwin') {
-    launch = darwinLaunchOptions(directory, runtime, ['--no-alt-screen', '-C', directory], 'codex')
+    launch = darwinLaunchOptions(directory, runtime, ['--no-alt-screen', '-C', directory], 'codex', [], '', codexHome)
   } else if (platform === 'win32') {
     launch = terminalLaunchOptions(directory, platform)
     // cmd can replace a UNC cwd when it starts the console; always pass -C.
     const quote = value => "'"+value.replace(/'/g, "''")+"'"
-    const script = `& ${quote(runtime)} --no-alt-screen -C ${quote(directory)}`
+    const home = codexHome ? `$env:CODEX_HOME = ${quote(codexHome)}; ` : ''
+    const script = `${home}& ${quote(runtime)} --no-alt-screen -C ${quote(directory)}`
     launch.args.push('-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64'))
   } else throw new Error('runtime_unavailable')
   await runFile(launch.command, launch.args, { cwd: directory, timeout: 10000, maxBuffer: 64 * 1024, signal })
 }
 
-module.exports = { userHookHome, prepareUserCodexHooks, findCodexAppRuntime, codexHookCommand, prepareCodexHooks, classifyCodexHooks, callCodexCallback, openCodexHookReview }
+module.exports = { antigravityHookCommand, userHookHome, prepareUserCodexHooks, findCodexAppRuntime, codexHookCommand, prepareCodexHooks, classifyCodexHooks, callCodexCallback, openCodexHookReview }

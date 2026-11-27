@@ -253,8 +253,8 @@ import { pendingCliKickoffUuid } from '@/composables/useCliKickoff'
 import { usePipelineStore } from '@/stores/pipeline'
 import { useExpertGroupStore } from '@/stores/expert-group'
 import { useCliNames } from '@/composables/useCliNames'
-import { vibeToolLabelKey, vibeToolLogo } from '@/composables/useVibeCoding'
-import { readRecentVibeModels, useVibeModelPreferences } from '@/composables/useVibeModelPreferences'
+import { supportsVibeModel, vibeToolLabelKey, vibeToolLogo } from '@/composables/useVibeCoding'
+import { readRecentVibeModels } from '@/composables/useVibeModelPreferences'
 import { useAppI18n } from '@/i18n'
 import ComposerImageAttachments from '@/components/task-progress/ComposerImageAttachments.vue'
 
@@ -349,15 +349,6 @@ watch(onboardingTarget, (target) => {
   nextTick(() => textareaRef.value?.focus())
 })
 
-const { resetVibeModels, resolveVibeModel } = useVibeModelPreferences()
-
-async function validateVibeMode(mode: ExecutionModeSelection) {
-  if (mode.mode !== 'vibe_coding' || !mode.executionTool) return
-  resetVibeModels(mode.executionTool, mode.modelName ?? readRecentVibeModels()[mode.executionTool] ?? '')
-  const model = await resolveVibeModel(mode.executionTool)
-  if (executionMode.value === mode) mode.modelName = model
-}
-
 function restorePreferences() {
   const queryDir = (route.query.workDir as string | undefined)?.trim()
   if (queryDir) {
@@ -428,7 +419,7 @@ function selectionDisplayName(selection: AssignedExecutionMode): string {
   }
   const cliName = cliDisplayName(selection.tool)
   return selection.modelName
-    ? `${t('workflows.task.common.directExecution')} · ${cliName} (${cliModelFamily(selection.tool, selection.modelName)})`
+    ? `${t('workflows.task.common.directExecution')} · ${cliName} (${cliModelFamily(selection.tool, selection.modelName, t('components.cliSelect.modelDefault'))})`
     : `${t('workflows.task.common.directExecution')} · ${cliName}`
 }
 
@@ -456,7 +447,7 @@ const executionModeToolbarLabel = computed(() => {
   if (!mode) return ''
   if (mode.mode === 'cli') {
     const name = cliDisplayName(mode.executionTool || '')
-    return mode.modelName ? `${name} / ${mode.modelName}` : name
+    return mode.modelName ? `${name} / ${cliModelFamily(mode.executionTool || '', mode.modelName, t('components.cliSelect.modelDefault'))}` : name
   }
   if (mode.mode === 'pipeline') {
     return (
@@ -607,7 +598,6 @@ async function handleSubmit() {
 
   submitting.value = true
   try {
-    await validateVibeMode(mode)
     conversationStore.recordWorkingDir(workDir)
     try {
       localStorage.setItem(LAST_WORK_DIR_KEY, workDir)
@@ -695,9 +685,11 @@ async function handleSubmit() {
 onMounted(() => {
   void ensureCliNamesLoaded()
   restorePreferences()
-  if (executionMode.value) void validateVibeMode(executionMode.value).catch(() => {
-    // 提交时再次校验，短暂加载失败不会擦除原模型偏好。
-  })
+  const mode = executionMode.value
+  if (mode?.mode === 'vibe_coding' && mode.executionTool) {
+    mode.modelName = supportsVibeModel(mode.executionTool)
+      ? mode.modelName ?? readRecentVibeModels()[mode.executionTool] ?? '' : ''
+  }
   nextTick(() => {
     const target = onboardingTarget.value
     if (target === 'execution' || target === 'directory') return

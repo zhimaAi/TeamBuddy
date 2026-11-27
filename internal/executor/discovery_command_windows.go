@@ -9,6 +9,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+
+	"golang.org/x/sys/windows"
 )
 
 func cliProbeCommand(ctx context.Context, execPath string, args []string) (*exec.Cmd, error) {
@@ -16,6 +18,9 @@ func cliProbeCommand(ctx context.Context, execPath string, args []string) (*exec
 	if ext != ".cmd" && ext != ".bat" {
 		cmd := exec.CommandContext(ctx, execPath, args...)
 		CreateProcessGroup(cmd)
+		// 后台探测不创建控制台，避免定时检测 CLI 时闪出命令窗口。
+		cmd.SysProcAttr.HideWindow = true
+		cmd.SysProcAttr.CreationFlags |= windows.CREATE_NO_WINDOW
 		return cmd, nil
 	}
 	// CreateProcess 不能直接启动批处理文件。这里只有固定的发现参数，
@@ -40,6 +45,9 @@ func cliProbeCommand(ctx context.Context, execPath string, args []string) (*exec
 	}
 	cmd := exec.CommandContext(ctx, commandProcessor)
 	CreateProcessGroup(cmd)
+	// 批处理探测也必须隐藏 cmd.exe 及其控制台子进程。
+	cmd.SysProcAttr.HideWindow = true
+	cmd.SysProcAttr.CreationFlags |= windows.CREATE_NO_WINDOW
 	cmd.SysProcAttr.CmdLine = "\"" + commandProcessor + "\" /d /s /v:off /c \"" + strings.Join(quoted, " ") + "\""
 	return cmd, nil
 }

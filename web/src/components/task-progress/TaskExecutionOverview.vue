@@ -20,6 +20,7 @@
 </template>
 
 <script setup lang="ts">
+import { DEFAULT_CLI_MODEL } from '@/utils/cliModelOptions'
 import { computed, ref, watch } from 'vue'
 import { CheckOutlined, PlusOutlined, SettingOutlined, TeamOutlined } from '@ant-design/icons-vue'
 import AgentStepStrip from './AgentStepStrip.vue'
@@ -67,7 +68,8 @@ const executionLabel = computed(() => {
   }
   if (props.task.execution_mode === 'cli') {
     const cli = cliDisplayName(props.task.execution_tool || '')
-    const model = props.task.execution_model || steps.value[0]?.model_name
+    const selected = props.task.execution_model || steps.value[0]?.model_name
+    const model = selected === DEFAULT_CLI_MODEL ? t('components.cliSelect.modelDefault') : selected
     return [cli, model, props.task.thinking_level ? t('components.cliThinking.requested', { level: props.task.thinking_level }) : ''].filter(Boolean).join(' · ')
   }
   return t('workflows.task.common.unassignedExecution')

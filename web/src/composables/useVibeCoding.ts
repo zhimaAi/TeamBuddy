@@ -5,6 +5,7 @@ import { cliLogo } from '@/composables/useCliLogo'
 
 export const VIBE_CODING_TOOLS = [
   { id: 'codex', cliType: '', launch: 'app' },
+  { id: 'antigravity_app', cliType: '', launch: 'app' },
   { id: 'qoder_ide', cliType: '', launch: 'app' },
   { id: 'generic', cliType: '', launch: 'clipboard' },
   { id: 'codex_cli', cliType: 'codex', launch: 'terminal' },
@@ -48,6 +49,7 @@ const VIBE_TOOL_LOGOS: Record<VibeCodingToolId, string> = {
   codex_cli: cliLogo('codex'),
   pi: cliLogo('pi'),
   antigravity: antigravityLogo,
+  antigravity_app: antigravityLogo,
   qoder: cliLogo('qoder'),
   qoder_ide: cliLogo('qoder'),
   codebuddy: cliLogo('codebuddy'),

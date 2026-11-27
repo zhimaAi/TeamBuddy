@@ -157,6 +157,33 @@
     "anyStepConversationHint": "Message this step directly without completing earlier steps",
     "locateRunningStep": "View running step",
     "codexAwaitBind": "Waiting for Codex session binding",
+    "antigravityAppNotice": "To bind, paste and send the complete binding message in a new conversation in the task folder. If asked, choose Local, not New worktree. To resume, select the original conversation.",
+    "antigravityAppPaste": "Binding message copied. Paste and send it in a new conversation in the task folder.",
+    "antigravityAppProjectOpened": "Requested the matching project and copied the binding message. Paste and send it, and choose Local if asked.",
+    "antigravityAppSetup": {
+      "hookTitle": "Enable Antigravity App session sync",
+      "hookDescription": "TeamBuddy adds an App-only hook without replacing existing settings. Only user messages and final replies from bound conversations are synced.",
+      "hookSettings": "Review or disable the hook in Antigravity App under Settings → Customizations → Hooks.",
+      "enableAndOpen": "Enable and Open",
+      "enableAndCopy": "Enable and Copy",
+      "projectTitles": {
+        "missing": "Add the task folder to Antigravity App",
+        "ambiguous": "No unique Antigravity project matches",
+        "unavailable": "Could not check Antigravity projects"
+      },
+      "projectDescriptions": {
+        "missing": "This task folder is not registered. In Antigravity App, choose New Project → Add Folder and add the path below, not the main checkout or a new worktree.",
+        "ambiguous": "Duplicate or multi-folder projects include this path. In Antigravity App, make sure exactly one single-folder project matches the path below, then recheck.",
+        "unavailable": "The local Antigravity project list could not be read. Check that the App can show your projects, then recheck."
+      },
+      "projectAutoDescription": "Register the folder below as a local project and open it. Existing projects will not change, and no message will be sent.",
+      "projectCreateFailed": "Could not add this folder automatically. In Antigravity App, choose New Project → Add Folder and add the path below manually.",
+      "projectNextStep": "If you add it manually, return here and click Recheck and Open.",
+      "copyDirectoryAndOpen": "Copy Folder Path and Open App",
+      "addAndOpen": "Add This Folder and Open",
+      "recheckAndOpen": "Recheck and Open"
+    },
+    "antigravityAppResume": "Antigravity App launch requested. Select the original bound conversation in the App.",
     "codexNotice": "On first launch, send the prefilled message in the task project. The conversation appears here once TeamBuddy receives the binding.",
     "codexAwaitSend": "Requested Codex to open. Send the prefilled message in a new chat in the task workspace to bind it.",
     "codexBoundCopy": "Prompt copied. Send it only in the bound Codex chat.",
@@ -571,6 +598,7 @@
       "codex_cli": "Codex CLI",
       "pi": "Pi CLI",
       "antigravity": "Antigravity CLI",
+      "antigravity_app": "Antigravity App",
       "qoder": "Qoder CLI",
       "qoder_ide": "Qoder IDE",
       "codebuddy": "CodeBuddy CLI",

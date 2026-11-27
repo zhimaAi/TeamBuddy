@@ -18,6 +18,16 @@ func callbackRoot() string {
 	return filepath.Join(filepath.Dir(taskskillclient.DefaultRuntimePath()), "codex-app")
 }
 
+func callbackRootForTool(tool string) string {
+	switch tool {
+	case agyTool:
+		return filepath.Join(filepath.Dir(taskskillclient.DefaultRuntimePath()), "antigravity-cli")
+	case agyAppTool:
+		return filepath.Join(filepath.Dir(taskskillclient.DefaultRuntimePath()), "antigravity-app")
+	}
+	return callbackRoot()
+}
+
 // Locks are held only while updating files, never across HTTP in user scope.
 func acquireStateLock(ctx context.Context, path string, wait bool) (func(), error) {
 	for n := 0; ; n++ {
@@ -65,12 +75,12 @@ func drainSession(ctx context.Context, client *taskskillclient.Client, root, id 
 	if err != nil {
 		return err
 	}
-	if s.SessionID != id || s.Scope != "user" {
+	if s.SessionID != id || s.Scope != "user" || (s.tool() != "codex" && s.tool() != cliTool && s.tool() != agyTool && s.tool() != agyAppTool) {
 		return errors.New("invalid outbox session")
 	}
 	bound, err := verify(ctx, client, s.launch)
 	if err == nil && !bound {
-		err = client.BindSession(ctx, s.TaskUUID, "", taskskillclient.SessionBinding{Type: "codex", ThreadID: id, ExecutionIndex: s.Index, ReportingOwner: "hooks"})
+		err = client.BindSession(ctx, s.TaskUUID, "", taskskillclient.SessionBinding{Type: s.tool(), ThreadID: id, ExecutionIndex: s.Index, ReportingOwner: "hooks"})
 	}
 	delivered := map[string]bool{}
 	if err == nil {
@@ -79,7 +89,7 @@ func drainSession(ctx context.Context, client *taskskillclient.Client, root, id 
 			if n >= 8 {
 				break
 			}
-			if event.ThreadID != id || event.ExecutionIndex != s.Index || event.Source != "hooks" || event.Tool != "codex" {
+			if event.ThreadID != id || event.ExecutionIndex != s.Index || event.Source != "hooks" || event.Tool != s.tool() {
 				err = errors.New("invalid queued event")
 				break
 			}
@@ -125,11 +135,24 @@ func drainSession(ctx context.Context, client *taskskillclient.Client, root, id 
 	return err
 }
 
-// Only TeamBuddy-owned pending markers are enumerated. Never read Codex's
-// sessions directory. A single reader bounds concurrent delivery across chats.
+// DrainPending delivers only the TeamBuddy-owned Codex outbox.
 func DrainPending(ctx context.Context) {
+	drainPending(ctx, callbackRoot())
+}
+
+// DrainAntigravityPending delivers only the TeamBuddy-owned Antigravity CLI outbox.
+func DrainAntigravityPending(ctx context.Context) {
+	drainPending(ctx, callbackRootForTool(agyTool))
+}
+
+// DrainAntigravityAppPending delivers only the TeamBuddy-owned Antigravity App outbox.
+func DrainAntigravityAppPending(ctx context.Context) {
+	drainPending(ctx, callbackRootForTool(agyAppTool))
+}
+
+// A single reader per outbox bounds concurrent delivery without scanning vendor history.
+func drainPending(ctx context.Context, root string) {
 	client := taskskillclient.New(1500 * time.Millisecond)
-	root := callbackRoot()
 	tick := time.NewTicker(time.Second)
 	defer tick.Stop()
 	defer client.HTTPClient.CloseIdleConnections()

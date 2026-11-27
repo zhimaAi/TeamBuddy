@@ -52,6 +52,7 @@ const CLI_DISPLAY_NAMES: Record<string, string> = {
   openclaw: 'OpenClaw',
   pi: 'Pi Agent',
   antigravity: 'Antigravity CLI',
+  antigravity_app: 'Antigravity App',
 }
 
 export function cliDisplayName(cliType?: string) {

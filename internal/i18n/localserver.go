@@ -88,6 +88,12 @@ func Key(err error) (string, string) {
 		return "localserver_execution_mode_conflict", "execution_mode_conflict"
 	case errors.Is(err, taskruntime.ErrExecutionModeUnsupported):
 		return "localserver_execution_mode_unsupported", "execution_mode_unsupported"
+	case errors.Is(err, taskruntime.ErrWorkDirRequired):
+		return "localserver_workspace_required", "workspace_required"
+	case errors.Is(err, taskruntime.ErrWorkDirInvalid):
+		return "localserver_workspace_invalid", "workspace_invalid"
+	case errors.Is(err, taskruntime.ErrWorkDirUnavailable):
+		return "localserver_workspace_unavailable", "workspace_unavailable"
 	case strings.Contains(err.Error(), "图片大小不能超过"):
 		return "localserver_icon_too_large", "icon_too_large"
 	case strings.Contains(err.Error(), "仅支持 PNG"):

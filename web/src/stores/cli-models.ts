@@ -3,88 +3,74 @@ import { defineStore } from 'pinia'
 import { getCLIModelCatalog, type CLIModelsResponse } from '@/api/cli-models'
 import { useAuthStore } from '@/stores/auth'
 
-export interface CLIModelContext { taskUuid?: string; channelType?: string }
+export interface CLIModelContext { taskUuid?: string; channelType?: string; modelName?: string }
 interface CatalogEntry {
   cliType: string
+  channelType?: string
   catalog?: CLIModelsResponse
-  fetchedAt: number
   error?: string
 }
 
-const freshnessWindow = 3 * 60 * 1000
 const emptyCatalog = (): CLIModelsResponse => ({ models: [] })
 
-// One owner for complete directories, shared by model pickers and thinking controls.
-// Task/channel contexts are never borrowed from the user-level reference catalog.
+// 只保存用户本次主动读取的结果；任务、通道与选中模型的能力互不借用。
 export const useCLIModelCatalogStore = defineStore('cli-model-catalog', () => {
   const entries = ref<Record<string, CatalogEntry>>({})
   const loading = ref<Record<string, boolean>>({})
-  const flights = new Map<string, { cliType: string; refresh: boolean; controller: AbortController; promise: Promise<CLIModelsResponse> }>()
-  const generations = new Map<string, number>()
-  let epoch = 0
-
-  const keyFor = (cliType: string, context: CLIModelContext = {}) => JSON.stringify([cliType, context.taskUuid || '', context.channelType || ''])
+  const flights = new Map<string, { cliType: string; channelType?: string; controller: AbortController; promise: Promise<CLIModelsResponse> }>()
+  const keyFor = (cliType: string, context: CLIModelContext = {}) => JSON.stringify([
+    cliType, context.taskUuid || '', context.channelType || '', context.modelName || '',
+  ])
   const catalog = (cliType: string, context: CLIModelContext = {}) => entries.value[keyFor(cliType, context)]?.catalog
   const error = (cliType: string, context: CLIModelContext = {}) => entries.value[keyFor(cliType, context)]?.error || ''
   const isLoading = (cliType: string, context: CLIModelContext = {}) => !!loading.value[keyFor(cliType, context)]
 
-  function invalidate(cliType?: string) {
-    if (cliType) generations.set(cliType, (generations.get(cliType) || 0) + 1)
-    else epoch++
+  function invalidate(cliType?: string, channelType?: string, authFailureKey?: string) {
+    const matches = (entry: { cliType: string; channelType?: string }) => (!cliType || entry.cliType === cliType)
+      && (!channelType || entry.channelType === channelType)
     for (const [key, flight] of flights) {
-      if (!cliType || flight.cliType === cliType) {
+      if (key !== authFailureKey && matches(flight)) {
         flight.controller.abort()
         flights.delete(key)
         delete loading.value[key]
       }
     }
     for (const [key, entry] of Object.entries(entries.value)) {
-      if (!cliType || entry.cliType === cliType) delete entries.value[key]
+      if (matches(entry) && (!authFailureKey || entry.catalog?.catalog_meta?.reason !== 'login_required')) {
+        delete entries.value[key]
+      }
     }
   }
 
-  async function load(cliType: string, context: CLIModelContext = {}, refresh = false): Promise<CLIModelsResponse> {
+  async function read(cliType: string, context: CLIModelContext = {}): Promise<CLIModelsResponse> {
     if (!cliType) return emptyCatalog()
     const key = keyFor(cliType, context)
     const existing = flights.get(key)
-    if (existing) {
-      if (!refresh || existing.refresh) return existing.promise
-      const queuedEpoch = epoch
-      const queuedGeneration = generations.get(cliType) || 0
-      await existing.promise.catch(() => emptyCatalog())
-      if (queuedEpoch !== epoch || queuedGeneration !== (generations.get(cliType) || 0)) return emptyCatalog()
-      return load(cliType, context, true)
-    }
-    const cached = entries.value[key]
-    if (!refresh && cached && Date.now() - cached.fetchedAt < freshnessWindow) return cached.catalog || emptyCatalog()
-
-    const revision = epoch
-    const generation = generations.get(cliType) || 0
-    const current = () => revision === epoch && generation === (generations.get(cliType) || 0)
+    if (existing) return existing.promise
     const controller = new AbortController()
+    const channelType = context.channelType
+    delete entries.value[key]
     loading.value[key] = true
     const promise = (async () => {
       try {
-        // No model_name: each request reads one full CLI/context directory.
-        const result = await getCLIModelCatalog(cliType, { ...context, refresh, signal: controller.signal })
-        if (!current()) return emptyCatalog()
-        const previous = entries.value[key]?.catalog
-        const next = result.models?.length || !previous?.models.length ? result : staleCatalog(previous)
-        entries.value[key] = { cliType, catalog: next, fetchedAt: Date.now() }
-        // Publish the stale snapshot immediately, then wait for one shared actual
-        // refresh in the background. A failed refresh never creates a retry loop.
-        if (!refresh && next.catalog_meta?.state === 'stale') {
-          void Promise.resolve().then(() => load(cliType, context, true)).catch(() => undefined)
+        const result = await getCLIModelCatalog(cliType, { ...context, signal: controller.signal })
+        if (controller.signal.aborted) return emptyCatalog()
+        // 本机登录状态由 CLI 共享；退出后清除同工具其他入口的旧能力，不改已保存的选择。
+        if (result.catalog_meta?.reason === 'login_required') {
+          invalidate(cliType, undefined, key)
+        } else if (cliType === 'antigravity' && result.catalog_meta?.state === 'fresh') {
+          // 成功重读后撤掉其他入口的旧登录提示，仍按入口单独读取能力。
+          for (const [otherKey, entry] of Object.entries(entries.value)) {
+            if (entry.cliType === cliType && entry.catalog?.catalog_meta?.reason === 'login_required') {
+              delete entries.value[otherKey]
+            }
+          }
         }
-        return next
+        entries.value[key] = { cliType, channelType, catalog: result }
+        return result
       } catch (cause) {
-        if (!current()) return emptyCatalog()
-        const previous = entries.value[key]?.catalog
-        entries.value[key] = {
-          cliType, fetchedAt: Date.now(),
-          catalog: previous ? staleCatalog(previous) : undefined,
-          error: cause instanceof Error ? cause.message : '',
-        }
+        if (controller.signal.aborted) return emptyCatalog()
+        entries.value[key] = { cliType, channelType, error: cause instanceof Error ? cause.message : '' }
         throw cause
       } finally {
         if (flights.get(key)?.controller === controller) {
@@ -93,15 +79,26 @@ export const useCLIModelCatalogStore = defineStore('cli-model-catalog', () => {
         }
       }
     })()
-    flights.set(key, { cliType, refresh, controller, promise })
+    flights.set(key, { cliType, channelType, controller, promise })
     return promise
   }
 
-  function staleCatalog(value: CLIModelsResponse): CLIModelsResponse {
-    return {
-      ...value,
-      catalog_meta: { ...value.catalog_meta, state: 'stale' },
-      model_options: value.model_options?.map(option => ({ ...option, thinking: { ...option.thinking, state: 'stale' } })),
+  // 所有安装列表入口共用上一轮的安装身份，页面重新挂载也能识别变化。
+  const installations = new Map<string, { installed: boolean; exec_path?: string; version?: string }>()
+  function reconcileInstallations(items: { type: string; installed: boolean; exec_path?: string; version?: string }[]) {
+    const remaining = new Set(installations.keys())
+    for (const item of items) {
+      const previous = installations.get(item.type)
+      if (!item.installed || (previous && (
+        previous.installed !== item.installed || previous.exec_path !== item.exec_path ||
+        (item.version && previous.version !== item.version)
+      ))) invalidate(item.type)
+      installations.set(item.type, item)
+      remaining.delete(item.type)
+    }
+    for (const type of remaining) {
+      installations.delete(type)
+      invalidate(type)
     }
   }
 
@@ -109,5 +106,5 @@ export const useCLIModelCatalogStore = defineStore('cli-model-catalog', () => {
   watch(() => auth.cloudUser?.sessionGeneration || auth.cloudUser?.accountScope || '', () => invalidate(), { flush: 'sync' })
   onScopeDispose(() => invalidate())
 
-  return { entries, catalog, error, isLoading, load, invalidate }
+  return { catalog, error, isLoading, read, invalidate, reconcileInstallations }
 })

@@ -15,6 +15,7 @@
     "selectDirectoryUnsupported": "当前环境不支持选择本地文件夹，请使用 TeamBuddy 桌面客户端",
     "openDirectoryUnsupported": "当前环境不支持打开本地文件夹，请使用 TeamBuddy 桌面客户端",
     "openCodexUnsupported": "当前环境不支持自动打开 Codex，请使用 TeamBuddy 桌面客户端",
+    "antigravityOpenFromDesktop": "请从 TeamBuddy 桌面客户端打开 Antigravity CLI 任务；仅复制提示词不能绑定或上报会话",
     "openVibeToolUnsupported": "当前环境不支持自动打开 CLI，请使用 TeamBuddy 桌面客户端",
     "desktopSettingsUnsupported": "当前环境不支持桌面客户端设置",
     "iconType": "仅支持 PNG、JPEG、WebP 图片",
@@ -123,6 +124,15 @@
     "max": "最高（max）"
   },
   "cliSelect": {
+    "readModels": "读取模型",
+    "readModelsAgain": "重新读取",
+    "readIssue": {
+      "login_required": "请自行在本机终端运行 agy 并登录 Antigravity CLI，然后回到 TeamBuddy 重新读取。",
+      "read_failed": "读取 Antigravity CLI 失败。请检查网络或 CLI 状态后重试。",
+      "unsupported_version": "读取模型和思考强度需要 Antigravity CLI 1.5.17 或更新版本。"
+    },
+    "modelDefault": "跟随 CLI 配置",
+    "noReadableModels": "没有可静默读取的模型，可保留当前选择或使用 CLI 默认配置。",
     "cliTool": "CLI 工具",
     "model": "模型",
     "detectFailed": "CLI 探测失败",

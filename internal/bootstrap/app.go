@@ -222,6 +222,8 @@ func (a *App) Run(ctx context.Context) error {
 	a.server.RestoreSession(runCtx)
 	a.server.StartRemoteChannels(runCtx)
 	go codexhook.DrainPending(runCtx)
+	go codexhook.DrainAntigravityPending(runCtx)
+	go codexhook.DrainAntigravityAppPending(runCtx)
 
 	// Start the cloud session sync service: it periodically pushes the created/updated
 	// CLI session records of cloud tasks to the cloud, in per-task creation order.
@@ -279,12 +281,7 @@ func (a *App) Run(ctx context.Context) error {
 		}()
 	})
 
-	// Preload and refresh the CLI/model discovery cache in the background (see
-	// executor.StartCLIDiscoveryRefresh). It re-detects installed CLIs and their
-	// available models right after startup and every few minutes, persists the
-	// results to config/clis.json and config/models.json, and the "选择执行 CLI"
-	// popup reads those snapshots via /tasks/cli-discovery and /tasks/cli-models
-	// without spawning each CLI on every request.
+	// 后台只刷新已安装 CLI 与版本；模型仅响应显式读取。
 	executor.StartCLIDiscoveryRefresh(runCtx, a.configDir)
 
 	// Wait for exit
