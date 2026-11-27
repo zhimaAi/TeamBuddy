@@ -214,6 +214,14 @@ const MESSAGES = Object.freeze({
     'zh-CN': { other: "无法写入剪贴板，请重试。" },
     'en-US': { other: "Could not write to the clipboard. Try again." },
   },
+  'error.codex.cli_open_failed': {
+    'zh-CN': { other: '无法打开 Codex CLI，请检查 CLI 和系统终端。' },
+    'en-US': { other: 'Could not open Codex CLI. Check the CLI and system terminal.' },
+  },
+  'error.codex.cli_review_failed': {
+    'zh-CN': { other: '无法打开审阅终端。请在任务目录手动启动 Codex CLI，输入 /hooks 审阅后返回重试。' },
+    'en-US': { other: 'Could not open the review terminal. Start Codex CLI in the task directory, review /hooks, then retry.' },
+  },
   'error.codex.openFailed': {
     'zh-CN': { other: '无法打开 Codex，请检查应用及 codex:// 协议关联。' },
     'en-US': { other: 'Could not open Codex. Check the app and its codex:// association.' },
@@ -253,6 +261,66 @@ const MESSAGES = Object.freeze({
   'error.vibeCli.openFailed': {
     'zh-CN': { other: '无法打开 CLI，请复制提示词后手动打开' },
     'en-US': { other: 'Could not open the CLI. Copy the prompt and open it manually.' },
+  },
+  'error.antigravityApp.busy': {
+    'zh-CN': { other: "Antigravity App 正在配置或打开，请稍候" },
+    'en-US': { other: "Antigravity App is being configured or opened. Please wait." },
+  },
+  'error.antigravityApp.disabled': {
+    'zh-CN': { other: "TeamBuddy 的 Antigravity App Hook 已停用。请在 App 的「设置 → Customizations → Hooks」中按需启用后重试。" },
+    'en-US': { other: "The TeamBuddy Antigravity App hook is disabled. Enable it if desired under Settings → Customizations → Hooks, then retry." },
+  },
+  'error.antigravityApp.notInstalled': {
+    'zh-CN': { other: "未找到可打开的 Antigravity App，请检查是否已安装独立 App 并注册 antigravity:// 协议。" },
+    'en-US': { other: "No Antigravity App was found. Check that the standalone App is installed and registered for antigravity:// links." },
+  },
+  'error.antigravityApp.alreadyBound': {
+    'zh-CN': { other: "任务已绑定，请在 Antigravity App 内选回原会话，不要再发送绑定消息。" },
+    'en-US': { other: "This task is already bound. Select the original conversation in Antigravity App instead of sending another binding message." },
+  },
+  'error.antigravityApp.openFailed': {
+    'zh-CN': { other: "无法打开 Antigravity App 任务，请检查 App 和 TeamBuddy 本地服务后重试。" },
+    'en-US': { other: "Could not open the Antigravity App task. Check the App and the local TeamBuddy service, then retry." },
+  },
+  'antigravity.hooks.title': {
+    'zh-CN': { other: "启用 Antigravity CLI 会话同步？" },
+    'en-US': { other: "Enable Antigravity CLI session sync?" },
+  },
+  'antigravity.hooks.detail': {
+    'zh-CN': { other: "TeamBuddy 将在 ~/.gemini/config/hooks.json 中添加一组 Hook。只同步从 TeamBuddy 打开的任务会话中的用户消息和最终答复，不读取其他会话。现有 Hook 不会被覆盖；可在 Antigravity CLI 中用 /hooks 查看或停用。" },
+    'en-US': { other: "TeamBuddy will add one hook group to ~/.gemini/config/hooks.json. It syncs only user messages and final replies from task sessions opened by TeamBuddy. Existing hooks are preserved. Use /hooks in Antigravity CLI to view or disable it." },
+  },
+  'antigravity.hooks.enable': {
+    'zh-CN': { other: "启用并打开" },
+    'en-US': { other: "Enable and open" },
+  },
+  'antigravity.hooks.cancel': {
+    'zh-CN': { other: "取消" },
+    'en-US': { other: "Cancel" },
+  },
+  'error.antigravity.busy': {
+    'zh-CN': { other: "Antigravity CLI 正在配置或打开，请稍候" },
+    'en-US': { other: "Antigravity CLI is being configured or opened. Please wait." },
+  },
+  'error.antigravity.version': {
+    'zh-CN': { other: "Antigravity CLI Hook 同步需要 agy 1.5.14 或更高版本，请更新后重试" },
+    'en-US': { other: "Antigravity CLI hook sync requires agy 1.5.14 or newer. Update the CLI and retry." },
+  },
+  'error.antigravity.disabled': {
+    'zh-CN': { other: "TeamBuddy 的 Antigravity CLI Hook 已停用，请在 /hooks 中查看并按需启用后重试" },
+    'en-US': { other: "The TeamBuddy Antigravity CLI hook is disabled. Review it in /hooks and enable it before retrying." },
+  },
+  'error.antigravity.config': {
+    'zh-CN': { other: "Antigravity Hook 配置无法安全合并，请检查 ~/.gemini/config/hooks.json 和项目的 .agents/hooks.json，原设置未覆盖" },
+    'en-US': { other: "The Antigravity hook could not be merged safely. Review ~/.gemini/config/hooks.json and the workspace .agents/hooks.json. Your existing settings were not overwritten." },
+  },
+  'error.antigravity.binding': {
+    'zh-CN': { other: "无法核对 Antigravity 任务会话，请刷新任务并在原绑定设备上重试" },
+    'en-US': { other: "Could not verify this Antigravity task session. Refresh the task and retry on the device where it was bound." },
+  },
+  'error.antigravity.openFailed': {
+    'zh-CN': { other: "无法打开 Antigravity CLI 任务会话，请检查 CLI 和 TeamBuddy 本地服务后重试" },
+    'en-US': { other: "Could not open the Antigravity CLI task session. Check the CLI and the local TeamBuddy service, then retry." },
   },
   'notification.action.openTask': {
     'zh-CN': { other: '打开任务' },

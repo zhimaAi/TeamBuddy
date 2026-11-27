@@ -65,7 +65,7 @@
               alt=""
               aria-hidden="true"
             />
-            {{ stepModel(step) }}
+            {{ stepModel(step) === DEFAULT_CLI_MODEL ? t('components.cliSelect.modelDefault') : stepModel(step) }}
           </span>
         </div>
         <div class="step-actions">
@@ -113,6 +113,7 @@
 </template>
 
 <script setup lang="ts">
+import { DEFAULT_CLI_MODEL } from '@/utils/cliModelOptions'
 import {
   ArrowDownOutlined,
   ArrowUpOutlined,

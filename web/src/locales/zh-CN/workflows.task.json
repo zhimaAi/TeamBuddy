@@ -157,6 +157,33 @@
     "anyStepConversationHint": "可直接向此步骤发送消息，无需完成前序步骤",
     "locateRunningStep": "查看运行步骤",
     "codexAwaitBind": "等待 Codex 会话绑定",
+    "antigravityAppNotice": "首次绑定时，在任务目录的新会话中完整粘贴并发送绑定消息。有模式选项时请选择 Local，不要新建 worktree。续聊请选择原会话。",
+    "antigravityAppPaste": "已复制绑定消息。请在任务目录的新会话中完整粘贴并发送。",
+    "antigravityAppProjectOpened": "已请求打开对应项目，绑定消息已复制。请粘贴并发送；有模式选项时请选择 Local。",
+    "antigravityAppSetup": {
+      "hookTitle": "启用 Antigravity App 会话同步",
+      "hookDescription": "TeamBuddy 会添加 App 专用 Hook、保留现有配置，仅同步已绑定会话中的用户消息和最终答复。",
+      "hookSettings": "可在 Antigravity App 的「Settings → Customizations → Hooks」查看或停用。",
+      "enableAndOpen": "启用并打开",
+      "enableAndCopy": "启用并复制",
+      "projectTitles": {
+        "missing": "在 Antigravity App 添加任务目录",
+        "ambiguous": "无法唯一匹配 Antigravity 项目",
+        "unavailable": "暂时无法检查 Antigravity 项目"
+      },
+      "projectDescriptions": {
+        "missing": "未登记此任务目录。在 Antigravity App 中选择「New Project → Add Folder」，添加下方目录，不要选择主仓库或另建 worktree。",
+        "ambiguous": "有重复或多目录项目包含此路径。请在 Antigravity App 中确认只有一个单目录项目对应下方路径，再重新检测。",
+        "unavailable": "暂时无法读取 Antigravity 的本地项目列表。请确认 App 可以正常查看项目后，再重新检测。"
+      },
+      "projectAutoDescription": "将下方目录登记为一个本地项目并打开。不修改已有项目，也不会自动发送消息。",
+      "projectCreateFailed": "未能自动添加此目录。请在 Antigravity App 中选择「New Project → Add Folder」，手动添加下方路径。",
+      "projectNextStep": "如果手动添加，完成后回到这里点击「重新检测并打开」。",
+      "copyDirectoryAndOpen": "复制目录并打开 App",
+      "addAndOpen": "添加此目录并打开",
+      "recheckAndOpen": "重新检测并打开"
+    },
+    "antigravityAppResume": "已请求打开 Antigravity App。请在 App 中选回原绑定会话。",
     "codexNotice": "首次打开时，在任务项目中发送预填消息。TeamBuddy 收到会话绑定后会在此显示后续对话。",
     "codexAwaitSend": "已请求打开 Codex。请在任务目录的新聊天中发送预填消息，发送后才会绑定。",
     "codexBoundCopy": "已复制，请仅在已绑定的 Codex 会话中发送。",
@@ -571,6 +598,7 @@
       "codex_cli": "Codex CLI",
       "pi": "Pi CLI",
       "antigravity": "Antigravity CLI",
+      "antigravity_app": "Antigravity App",
       "qoder": "Qoder CLI",
       "qoder_ide": "Qoder IDE",
       "codebuddy": "CodeBuddy CLI",

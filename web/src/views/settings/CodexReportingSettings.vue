@@ -29,7 +29,7 @@ async function activate() {
   if (busy.value) return
   if (!state.value || error.value) { await refresh(); return }
   busy.value = true
-  try { await ensureCodexSync(state.value, true) }
+  try { await ensureCodexSync({ initial: state.value, confirmed: true }) }
   catch (e) { error.value = syncError(e) }
   finally { busy.value = false }
   await refresh()

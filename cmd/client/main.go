@@ -25,6 +25,13 @@ var (
 )
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "antigravity-hook" {
+		if err := codexhook.RunAntigravity(context.Background(), os.Args[2:], os.Stdin, os.Stdout); err != nil {
+			fmt.Fprintln(os.Stderr, "TeamBuddy Antigravity callback:", err)
+			os.Exit(1)
+		}
+		return
+	}
 	if len(os.Args) > 1 && os.Args[1] == "codex-hook" {
 		if err := codexhook.Run(context.Background(), os.Args[2:], os.Stdin, os.Stdout); err != nil {
 			fmt.Fprintf(os.Stderr, "TeamBuddy Codex callback: %v\n", err)

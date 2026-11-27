@@ -8,10 +8,17 @@ import { configureCodexReporting } from './useDesktop'
 export const syncAction = (state: CodexSyncState) => state === 'hooks_untrusted' ? t('settings.codexReporting.trust')
   : state === 'hooks_disabled' ? t('settings.codexReporting.review') : t('settings.codexReporting.enable')
 
-export const syncDescription = (state: CodexSyncState) => state === 'ready'
-  ? t('settings.codexReporting.ready') : state === 'hooks_untrusted' ? t('settings.codexReporting.awaitTrust') : t(`workflows.task.detail.codexSetup.${state}`)
+export const syncDescription = (state: CodexSyncState, cli = false) => {
+  if (cli) {
+    if (state === 'hooks_untrusted') return t('settings.codexReporting.cli.awaitTrust')
+    if (state === 'hooks_disabled') return t('settings.codexReporting.cli.disabled')
+    if (state === 'inspection_failed') return t('settings.codexReporting.cli.inspectionFailed')
+  }
+  return state === 'ready' ? t('settings.codexReporting.ready') : state === 'hooks_untrusted'
+    ? t('settings.codexReporting.awaitTrust') : t(`workflows.task.detail.codexSetup.${state}`)
+}
 
-const syncContent = (state: CodexSyncState) => h(CodexSyncGuidance, { state, description: syncDescription(state) })
+const syncContent = (state: CodexSyncState, cli: boolean) => h(CodexSyncGuidance, { state, cli, description: syncDescription(state, cli) })
 
 export const syncError = (error: unknown) => error instanceof Error
   ? error.message.replace(/^Error invoking remote method '[^']+': (?:Error: )?/, '') : t('settings.readDesktopFailed')
@@ -19,19 +26,33 @@ export const syncError = (error: unknown) => error instanceof Error
 let active = false
 
 // 一次授权只恢复发起它的操作；另一个任务不能复用等待中的操作。
-export async function ensureCodexSync(initial?: CodexSyncState, confirmed = false): Promise<boolean> {
+export async function ensureCodexSync({ initial, confirmed = false, parentModalZIndex, configureCLI }: {
+  initial?: CodexSyncState
+  confirmed?: boolean
+  parentModalZIndex?: number
+  configureCLI?: typeof configureCodexReporting
+} = {}): Promise<boolean> {
   if (active) return false
   active = true
   const route = router.currentRoute.value.fullPath
+  const configure = configureCLI ?? configureCodexReporting
+  const cli = configureCLI !== undefined
+  const actionLabel = (state: CodexSyncState) => {
+    if (!cli) return syncAction(state)
+    if (state === 'not_configured') return t('settings.codexReporting.cli.enable')
+    if (state === 'inspection_failed') return t('workflows.task.detail.codexRecheck')
+    return t('settings.codexReporting.cli.review')
+  }
   try {
-    let state = initial ?? await configureCodexReporting('status')
+    let state = initial ?? await configure('status')
     if (router.currentRoute.value.fullPath !== route) return false
     if (state === 'ready') return true
     return await new Promise<boolean>(resolve => {
       let closed = false, busy = false, awaitingReturn = false, focusPending = false
       const dialog = Modal.confirm({
-        title: t('settings.codexReporting.title'), content: syncContent(state),
-        okText: syncAction(state), cancelText: t('workflows.task.detail.qoderIDELater'),
+        title: t(cli ? 'settings.codexReporting.cli.title' : 'settings.codexReporting.title'), content: syncContent(state, cli),
+        okText: actionLabel(state), cancelText: t('workflows.task.detail.qoderIDELater'),
+        zIndex: parentModalZIndex === undefined ? undefined : parentModalZIndex + 1,
         maskClosable: false,
         onOk(_close: () => void) { void run(false) },
         onCancel() { finish(false) },
@@ -57,11 +78,11 @@ export async function ensureCodexSync(initial?: CodexSyncState, confirmed = fals
         dialog.update({ okButtonProps: { loading: true } })
         if (!checkOnly) awaitingReturn = true
         try {
-          state = await configureCodexReporting(checkOnly ? 'status'
+          state = await configure(checkOnly || (cli && state === 'inspection_failed') ? 'status'
             : state === 'hooks_untrusted' || state === 'hooks_disabled' ? 'review' : 'enable')
           if (closed) return
           if (state === 'ready') { finish(true); return }
-          dialog.update({ content: syncContent(state), okText: syncAction(state) })
+          dialog.update({ content: syncContent(state, cli), okText: actionLabel(state) })
         } catch (e) {
           if (!closed) dialog.update({ content: syncError(e) })
         } finally {

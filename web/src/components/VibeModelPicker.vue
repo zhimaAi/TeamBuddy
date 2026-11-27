@@ -10,10 +10,7 @@
             </a-radio>
           </a-radio-group>
         </a-spin>
-        <a-alert v-if="error" type="warning" :message="error" show-icon />
-        <a-button type="link" size="small" :loading="modelLoading" @click="load(true)">
-          {{ t('workflows.task.assign.vibeModelRefresh') }}
-        </a-button>
+        <CliModelReadButton :cli-type="cliType" :disabled="disabled" />
       </div>
     </template>
     <button type="button" class="vibe-model-trigger" :disabled="disabled" :title="label" @click.stop>
@@ -25,47 +22,33 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import { useAppI18n } from '@/i18n'
-import { useCliModelOptions } from '@/composables/useCliModelOptions'
+import CliModelReadButton from '@/components/CliModelReadButton.vue'
+import { useCLIModelCatalogStore } from '@/stores/cli-models'
 import { vibeToolDefinition } from '@/composables/useVibeCoding'
-import { availableVibeModel, rememberVibeModel } from '@/composables/useVibeModelPreferences'
 
 const props = defineProps<{ tool: string; modelValue: string; selected?: boolean; disabled?: boolean }>()
 const emit = defineEmits<{
   (e: 'update:modelValue', value: string): void
-  (e: 'resolved', value: string): void
 }>()
 const { t } = useAppI18n()
-const { loadModelOptions, modelLoading, modelOptions } = useCliModelOptions(false)
+const directories = useCLIModelCatalogStore()
+const cliType = computed(() => vibeToolDefinition(props.tool)?.cliType || '')
+const modelOptions = computed(() => directories.catalog(cliType.value)?.models || [])
+const modelLoading = computed(() => directories.isLoading(cliType.value))
 const open = ref(false)
-const error = ref('')
 const label = computed(() => props.modelValue || t(props.selected
   ? 'workflows.task.assign.vibeModelDefault'
   : 'workflows.task.assign.vibeModelConfigure'))
 const options = computed(() => [
   { value: '', label: t('workflows.task.assign.vibeModelDefault') },
-  ...[...new Set(modelOptions.value.filter(model => model && !(props.tool === 'pi' && model === 'auto')))].map(model => ({ value: model, label: model })),
+  ...[...new Set([...modelOptions.value, props.modelValue].filter(Boolean))].map(model => ({ value: model, label: model })),
 ])
 
-async function load(refresh = false) {
-  const cliType = vibeToolDefinition(props.tool)?.cliType
-  if (!cliType) return
-  error.value = ''
-  try {
-    const models = await loadModelOptions(cliType, refresh)
-    emit('resolved', availableVibeModel(props.tool, props.modelValue, models))
-    if (!models.length) error.value = t('workflows.task.assign.vibeModelEmpty')
-  } catch (cause) {
-    error.value = cause instanceof Error ? cause.message : t('workflows.task.assign.vibeModelLoadFailed')
-  }
-}
-
 function selectModel(model: string) {
-  rememberVibeModel(props.tool, model)
   emit('update:modelValue', model)
   open.value = false
 }
 
-watch(open, value => { if (value) void load() })
 watch(() => props.disabled, value => { if (value) open.value = false })
 </script>
 

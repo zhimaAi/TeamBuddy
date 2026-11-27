@@ -1,12 +1,13 @@
 <script setup lang="ts">
-import { ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
+import CliModelReadButton from '@/components/CliModelReadButton.vue'
 import CliThinkingSelect from '@/components/CliThinkingSelect.vue'
 import { useCliThinkingSelection } from '@/composables/useCliThinkingSelection'
 import { useCLIModelCatalogStore } from '@/stores/cli-models'
 import { message } from 'ant-design-vue'
 import apiClient from '@/api/client'
 import { useAppI18n } from '@/i18n'
-import { cliModelChoices } from '@/utils/cliModelOptions'
+import { DEFAULT_CLI_MODEL, cliModelChoices } from '@/utils/cliModelOptions'
 
 const { t } = useAppI18n()
 const directories = useCLIModelCatalogStore()
@@ -38,9 +39,7 @@ const thinkingLevel = ref('')
 const useCustomModel = ref(false)
 const customModel = ref('')
 const { resetThinkingDrafts } = useCliThinkingSelection(() => selectedType.value, () => useCustomModel.value ? customModel.value.trim() : selectedModel.value, thinkingLevel)
-const models = ref<string[]>([])
-const modelsLoading = ref(false)
-let modelReqSeq = 0
+const models = computed(() => directories.catalog(selectedType.value, { taskUuid: props.taskUuid })?.models || [])
 
 const selectedCli = () => cliList.value.find(item => item.type === selectedType.value)
 
@@ -75,10 +74,10 @@ function saveCustomModel(cliType: string, model: string) {
 
 /** Merge freshly probed models + locally recorded custom models */
 function mergedModels(probed: string[]): { name: string; label: string; custom: boolean }[] {
-  const result = cliModelChoices(selectedType.value, probed, probed.includes(selectedModel.value) ? selectedModel.value : '')
+  const result = cliModelChoices(selectedType.value, probed, selectedModel.value, t('components.cliSelect.modelDefault'))
     .map(model => ({ name: model.value, label: model.label, custom: false }))
   for (const m of loadCustomModels(selectedType.value)) {
-    if (!probed.includes(m)) {
+    if (m !== DEFAULT_CLI_MODEL && !probed.includes(m)) {
       result.push({ name: m, label: m, custom: true })
     }
   }
@@ -98,16 +97,15 @@ watch(() => props.open, async (visible) => {
 
 async function loadCLIs() {
   loading.value = true
-  models.value = []
   try {
     const result = await apiClient.get<{ items: DiscoveredCLI[] }>('/tasks/cli-discovery')
     // 已安装的 CLI 排在前面，未安装的置后且不可选择
     cliList.value = [...(result.items || [])].sort((a, b) => Number(b.installed) - Number(a.installed))
-    // Auto-select the first installed CLI and load its model list right away
+    directories.reconcileInstallations(cliList.value)
     const firstInstalled = cliList.value.find(item => item.installed)
     if (firstInstalled) {
       selectedType.value = firstInstalled.type
-      await loadModels(firstInstalled.type)
+      selectedModel.value = DEFAULT_CLI_MODEL
     }
   } catch (error) {
     message.error(error instanceof Error ? error.message : t('components.cliSelect.detectFailed'))
@@ -116,37 +114,13 @@ async function loadCLIs() {
   }
 }
 
-async function loadModels(cliType: string) {
-  const seq = ++modelReqSeq
-  modelsLoading.value = true
-  models.value = []
-  selectedModel.value = ''
-  let fetched: string[] = []
-  try {
-    const result = await directories.load(cliType, { taskUuid: props.taskUuid })
-    fetched = result.models || []
-  } catch (error) {
-    if (seq === modelReqSeq) {
-      message.error(error instanceof Error ? error.message : t('components.cliSelect.modelsLoadFailed'))
-    }
-  } finally {
-    if (seq === modelReqSeq) {
-      modelsLoading.value = false
-      models.value = fetched
-      const merged = mergedModels(fetched)
-      selectedModel.value = merged.length > 0 ? merged[0].name : ''
-      useCustomModel.value = merged.length === 0
-    }
-  }
-}
-
-async function selectCli(type: string) {
+function selectCli(type: string) {
   const cli = cliList.value.find(item => item.type === type)
   if (!cli || !cli.installed || type === selectedType.value) return
-  // Only load the model list of the clicked CLI on demand
   selectedType.value = type
   customModel.value = ''
-  await loadModels(type)
+  selectedModel.value = DEFAULT_CLI_MODEL
+  useCustomModel.value = false
 }
 
 function handleConfirm() {
@@ -214,31 +188,29 @@ function handleCancel() {
 
         <div v-if="selectedCli()?.installed" class="cli-model-section">
           <div class="cli-model-section__label">{{ t('components.cliSelect.modelConfig') }}</div>
-          <a-spin :spinning="modelsLoading">
-            <a-select
-              v-if="!useCustomModel && mergedModels(models).length > 0"
-              v-model:value="selectedModel"
-              :placeholder="t('components.cliSelect.chooseModel')"
-              style="width: 100%"
-              show-search
-              :filter-option="(input: string, option: any) => (option?.value || '').toLowerCase().includes(input.toLowerCase())"
-            >
-              <a-select-option v-for="m in mergedModels(models)" :key="m.name" :value="m.name">
-                {{ m.label }}
-                <a-tag v-if="m.custom" color="blue" size="small" style="margin-left: 6px">{{ t('components.cliSelect.custom') }}</a-tag>
-              </a-select-option>
-            </a-select>
-            <a-input
-              v-else
-              v-model:value="customModel"
-              :placeholder="t('components.cliSelect.customPlaceholder')"
-              allow-clear
-            />
-          </a-spin>
+          <a-select
+            v-if="!useCustomModel"
+            v-model:value="selectedModel"
+            :placeholder="t('components.cliSelect.chooseModel')"
+            style="width: 100%"
+            show-search
+            :filter-option="(input: string, option: any) => (option?.value || '').toLowerCase().includes(input.toLowerCase())"
+          >
+            <a-select-option v-for="m in mergedModels(models)" :key="m.name" :value="m.name">
+              {{ m.label }}
+              <a-tag v-if="m.custom" color="blue" size="small" style="margin-left: 6px">{{ t('components.cliSelect.custom') }}</a-tag>
+            </a-select-option>
+          </a-select>
+          <a-input
+            v-else
+            v-model:value="customModel"
+            :placeholder="t('components.cliSelect.customPlaceholder')"
+            allow-clear
+          />
           <CliThinkingSelect v-if="(useCustomModel ? customModel.trim() : selectedModel)" v-model="thinkingLevel" :cli-type="selectedType" :model-name="useCustomModel ? customModel.trim() : selectedModel" :task-uuid="taskUuid" />
           <div class="cli-model-section__footer">
+            <CliModelReadButton :cli-type="selectedType" :task-uuid="taskUuid" />
             <a
-              v-if="mergedModels(models).length > 0"
               class="cli-model-section__toggle"
               @click="useCustomModel = !useCustomModel"
             >

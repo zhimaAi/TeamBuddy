@@ -1,4 +1,4 @@
-import { h } from 'vue'
+import { h, ref, shallowRef } from 'vue'
 import { Button, message, Modal } from 'ant-design-vue'
 import { t } from '@/i18n'
 import type { VibeToolOpenResult } from '@/composables/useTaskVibeTool'
@@ -6,6 +6,10 @@ import type { VibeToolOpenResult } from '@/composables/useTaskVibeTool'
 // 各创建、指派和详情入口共享反馈顺序，避免工具分支在页面中扩散。
 export function showVibeToolOpenResult(result: VibeToolOpenResult, toolName: string): void {
   if (result.cancelled) return
+  if (result.antigravityProject) {
+    showAntigravityProjectSetup(result.antigravityProject, toolName)
+    return
+  }
   if (result.setup && result.retry) {
     const retry = result.retry
     const review = result.review
@@ -77,4 +81,68 @@ export function showVibeToolOpenResult(result: VibeToolOpenResult, toolName: str
   else if (result.copied) message.warning(t('workflows.task.detail.toolCopiedFallback', { tool: toolName }))
   else if (result.error) message.error(result.error.message)
   else message.warning(t('workflows.task.detail.toolUnavailable', { tool: toolName }))
+}
+
+function showAntigravityProjectSetup(initial: NonNullable<VibeToolOpenResult['antigravityProject']>, toolName: string) {
+  const project = shallowRef(initial)
+  const manual = ref(false)
+  const busy = ref<'manual' | 'continue'>()
+  let closed = false
+  const create = () => !manual.value && project.value.createAndOpen
+  const dismiss = () => {
+    if (closed) return
+    closed = true
+    dialog.destroy()
+  }
+  const reportError = (error: unknown) => message.error(error instanceof Error ? error.message
+    : t('workflows.task.detail.toolOpenFailed', { tool: toolName }))
+  const setBusy = (value?: typeof busy.value) => {
+    busy.value = value
+    if (!closed) dialog.update({
+      keyboard: !value,
+      okButtonProps: { loading: value === 'continue', disabled: value === 'manual' },
+      cancelButtonProps: { disabled: !!value },
+    })
+  }
+  const openManually = async () => {
+    if (busy.value || !project.value.openSetup) return
+    setBusy('manual')
+    try { await project.value.openSetup(); manual.value = true }
+    catch (error) { reportError(error) }
+    finally { setBusy() }
+  }
+  const dialog = Modal.confirm({
+    title: () => t(`workflows.task.detail.antigravityAppSetup.projectTitles.${project.value.reason}`),
+    content: () => h('div', [
+      h('p', t(project.value.createFailed ? 'workflows.task.detail.antigravityAppSetup.projectCreateFailed'
+        : create() ? 'workflows.task.detail.antigravityAppSetup.projectAutoDescription'
+        : `workflows.task.detail.antigravityAppSetup.projectDescriptions.${project.value.reason}`)),
+      h('p', [h('code', { style: { overflowWrap: 'anywhere' } }, project.value.directoryPath)]),
+      ...(project.value.openSetup ? [
+        h('p', t('workflows.task.detail.antigravityAppSetup.projectNextStep')),
+        h(Button, { loading: busy.value === 'manual', disabled: busy.value === 'continue', onClick: openManually },
+          () => t('workflows.task.detail.antigravityAppSetup.copyDirectoryAndOpen')),
+      ] : []),
+    ]),
+    okText: () => t(create() ? 'workflows.task.detail.antigravityAppSetup.addAndOpen'
+      : 'workflows.task.detail.antigravityAppSetup.recheckAndOpen'),
+    cancelText: t('workflows.task.detail.qoderIDELater'),
+    autoFocusButton: 'cancel',
+    maskClosable: false,
+    onCancel() { closed = true },
+    onOk(_close: () => void) {
+      if (busy.value || closed) return
+      const action = create() || project.value.recheck
+      setBusy('continue')
+      void action(dismiss).then(next => {
+        if (next.antigravityProject && !closed) {
+          project.value = next.antigravityProject
+          if (project.value.createFailed) manual.value = true
+        } else {
+          dismiss()
+          showVibeToolOpenResult(next, toolName)
+        }
+      }).catch(reportError).finally(() => setBusy())
+    },
+  })
 }

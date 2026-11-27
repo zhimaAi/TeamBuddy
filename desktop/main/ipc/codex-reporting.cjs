@@ -19,8 +19,7 @@ function registerCodexReportingIPC(origins, { backendPath }) {
     if (action === 'enable') installing = true
     let stage = 'not_installed'
     try {
-      const info = await app.getApplicationInfoForProtocol('codex://threads/new')
-      const runtime = await findCodexAppRuntime(info.path, process.platform, info.name, signal)
+      const runtime = await findCodexAppRuntime(app, signal)
       stage = 'configuration_conflict'
       const source = path.join(userHookHome(), 'hooks.json')
       if (action !== 'enable') {

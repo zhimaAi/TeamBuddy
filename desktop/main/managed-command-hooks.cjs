@@ -94,7 +94,7 @@ async function recoverInstallation(file, manifestFile, journalFile) {
 }
 
 // 仅合并自己的事件组，保留现有规则和 Hooks；已被用户修改的受管组不覆盖。
-async function prepareCommandHooks({ workDir, stateRoot, namespace, directory, filename, group, commandName, restart = false }) {
+async function prepareCommandHooks({ workDir, stateRoot, namespace, directory, filename, group, commandName, restart = false, namedGroup = '' }) {
   const stateDir = hookStateDir(workDir, stateRoot, namespace)
   const pendingRestart = () => restart ? readRestartGuidance(stateDir) : Promise.resolve({ restartRequired: false, restartToken: '' })
   const dir = path.join(workDir, directory)
@@ -120,31 +120,43 @@ async function prepareCommandHooks({ workDir, stateRoot, namespace, directory, f
       manifest = oldManifest ? JSON.parse(oldManifest) : null
     } catch { throw new Error('configuration_conflict') }
     if (!config || Array.isArray(config) || typeof config !== 'object') throw new Error('configuration_conflict')
-    if (config.hooks !== undefined && (!config.hooks || typeof config.hooks !== 'object' || Array.isArray(config.hooks))) throw new Error('configuration_conflict')
-    config.hooks ||= {}
     let changed = false
-    for (const event of EVENTS) {
-      const groups = config.hooks[event] === undefined ? [] : config.hooks[event]
-      if (!Array.isArray(groups)) throw new Error('configuration_conflict')
-      const oldGroup = missingSettings ? undefined : manifest?.groups?.[event]
-      const ownIndex = oldGroup ? groups.findIndex(value => JSON.stringify(value) === JSON.stringify(oldGroup)) : -1
-      if (oldGroup && ownIndex < 0) throw new Error('configuration_modified')
-      // 未受管的同名命令属于用户配置，不重复安装或猜测所有权。
-      if (groups.some((value, i) => i !== ownIndex && Array.isArray(value?.hooks) && value.hooks.some(hook =>
-        [hook?.command, hook?.commandWindows, hook?.command_windows].some(cmd => typeof cmd === 'string' &&
-          (cmd.includes(commandName) || cmd === group.hooks[0].command))))) throw new Error('configuration_conflict')
-      if (ownIndex >= 0 && JSON.stringify(groups[ownIndex]) === JSON.stringify(group)) continue
-      if (ownIndex >= 0) groups[ownIndex] = group
-      else groups.push(group)
-      config.hooks[event] = groups
-      changed = true
+    let managed
+    if (namedGroup) {
+      const previous = config[namedGroup]
+      // Absent after removal can be installed again only through caller consent.
+      // Never replace an edited/disabled named group, even if a manifest exists.
+      if (previous !== undefined && JSON.stringify(previous) !== JSON.stringify(group)) throw new Error('configuration_modified')
+      changed = previous === undefined
+      config[namedGroup] = group
+      managed = { namedGroup, group }
+    } else {
+      if (config.hooks !== undefined && (!config.hooks || typeof config.hooks !== 'object' || Array.isArray(config.hooks))) throw new Error('configuration_conflict')
+      config.hooks ||= {}
+      for (const event of EVENTS) {
+        const groups = config.hooks[event] === undefined ? [] : config.hooks[event]
+        if (!Array.isArray(groups)) throw new Error('configuration_conflict')
+        const oldGroup = missingSettings ? undefined : manifest?.groups?.[event]
+        const ownIndex = oldGroup ? groups.findIndex(value => JSON.stringify(value) === JSON.stringify(oldGroup)) : -1
+        if (oldGroup && ownIndex < 0) throw new Error('configuration_modified')
+        // 未受管的同名命令属于用户配置，不重复安装或猜测所有权。
+        if (groups.some((value, i) => i !== ownIndex && Array.isArray(value?.hooks) && value.hooks.some(hook =>
+          [hook?.command, hook?.commandWindows, hook?.command_windows].some(cmd => typeof cmd === 'string' &&
+            (cmd.includes(commandName) || cmd === group.hooks[0].command))))) throw new Error('configuration_conflict')
+        if (ownIndex >= 0 && JSON.stringify(groups[ownIndex]) === JSON.stringify(group)) continue
+        if (ownIndex >= 0) groups[ownIndex] = group
+        else groups.push(group)
+        config.hooks[event] = groups
+        changed = true
+      }
+      managed = { groups: Object.fromEntries(EVENTS.map(event => [event, group])) }
     }
     if (!changed) {
       // 兼容旧安装日志恢复：即使配置没有再次变化，仍须给出重启引导。
       if (recovered && restart) await markRestartGuidance(stateDir)
       return { updated: recovered, ...await pendingRestart() }
     }
-    const freshManifest = JSON.stringify({ groups: Object.fromEntries(EVENTS.map(event => [event, group])) }, null, 2) + '\n'
+    const freshManifest = JSON.stringify(managed, null, 2) + '\n'
     const settings = JSON.stringify(config, null, 2) + '\n'
     if (Buffer.byteLength(settings, 'utf8') > 1024 * 1024) throw new Error('configuration_conflict')
     if (await readRegular(file, null) !== originalContent || await readRegular(manifestFile) !== oldManifest) throw new Error('configuration_conflict')

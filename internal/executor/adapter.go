@@ -102,6 +102,9 @@ type ExecutorEvent struct {
 	Timestamp          int64               `json:"timestamp"`
 }
 
+// DefaultCLIModel 是直接执行配置中“跟随 CLI”的保留值，与空字段（未配置/继承）不同。
+const DefaultCLIModel = "@teambuddy/default"
+
 // RunOptions New dialog execution options
 type RunOptions struct {
 	ExecPath      string            // CLI executable file path

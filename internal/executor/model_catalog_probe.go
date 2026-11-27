@@ -11,6 +11,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -21,7 +22,7 @@ type ModelCatalogResolver func(context.Context, string, string, string) (CLIMode
 
 var catalogResolvers = map[string]ModelCatalogResolver{
 	CLITypeOpenCode: resolveOpenCodeCatalog,
-	CLITypePi:       resolvePiCatalog,
+	CLITypePi:       resolvePiSelectedCatalog,
 }
 
 // RegisterModelCatalogResolver 由独立适配包在初始化阶段注册，避免父包导入子包。
@@ -114,24 +115,6 @@ func modelCatalogKey(cliType, workDir string) string {
 	return cliType + "\x00" + hex.EncodeToString(hash.Sum(nil))
 }
 
-func discoverModelCatalog(ctx context.Context, cliType, execPath, workDir, model string) (CLIModelCatalog, error) {
-	if execPath == "" {
-		return unknownCatalog(nil), ErrThinkingUnavailable
-	}
-	if workDir == "" {
-		workDir, _ = os.UserHomeDir()
-	}
-	if resolver := catalogResolvers[cliType]; resolver != nil {
-		return resolver(ctx, execPath, workDir, model)
-	}
-	catalog := unknownCatalog(DiscoverCLIModels(ctx, cliType))
-	// 旧 resolver 的静态兜底只提供名字，不提供模型级能力。
-	if len(catalog.Options) == 0 {
-		return catalog, ErrThinkingUnavailable
-	}
-	return catalog, nil
-}
-
 func ThinkingFromLevels(kind string, values []string, defaultLevel string) ModelThinking {
 	t := ModelThinking{Status: "unsupported", Kind: kind, Source: "cli_catalog", State: "fresh", UpdatedAt: time.Now()}
 	seen := map[string]bool{}
@@ -214,6 +197,9 @@ func parseOpenCodeCatalog(output []byte) (CLIModelCatalog, error) {
 
 // 探测并发有界，不复用业务会话，也不通过 prompt 验证各档。
 var piCatalogSlots = make(chan struct{}, 4)
+
+// 选中的 provider/model 会成为单独的 CLI 参数，拒绝形似选项或命令的值。
+var piModelSelector = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9._-]{0,127}/[A-Za-z0-9_@][A-Za-z0-9._:/@+\-]{0,255}$`)
 
 func resolvePiSelectedCatalog(ctx context.Context, execPath, workDir, model string) (CLIModelCatalog, error) {
 	select {

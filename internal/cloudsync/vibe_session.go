@@ -8,7 +8,7 @@ import (
 )
 
 // Vibe has no managed CLI process. Its public conversation consists only of
-// Skill-reported user messages and final answers, identified by native sessions.
+// reported user messages and final answers, identified by native sessions.
 func buildVibeSession(ctx context.Context, db syncQueryer, taskUUID, tool string, index int) (*cloud.PipelineTaskSessionSync, error) {
 	result := &cloud.PipelineTaskSessionSync{
 		LocalTaskUUID: taskUUID, ExecutionIndex: index,

@@ -103,12 +103,19 @@ export async function openVibeCli(payload: {
   prompt: string
   threadId?: string
   modelName?: string
-}): Promise<void> {
+  nativeHook?: { taskUuid: string; executionIndex: number; instruction: string }
+}): Promise<{ opened: boolean }> {
   const bridge = window.goteamsDesktop
   if (!bridge?.openVibeCli) {
     throw new Error(t('components.errors.openVibeToolUnsupported'))
   }
-  await bridge.openVibeCli(payload)
+  return bridge.openVibeCli(payload)
+}
+
+export async function openAntigravityApp(payload: DesktopAntigravityAppRequest) {
+  const bridge = window.goteamsDesktop
+  if (!bridge?.openAntigravityApp) throw new Error(t('components.errors.openVibeToolUnsupported'))
+  return bridge.openAntigravityApp(payload)
 }
 
 export async function openQoderIDE(payload: {

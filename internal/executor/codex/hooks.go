@@ -61,7 +61,7 @@ func InspectHooks(ctx context.Context, executable, cwd string, userSource ...str
 	if err := json.Unmarshal(raw, &config); err != nil {
 		return HookInspection{}, err
 	}
-	result := HookInspection{}
+	result := HookInspection{Hooks: []hookDefinition{}}
 	for _, layer := range config.Layers {
 		if layer.Name.Type == "project" && sameHookPath(layer.Name.Folder, filepath.Join(cwd, ".codex")) && layer.DisabledReason != nil && *layer.DisabledReason != "" {
 			result.ProjectDisabled = true

@@ -72,6 +72,8 @@ TeamBuddy is a local-first, team-oriented, all-in-one AI coding workbench that *
 | Frontend | Vue 3.5, markdown-it (Markdown rendering) |
 | Backend | Go 1.26 |
 
+Building from source? See [local development and test builds for Windows and macOS](docs/架构设计/20260810_客户端架构与开发规范.md#本地启动与测试打包).
+
 ## Quick Start
 
 ### 1. Download and Install

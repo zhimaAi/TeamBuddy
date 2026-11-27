@@ -9,19 +9,20 @@ import (
 )
 
 const (
-	ExecutionModePipeline    = "pipeline"
-	ExecutionModeExpertGroup = "expert_group"
-	ExecutionModeVibeCoding  = "vibe_coding"
-	ExecutionModeCLI         = "cli"
-	ExecutionToolCodex       = "codex"
-	ExecutionToolCodexCLI    = "codex_cli"
-	ExecutionToolClaude      = "claude"
-	ExecutionToolCodeBuddy   = "codebuddy"
-	ExecutionToolQoder       = "qoder"
-	ExecutionToolQoderIDE    = "qoder_ide"
-	ExecutionToolPi          = "pi"
-	ExecutionToolAntigravity = "antigravity"
-	ExecutionToolGeneric     = "generic"
+	ExecutionModePipeline       = "pipeline"
+	ExecutionModeExpertGroup    = "expert_group"
+	ExecutionModeVibeCoding     = "vibe_coding"
+	ExecutionModeCLI            = "cli"
+	ExecutionToolCodex          = "codex"
+	ExecutionToolCodexCLI       = "codex_cli"
+	ExecutionToolClaude         = "claude"
+	ExecutionToolCodeBuddy      = "codebuddy"
+	ExecutionToolQoder          = "qoder"
+	ExecutionToolQoderIDE       = "qoder_ide"
+	ExecutionToolPi             = "pi"
+	ExecutionToolAntigravity    = "antigravity"
+	ExecutionToolAntigravityApp = "antigravity_app"
+	ExecutionToolGeneric        = "generic"
 
 	// CLIDirectStepKey 是 CLI 直接执行模式的隐式步骤标识。该模式没有 Agent
 	// 编排，但仍复用 gt_task_steps 承载用户选定的 CLI 与模型，使会话、动态、
@@ -54,6 +55,7 @@ var vibeToolDefinitions = [...]VibeToolDefinition{
 	{ID: ExecutionToolClaude, Launch: "terminal", BindingKind: "native", SupportsResume: true, SkillDirectory: ".claude/skills", InstallIMBot: true},
 	{ID: ExecutionToolQoderIDE, Launch: "app", BindingKind: "native", SupportsResume: true, SkillDirectory: ".qoder/skills", InstallIMBot: true},
 	{ID: ExecutionToolGeneric, Launch: "clipboard", BindingKind: "generic", RequiresReportID: true, SupportsRebind: true, SkillDirectory: ".teambuddy/skills"},
+	{ID: ExecutionToolAntigravityApp, Launch: "app", BindingKind: "native", SkillDirectory: ".teambuddy/skills"},
 }
 
 func VibeTool(tool string) (VibeToolDefinition, bool) {

@@ -1,10 +1,9 @@
 import { ref } from 'vue'
-import { useCliModelOptions } from '@/composables/useCliModelOptions'
-import { supportsVibeModel, vibeToolDefinition, VIBE_CODING_TOOLS } from '@/composables/useVibeCoding'
+import { supportsVibeModel, VIBE_CODING_TOOLS } from '@/composables/useVibeCoding'
 
 const STORAGE_KEY = 'goteams.vibe-coding.recent-models'
 
-// 模型是按 CLI 保存的用户偏好；每次使用前校验目录，失效时回退默认配置。
+// 只保存用户的选择，不保存或用探测结果改写模型偏好。
 export function readRecentVibeModels(): Record<string, string> {
   try {
     const stored: unknown = JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}')
@@ -27,19 +26,10 @@ export function rememberVibeModel(tool: string, model: string) {
   }
 }
 
-export function availableVibeModel(tool: string, model: string, models: string[]) {
-  return model && !(tool === 'pi' && model === 'auto') && models.includes(model) ? model : ''
-}
-
 export function useVibeModelPreferences() {
   const vibeModels = ref<Record<string, string>>(readRecentVibeModels())
-  const resolving = ref<Record<string, boolean>>({})
-  const { loadModelOptions } = useCliModelOptions(false)
-  let generation = 0
 
   function resetVibeModels(tool = '', model = '') {
-    generation++
-    resolving.value = {}
     vibeModels.value = readRecentVibeModels()
     if (supportsVibeModel(tool)) vibeModels.value[tool] = model
   }
@@ -49,29 +39,9 @@ export function useVibeModelPreferences() {
     rememberVibeModel(tool, model)
   }
 
-  async function resolveVibeModel(tool: string): Promise<string> {
-    const candidate = vibeModels.value[tool] || ''
-    const cliType = vibeToolDefinition(tool)?.cliType
-    if (!supportsVibeModel(tool) || !cliType) return ''
-    if (!candidate) {
-      rememberVibeModel(tool, '')
-      return ''
-    }
-    const currentGeneration = generation
-    const remembered = readRecentVibeModels()[tool]
-    resolving.value = { ...resolving.value, [tool]: true }
-    try {
-      const models = await loadModelOptions(cliType)
-      const resolved = availableVibeModel(tool, candidate, models)
-      if (currentGeneration === generation && vibeModels.value[tool] === candidate) {
-        vibeModels.value = { ...vibeModels.value, [tool]: resolved }
-        if (readRecentVibeModels()[tool] === remembered) rememberVibeModel(tool, resolved)
-      }
-      return resolved
-    } finally {
-      if (currentGeneration === generation) resolving.value = { ...resolving.value, [tool]: false }
-    }
+  function selectedVibeModel(tool: string): string {
+    return supportsVibeModel(tool) ? vibeModels.value[tool] || '' : ''
   }
 
-  return { vibeModels, resolving, resetVibeModels, setVibeModel, resolveVibeModel }
+  return { vibeModels, resetVibeModels, setVibeModel, selectedVibeModel }
 }

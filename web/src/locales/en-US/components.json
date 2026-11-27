@@ -15,6 +15,7 @@
     "selectDirectoryUnsupported": "Selecting local folders is unavailable here. Use the TeamBuddy desktop app.",
     "openDirectoryUnsupported": "Opening local folders is unavailable here. Use the TeamBuddy desktop app.",
     "openCodexUnsupported": "Opening Codex automatically is unavailable here. Use the TeamBuddy desktop app.",
+    "antigravityOpenFromDesktop": "Open this Antigravity CLI task from the TeamBuddy desktop app. Copying the prompt cannot bind or sync the session.",
     "openVibeToolUnsupported": "Opening a CLI automatically is unavailable here. Use the TeamBuddy desktop app.",
     "desktopSettingsUnsupported": "Desktop app settings are unavailable here.",
     "iconType": "Only PNG, JPEG, and WebP images are supported.",
@@ -123,6 +124,15 @@
     "max": "Maximum (max)"
   },
   "cliSelect": {
+    "readModels": "Read models",
+    "readModelsAgain": "Read again",
+    "readIssue": {
+      "login_required": "Open agy in your local terminal and sign in to Antigravity CLI, then return to TeamBuddy and read again.",
+      "read_failed": "Could not read from Antigravity CLI. Check your connection or CLI status and try again.",
+      "unsupported_version": "Reading models and thinking levels requires Antigravity CLI 1.5.17 or later."
+    },
+    "modelDefault": "Use CLI default",
+    "noReadableModels": "No models could be read without interaction. Keep your selection or use the CLI default.",
     "cliTool": "CLI tool",
     "model": "Model",
     "detectFailed": "CLI detection failed",

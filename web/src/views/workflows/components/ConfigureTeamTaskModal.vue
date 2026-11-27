@@ -117,6 +117,7 @@
                 type="button"
                 class="chip"
                 :class="{ selected: form.work_dir }"
+                :aria-describedby="workDirError ? 'configure-work-dir-error' : undefined"
                 @click="chooseWorkDir"
               >
                 <FolderOpenOutlined class="chip-icon" />
@@ -229,6 +230,14 @@
                 </template>
               </a-dropdown>
             </div>
+
+            <a-alert
+              v-if="workDirError"
+              id="configure-work-dir-error"
+              type="error"
+              show-icon
+              :message="t(workDirError)"
+            />
 
             <section
               v-if="showChildren || showDirs"
@@ -369,15 +378,15 @@ import {
   InfoCircleFilled,
   PlusOutlined,
 } from '@ant-design/icons-vue'
-import apiClient from '@/api/client'
+import apiClient, { ApiError } from '@/api/client'
 import AssignExecutionModeModal, {
   type ExecutionModeSelection,
 } from '@/components/AssignExecutionModeModal.vue'
 import TeamTaskRequirementEditModal from '@/views/workflows/components/TeamTaskRequirementEditModal.vue'
 import RichTextContent from '@/components/RichTextContent.vue'
 import { useTaskImageAttachments } from '@/composables/useTaskImageAttachments'
-import { isVibeCodingTool, vibeToolLabelKey, vibeToolLogo } from '@/composables/useVibeCoding'
-import { readRecentVibeModels, useVibeModelPreferences } from '@/composables/useVibeModelPreferences'
+import { isVibeCodingTool, supportsVibeModel, vibeToolLabelKey, vibeToolLogo } from '@/composables/useVibeCoding'
+import { readRecentVibeModels } from '@/composables/useVibeModelPreferences'
 import { useCreateTaskDefaults } from '@/composables/useCreateTaskDefaults'
 import { useCliKickoffNavigation } from '@/composables/useCliKickoff'
 import { isDesktopRuntime, isMacDesktopRuntime, selectDirectory } from '@/composables/useDesktop'
@@ -431,6 +440,7 @@ const projects = ref<LocalProject[]>([])
 const showChildren = ref(false)
 const showDirs = ref(false)
 const chipRowRef = ref<HTMLElement | null>(null)
+const workDirError = ref('')
 
 const form = reactive({
   title: '',
@@ -524,6 +534,7 @@ function reset() {
   requirementEditorOpen.value = false
   startImmediately.value = false
   syncAgentOutput.value = true
+  workDirError.value = ''
   clearImageAttachments()
   Object.assign(form, {
     title: props.item?.title || '',
@@ -545,17 +556,6 @@ function reset() {
   executionPickerOpen.value = false
   detailCreatorName.value = ''
   fullscreen.value = false
-}
-
-const { resetVibeModels, resolveVibeModel } = useVibeModelPreferences()
-
-async function validateVibeFormModel() {
-  if (form.execution_mode !== 'vibe_coding') return
-  const tool = form.execution_tool
-  const candidate = form.model_name || ''
-  resetVibeModels(tool, candidate)
-  const model = await resolveVibeModel(tool)
-  if (form.execution_mode === 'vibe_coding' && form.execution_tool === tool && (form.model_name || '') === candidate) form.model_name = model
 }
 
 function applyCreateTaskDefaults() {
@@ -595,7 +595,8 @@ function applyCreateTaskDefaults() {
   ) {
     form.execution_mode = 'vibe_coding'
     form.execution_tool = defaults.execution_tool
-    form.model_name = readRecentVibeModels()[defaults.execution_tool] ?? defaults.model_name ?? ''
+    form.model_name = supportsVibeModel(defaults.execution_tool)
+      ? readRecentVibeModels()[defaults.execution_tool] ?? defaults.model_name ?? '' : ''
   } else if (
     executionMode === 'cli' &&
     defaults.execution_tool &&
@@ -643,11 +644,6 @@ async function load() {
   if (projectResult.status === 'rejected')
     message.warning(t('workflows.task.create.projectLoadFailed'))
   applyCreateTaskDefaults()
-  try {
-    await validateVibeFormModel()
-  } catch {
-    // 提交时重试校验，暂时保留历史偏好。
-  }
   loading.value = false
 }
 
@@ -659,7 +655,7 @@ function chooseProject(uuid: string) {
 
 async function chooseWorkDir() {
   try {
-    const selected = await selectDirectory(form.work_dir)
+    const selected = await selectDirectory(workDirError.value ? undefined : form.work_dir)
     if (selected) {
       form.work_dir = selected
       form.project_uuid = ''
@@ -694,7 +690,10 @@ async function confirm() {
   const description = form.description
   if (!form.title.trim()) return message.warning(t('workflows.task.create.titleRequired'))
   if (isSavingPastedImages.value) return message.warning(t('workflows.task.create.waitImages'))
-  if (!form.work_dir.trim()) return message.warning(t('teamwork.configure.workDirRequired'))
+  if (!form.work_dir.trim()) {
+    workDirError.value = 'teamwork.configure.workDirRequired'
+    return
+  }
   if (form.additional_dirs.some((dir) => !dir.trim()))
     return message.warning(t('workflows.task.create.emptyRelatedDirectory'))
   if (startImmediately.value && !form.execution_mode)
@@ -709,6 +708,7 @@ async function confirm() {
     return message.warning(t('workflows.task.create.executionTargetRequired'))
   if (form.execution_mode === 'expert_group' && !selectedExpertGroup.value?.ready)
     return message.warning(t('expertGroups.notReady'))
+  workDirError.value = ''
   saving.value = true
   const createdExecutionMode = form.execution_mode
   const shouldStartImmediately = startImmediately.value
@@ -717,7 +717,6 @@ async function confirm() {
   const createdVibeTool = form.execution_tool
   let createdTaskUuid = ''
   try {
-    await validateVibeFormModel()
     const attachments = await buildDraftAttachmentInputs(description)
     const result = await apiClient.post<{ uuid: string }>('/tasks', {
       title: form.title.trim(),
@@ -776,7 +775,13 @@ async function confirm() {
     emit('created', result.uuid)
     emit('update:open', false)
   } catch (error) {
-    message.error(error instanceof Error ? error.message : t('teamwork.configure.createFailed'))
+    if (error instanceof ApiError && error.code === 'workspace_required') {
+      workDirError.value = 'teamwork.configure.workDirRequired'
+    } else if (error instanceof ApiError && (error.code === 'workspace_invalid' || error.code === 'workspace_unavailable')) {
+      workDirError.value = 'teamwork.configure.workDirUnavailable'
+    } else {
+      message.error(error instanceof Error ? error.message : t('teamwork.configure.createFailed'))
+    }
   } finally {
     saving.value = false
   }
@@ -836,6 +841,10 @@ function syncChipMenuMaxHeight() {
 function handleChipMenuOpenChange(open: boolean) {
   if (open) syncChipMenuMaxHeight()
 }
+
+watch([workDirs, () => [...form.child_project_uuids]], () => {
+  workDirError.value = ''
+})
 
 watch(
   () => props.open,

@@ -180,7 +180,6 @@
             :task-uuid="taskUuid"
             :model-options="modelOptions"
             :model-loading="modelLoading"
-            :model-counts="modelCounts"
             :show-execution-switch="Boolean(executionTask)"
             @switch-execution="switchExecution"
             @select-cli="handleCliChange"
@@ -314,6 +313,7 @@ import type { TaskWithDetails } from '@/types/task-detail'
 import { cliLogo } from '@/composables/useCliLogo'
 import { useChatRuntimeDefaults } from '@/composables/useChatRuntimeDefaults'
 import { useCliThinkingSelection } from '@/composables/useCliThinkingSelection'
+import { DEFAULT_CLI_MODEL } from '@/utils/cliModelOptions'
 import { useCliModelOptions } from '@/composables/useCliModelOptions'
 import { useTaskImageAttachments } from '@/composables/useTaskImageAttachments'
 import { readComposerDraftReferences, writeComposerDraftReferences } from '@/composables/useComposerDraft'
@@ -501,14 +501,10 @@ const {
   cliLoading,
   cliOptions,
   loadCliOptions,
-  loadModelOptions,
-  modelCounts,
   modelLoading,
   modelOptions,
   modelLabel,
-  prefetchModelCounts,
-  resetModelOptions,
-} = useCliModelOptions(true, () => ({ taskUuid: props.taskUuid || undefined }))
+} = useCliModelOptions(() => selectedCliType.value, () => ({ taskUuid: props.taskUuid || undefined }))
 const { getChatRuntimeSelection, saveChatRuntimeSelection } = useChatRuntimeDefaults()
 const runtimeEnabled = computed(() => Boolean(props.taskUuid && (props.currentStep || props.executionTask?.execution_mode === 'cli')))
 const documentsStep = computed(() => props.documentStep || props.currentStep)
@@ -1648,31 +1644,18 @@ async function initialiseRuntimeConfig() {
   const defaultModel = props.modelName || snapshotModel
   const defaultThinking = props.thinkingLevel ?? (defaultCLI === snapshotCLI && defaultModel === snapshotModel ? props.currentStep?.thinking_level ?? props.executionTask?.thinking_level ?? '' : '')
   selectedCliType.value = cached?.cli_type || defaultCLI
-  selectedModelName.value = cached?.model_name || defaultModel
+  selectedModelName.value = cached?.model_name || defaultModel || (selectedCliType.value ? DEFAULT_CLI_MODEL : '')
   selectedThinkingLevel.value = cached?.thinking_level ?? (selectedCliType.value === defaultCLI && selectedModelName.value === defaultModel ? defaultThinking : '')
   resetThinkingDrafts()
-  if (!runtimeEnabled.value) {
-    resetModelOptions()
-    return
-  }
+  if (!runtimeEnabled.value) return
 
   try {
     if (!cliOptions.value.length) await loadCliOptions()
     if (requestId !== runtimeRequestId) return
     if (cached?.cli_type && !cliStillAvailable(cached.cli_type)) {
       selectedCliType.value = defaultCLI
-      selectedModelName.value = defaultModel
+      selectedModelName.value = defaultModel || (defaultCLI ? DEFAULT_CLI_MODEL : '')
       selectedThinkingLevel.value = defaultThinking
-    }
-    void prefetchModelCounts(cliOptions.value.map((item) => item.type))
-    if (!selectedCliType.value) {
-      resetModelOptions()
-      return
-    }
-    const models = await loadModelOptions(selectedCliType.value)
-    if (requestId !== runtimeRequestId) return
-    if (!selectedModelName.value) {
-      selectedModelName.value = models[0] || ''
     }
   } catch (error) {
     if (requestId === runtimeRequestId) {
@@ -1683,26 +1666,13 @@ async function initialiseRuntimeConfig() {
   }
 }
 
-async function handleCliChange(cliType: string) {
+function handleCliChange(cliType: string) {
   if (cliType === selectedCliType.value) return
   runtimeRequestId++
   runtimeTouched.value = true
   selectedCliType.value = cliType
-  selectedModelName.value = ''
+  selectedModelName.value = cliType ? DEFAULT_CLI_MODEL : ''
   persistRuntimeSelection()
-  try {
-    const models = await loadModelOptions(cliType)
-    if (selectedCliType.value === cliType && !selectedModelName.value) {
-      selectedModelName.value = models[0] || ''
-      persistRuntimeSelection()
-    }
-  } catch (error) {
-    if (selectedCliType.value === cliType) {
-      message.warning(
-        error instanceof Error ? error.message : t('components.cliSelect.modelsLoadFailed'),
-      )
-    }
-  }
 }
 
 function handleModelChange(model: string) {
@@ -1789,11 +1759,6 @@ watch(
   },
   { immediate: true },
 )
-
-watch(cliPickerOpen, (open) => {
-  if (!open || !cliOptions.value.length) return
-  void prefetchModelCounts(cliOptions.value.map((item) => item.type))
-})
 
 watch(
   () => [props.cliType, props.modelName, props.thinkingLevel] as const,

@@ -96,6 +96,7 @@
     "created": "已创建本地任务并关联",
     "createFailed": "创建本地任务失败",
     "workDirRequired": "请选择工作目录",
+    "workDirUnavailable": "工作目录或关联目录不可用，请检查并重新选择。",
     "projectRequired": "请选择所属项目"
   },
   "delete": {

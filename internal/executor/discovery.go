@@ -147,9 +147,7 @@ func cliDefinitions() []cliDefinition {
 }
 
 // DiscoverCLIs detects installed CLI tools on this machine. It reports install
-// status and version only; model lists are resolved separately via
-// DiscoverCLIModels (the background refresh in discovery_cache.go probes the
-// models of every installed CLI and persists them to clis.json/models.json).
+// status and version only; model lists are read separately on demand.
 func DiscoverCLIs(ctx context.Context) []DiscoveredCLI {
 	defs := cliDefinitions()
 	results := make([]DiscoveredCLI, len(defs))
@@ -1700,19 +1698,8 @@ func piStaticModels() []string {
 	}
 }
 
-// resolveAntigravityModels 通过 `agy models` 读取模型 slug。
-// 命令需要已登录；失败时回退到一小份内置目录，避免选择器为空。
-func resolveAntigravityModels(ctx context.Context, execPath string) []string {
-	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
-	defer cancel()
-
-	cmd := osexec.CommandContext(ctx, execPath, "models")
-	output, err := cmd.Output()
-	if err == nil {
-		if models := parseAntigravityModelOutput(string(output)); len(models) > 0 {
-			return models
-		}
-	}
+// resolveAntigravityModels 保证旧发现入口也不会启动需要登录的 CLI。
+func resolveAntigravityModels(context.Context, string) []string {
 	return antigravityStaticModels()
 }
 
@@ -1805,8 +1792,7 @@ func antigravityModelSlug(id string) bool {
 	return true
 }
 
-// antigravityStaticModels 是 `agy models` 无法查询时的兜底。
-// 线上目录会变，探测成功时不使用这份列表。
+// antigravityStaticModels 是缺少已核验目录时的离线兜底，不代表账号可用模型。
 func antigravityStaticModels() []string {
 	return []string{
 		"gemini-3.8-flash-high",

@@ -47,7 +47,7 @@
               alt=""
               aria-hidden="true"
             />
-            {{ member.model_name }}
+            {{ member.model_name === DEFAULT_CLI_MODEL ? t('components.cliSelect.modelDefault') : member.model_name }}
           </span>
         </div>
         <div class="member-actions">
@@ -74,6 +74,7 @@
 </template>
 
 <script setup lang="ts">
+import { DEFAULT_CLI_MODEL } from '@/utils/cliModelOptions'
 import { CrownOutlined, DeleteOutlined, EditOutlined } from '@ant-design/icons-vue'
 import pipelineAgentCliIcon from '@/assets/icons/pipeline-agent-cli.svg'
 import pipelineAgentModelIcon from '@/assets/icons/pipeline-agent-model.svg'

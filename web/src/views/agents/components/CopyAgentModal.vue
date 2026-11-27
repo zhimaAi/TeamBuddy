@@ -45,7 +45,7 @@
                 </span>
                 <span>
                   <DeploymentUnitOutlined />
-                  {{ stepModel(step) || t('agents.modelNotConfigured') }}
+                  {{ stepModel(step) === DEFAULT_CLI_MODEL ? t('components.cliSelect.modelDefault') : stepModel(step) || t('agents.modelNotConfigured') }}
                 </span>
               </span>
             </span>
@@ -92,6 +92,7 @@
 </template>
 
 <script setup lang="ts">
+import { DEFAULT_CLI_MODEL } from '@/utils/cliModelOptions'
 import { computed, ref, watch } from 'vue'
 import { message } from 'ant-design-vue'
 import { CheckOutlined, CodeOutlined, DeploymentUnitOutlined } from '@ant-design/icons-vue'

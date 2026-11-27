@@ -1,4 +1,4 @@
-// Package codexhook implements the opt-in Codex App native callbacks.
+// Package codexhook implements opted-in native task callbacks and durable delivery for Codex and Antigravity CLI.
 package codexhook
 
 import (
@@ -18,12 +18,14 @@ import (
 
 	"goteams-client/internal/codexmessage"
 	"goteams-client/internal/codexreply"
+	"goteams-client/internal/executor"
 	"goteams-client/internal/executor/codex"
 	"goteams-client/internal/i18n"
 	"goteams-client/internal/taskskillclient"
 )
 
 const (
+	cliTool      = "codex_cli"
 	markerPrefix = "TeamBuddy-Codex-App: "
 	userMarker   = "TeamBuddy-Codex-Hook: "
 	maxBytes     = 2 << 20
@@ -42,6 +44,7 @@ type event struct {
 }
 
 type launch struct {
+	Tool            string `json:"tool,omitempty"`
 	ExplicitPrivacy bool   `json:"explicit_privacy,omitempty"`
 	Scope           string `json:"scope,omitempty"`
 	ChatDir         string `json:"chat_dir,omitempty"`
@@ -53,6 +56,14 @@ type launch struct {
 	SessionID       string `json:"session_id,omitempty"`
 }
 
+// Existing launch and session files without a tool belong to Codex App.
+func (l launch) tool() string {
+	if l.Tool == "" {
+		return "codex"
+	}
+	return l.Tool
+}
+
 type state struct {
 	LaunchID string `json:"launch_id"`
 	launch
@@ -61,6 +72,7 @@ type state struct {
 	Stale       bool                       `json:"stale,omitempty"`
 	PrivateTurn string                     `json:"private_turn,omitempty"`
 	Gap         bool                       `json:"gap,omitempty"`
+	Agy         *agyProgress               `json:"agy,omitempty"`
 }
 
 // Run never starts the desktop service. Errors use exit code 1, not Codex's
@@ -82,16 +94,28 @@ func Run(ctx context.Context, args []string, input io.Reader, output io.Writer) 
 			flags := flag.NewFlagSet("codex-hook inspect", flag.ContinueOnError)
 			flags.SetOutput(io.Discard)
 			executable := flags.String("runtime", "", "Codex App bundled runtime")
+			cli := flags.Bool("cli", false, "inspect the installed interactive CLI")
 			cwd := flags.String("work-dir", "", "canonical task workspace")
 			source := flags.String("source", "", "user hook configuration file")
-			if flags.Parse(args[1:]) != nil || flags.NArg() != 0 || !filepath.IsAbs(*executable) || !filepath.IsAbs(*cwd) {
+			if flags.Parse(args[1:]) != nil || flags.NArg() != 0 || !filepath.IsAbs(*cwd) ||
+				(*cli && *executable != "") || (!*cli && !filepath.IsAbs(*executable)) {
 				return errors.New("invalid Codex inspection arguments")
+			}
+			if *cli {
+				runtime, err := executor.ResolveVibeCodingExecutable(cliTool)
+				if err != nil || !filepath.IsAbs(runtime) {
+					return errors.New("Codex CLI unavailable")
+				}
+				*executable = runtime
 			}
 			result, err := codex.InspectHooks(ctx, *executable, *cwd, *source)
 			if err != nil {
 				return errors.New("Codex Hook inspection unavailable")
 			}
-			return json.NewEncoder(output).Encode(result)
+			return json.NewEncoder(output).Encode(struct {
+				codex.HookInspection
+				Runtime string `json:"runtime"`
+			}{result, *executable})
 		}
 		if args[0] == "check" {
 			return checkOrPrepare(ctx, client, root, args[1:], output, false)
@@ -113,7 +137,9 @@ func checkOrPrepare(ctx context.Context, client *taskskillclient.Client, root st
 	locale := flags.String("locale", "", "TeamBuddy display language")
 	thread := flags.String("thread", "", "existing native thread (check only)")
 	scope := flags.String("scope", "", "callback scope")
-	if flags.Parse(args) != nil || flags.NArg() != 0 || (*scope != "" && *scope != "user") || *index < 0 || !filepath.IsAbs(*cwd) {
+	tool := flags.String("tool", "", "codex_cli for an interactive CLI task")
+	if flags.Parse(args) != nil || flags.NArg() != 0 || (*scope != "" && *scope != "user") ||
+		(*tool != "" && *tool != cliTool) || (*tool == cliTool && *thread == "" && *scope != "user") || *index < 0 || !filepath.IsAbs(*cwd) {
 		return errors.New("expected --task UUID --execution-index N --work-dir ABSOLUTE_PATH")
 	}
 	id, err := taskskillclient.NormalizeTaskID(*taskID)
@@ -124,7 +150,7 @@ func checkOrPrepare(ctx context.Context, client *taskskillclient.Client, root st
 	if err != nil {
 		return errors.New("Codex workspace unavailable")
 	}
-	item := launch{Scope: *scope, Locale: i18n.Normalize(*locale), TaskUUID: id, Index: *index, CWD: resolved, ExpiresAt: time.Now().Add(24 * time.Hour).Unix()}
+	item := launch{Tool: *tool, Scope: *scope, Locale: i18n.Normalize(*locale), TaskUUID: id, Index: *index, CWD: resolved, ExpiresAt: time.Now().Add(24 * time.Hour).Unix()}
 	if *thread != "" {
 		tid, err := uuid.Parse(*thread)
 		if err != nil || tid == uuid.Nil || create {
@@ -132,7 +158,7 @@ func checkOrPrepare(ctx context.Context, client *taskskillclient.Client, root st
 		}
 		item.SessionID = tid.String()
 		var current state
-		if err := read(filepath.Join(root, "session-"+item.SessionID+".json"), &current); err != nil || current.SessionID != item.SessionID || current.TaskUUID != id || current.Index != *index || !sameDirectory(current.CWD, resolved) {
+		if err := read(filepath.Join(root, "session-"+item.SessionID+".json"), &current); err != nil || current.SessionID != item.SessionID || current.TaskUUID != id || current.Index != *index || current.tool() != item.tool() || (*tool == cliTool && current.Scope != "user") || !sameDirectory(current.CWD, resolved) {
 			return errors.New("Codex local session binding unavailable")
 		}
 		item.Scope = current.Scope
@@ -287,7 +313,7 @@ func handleScope(ctx context.Context, client *taskskillclient.Client, root strin
 		} else if s.PrivateTurn == e.TurnID || e.IsSecret || e.LocalOnly {
 			content = codexreply.HiddenResult
 		}
-		item := taskskillclient.Activity{ExecutionIndex: s.Index, EventID: uuid.NewSHA1(uuid.NameSpaceOID, key).String(), Type: kind, Content: content, Tool: "codex", ThreadID: e.SessionID, Source: "hooks"}
+		item := taskskillclient.Activity{ExecutionIndex: s.Index, EventID: uuid.NewSHA1(uuid.NameSpaceOID, key).String(), Type: kind, Content: content, Tool: s.tool(), ThreadID: e.SessionID, Source: "hooks"}
 		duplicate := false
 		for _, pending := range s.Pending {
 			if pending.EventID == item.EventID {
@@ -303,7 +329,7 @@ func handleScope(ctx context.Context, client *taskskillclient.Client, root strin
 			if len(next) > maxPending || len(data) > maxBytes-1024 || utf8.RuneCountInString(content) > taskskillclient.MaxActivityContentRunes {
 				s.Gap = true
 			} else {
-				if kind == "question" {
+				if kind == "question" && s.tool() == "codex" {
 					codexmessage.Capture(ctx, root, item.EventID, content)
 				}
 				s.Pending = next
@@ -337,7 +363,7 @@ func handleScope(ctx context.Context, client *taskskillclient.Client, root strin
 		response["systemMessage"] = i18n.WithLocale(s.Locale, "codex_hook_"+status)
 	}
 	if e.Name != "Stop" {
-		response["hookSpecificOutput"] = map[string]string{"hookEventName": e.Name, "additionalContext": fmt.Sprintf("TeamBuddy task_uuid=%s; execution_index=%d; tool=codex; thread_id=%s; callback_status=%s. Native Hooks exclusively report user messages and final replies; do not report activities through Skill/MCP. A Stop event does not complete the task. Continue the user's work if synchronization is unavailable; do not claim it succeeded.", s.TaskUUID, s.Index, e.SessionID, status)}
+		response["hookSpecificOutput"] = map[string]string{"hookEventName": e.Name, "additionalContext": fmt.Sprintf("TeamBuddy task_uuid=%s; execution_index=%d; tool=%s; thread_id=%s; callback_status=%s. Native Hooks exclusively report user messages and final replies; do not report activities through Skill/MCP. A Stop event does not complete the task. Continue the user's work if synchronization is unavailable; do not claim it succeeded.", s.TaskUUID, s.Index, s.tool(), e.SessionID, status)}
 	}
 	if err := json.NewEncoder(output).Encode(response); err != nil {
 		return err
@@ -355,7 +381,7 @@ func verify(ctx context.Context, client *taskskillclient.Client, item launch) (b
 		}
 		return false, err
 	}
-	if task.Mode != "vibe_coding" || task.Tool != "codex" || task.Index != item.Index {
+	if task.Mode != "vibe_coding" || task.Tool != item.tool() || task.Index != item.Index {
 		return false, errStale
 	}
 	if task.BoundThread != "" && (task.BoundThread != item.SessionID || task.ReportingOwner != "hooks") {
@@ -375,7 +401,7 @@ func deliver(ctx context.Context, client *taskskillclient.Client, file string, s
 		return err
 	}
 	if !bound {
-		if err := client.BindSession(ctx, s.TaskUUID, "", taskskillclient.SessionBinding{ExecutionIndex: s.Index, Type: "codex", ThreadID: s.SessionID, ReportingOwner: "hooks"}); err != nil {
+		if err := client.BindSession(ctx, s.TaskUUID, "", taskskillclient.SessionBinding{ExecutionIndex: s.Index, Type: s.tool(), ThreadID: s.SessionID, ReportingOwner: "hooks"}); err != nil {
 			return err
 		}
 	}

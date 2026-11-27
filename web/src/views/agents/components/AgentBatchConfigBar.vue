@@ -46,6 +46,7 @@
         {{ model.label }}
       </a-select-option>
     </a-select>
+    <CliModelReadButton :cli-type="batchCliType" :disabled="saving" />
     <a-checkbox v-model:checked="configureThinking" :disabled="saving">{{ t('components.cliThinking.configure') }}</a-checkbox>
     <CliThinkingSelect v-if="configureThinking && batchCliType && batchModelName" v-model="thinkingLevel" :cli-type="batchCliType" :model-name="batchModelName" />
     <a-button
@@ -71,10 +72,12 @@
 
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
+import CliModelReadButton from '@/components/CliModelReadButton.vue'
 import CliThinkingSelect from '@/components/CliThinkingSelect.vue'
 import { useCliThinkingSelection } from '@/composables/useCliThinkingSelection'
 import { message } from 'ant-design-vue'
 import batchSelectedCountIcon from '@/assets/icons/batch-selected-count.svg'
+import { DEFAULT_CLI_MODEL } from '@/utils/cliModelOptions'
 import { useCliModelOptions } from '@/composables/useCliModelOptions'
 import { useAppI18n } from '@/i18n'
 
@@ -98,11 +101,9 @@ const {
   cliLoading,
   cliOptions,
   loadCliOptions,
-  loadModelOptions,
   modelLoading,
   modelChoices,
-  resetModelOptions,
-} = useCliModelOptions()
+} = useCliModelOptions(batchCliType)
 const choices = computed(() => modelChoices(batchModelName.value))
 
 const canApply = computed(
@@ -113,13 +114,8 @@ const canApply = computed(
     !props.saving,
 )
 
-async function handleCliChange(cliType: string) {
-  batchModelName.value = ''
-  try {
-    await loadModelOptions(cliType)
-  } catch (error) {
-    message.error(error instanceof Error ? error.message : t('agents.modelListLoadFailed'))
-  }
+function handleCliChange(cliType: string) {
+  batchModelName.value = cliType ? DEFAULT_CLI_MODEL : ''
 }
 
 function apply() {
@@ -133,7 +129,6 @@ function cancel() {
   batchModelName.value = ''
   configureThinking.value = false
   resetThinkingDrafts()
-  resetModelOptions()
   emit('cancel')
 }
 

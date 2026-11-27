@@ -5,12 +5,13 @@ const path = require('node:path')
 const { app, clipboard, ipcMain, shell } = require('electron')
 const channels = require('../../shared/channels.cjs')
 const { buildCodexThreadURL, normalizeCodexThreadID, MAX_CODEX_PROMPT_LENGTH } = require('../codex-url.cjs')
-const { userHookHome, codexHookCommand, findCodexAppRuntime, prepareCodexHooks, classifyCodexHooks, callCodexCallback, openCodexHookReview } = require('../codex-app.cjs')
+const { userHookHome, codexHookCommand, findCodexAppRuntime, prepareCodexHooks, prepareUserCodexHooks, classifyCodexHooks, callCodexCallback, openCodexHookReview } = require('../codex-app.cjs')
 const { t, getLocale } = require('../desktop-i18n.cjs')
 const { isTrustedURL } = require('../security.cjs')
 const { normalizeDirectoryPath } = require('./path-validation.cjs')
+const { openVibeCli } = require('../vibe-cli.cjs')
 
-function registerCodexIPC(allowedOrigins, { backendPath }, legacyBackendPath = backendPath) {
+function registerCodexIPC(allowedOrigins, { backendPath, skillBackendPath = () => '' }, legacyBackendPath = backendPath) {
   const controller = new AbortController()
   const { signal } = controller
   let busy = false
@@ -19,18 +20,20 @@ function registerCodexIPC(allowedOrigins, { backendPath }, legacyBackendPath = b
     if (busy) throw new Error(t('error.codex.busy'))
     busy = true
     let stage = 'invalid_request'
+    const cli = payload?.tool === 'codex_cli'
     try {
-      const { taskUuid, executionIndex, reportingOwner, action = 'open' } = payload
+      const { taskUuid, executionIndex, reportingOwner, action = 'open', tool } = payload
+      if (tool !== undefined && !cli) throw new Error(stage)
       const threadId = normalizeCodexThreadID(payload.threadId)
       if (payload.threadId && !threadId) throw new Error(stage)
       // Existing pre-Hook bindings continue in their original conversation.
-      if (reportingOwner === undefined && action === 'open') {
+      if (!cli && reportingOwner === undefined && action === 'open') {
         if (!threadId) throw new Error(stage)
         stage = 'openFailed'
         await shell.openExternal(buildCodexThreadURL('', payload.prompt, threadId))
         return { opened: true }
       }
-      if (reportingOwner !== 'hooks' || !['open', 'copy', 'review'].includes(action)
+      if (reportingOwner !== 'hooks' || !(cli ? ['open', 'copy', 'review', 'status', 'enable'] : ['open', 'copy', 'review']).includes(action)
           || !normalizeCodexThreadID(taskUuid) || !Number.isSafeInteger(executionIndex) || executionIndex < 0
           || typeof payload.prompt !== 'string' || !payload.prompt.trim() || payload.prompt.includes('\0')
           || payload.prompt.length > MAX_CODEX_PROMPT_LENGTH) throw new Error(stage)
@@ -40,27 +43,50 @@ function registerCodexIPC(allowedOrigins, { backendPath }, legacyBackendPath = b
       stage = 'backend_unavailable'
       let backend = await backendPath(signal)
       const args = ['--task', taskUuid, '--execution-index', String(executionIndex), '--work-dir', directory]
+      if (cli) args.push('--tool', 'codex_cli')
       // Authorize this specific project and generation before writing project files.
       stage = threadId ? 'binding_unavailable' : 'task_changed'
       const binding = await callCodexCallback(backend, ['check', ...args, ...(threadId ? ['--thread', threadId] : ['--scope', 'user'])], signal)
       const user = binding.scope === 'user'
       if (!user && threadId) backend = await legacyBackendPath(signal)
       stage = 'not_installed'
-      const application = await app.getApplicationInfoForProtocol('codex://threads/new')
-      const runtime = await findCodexAppRuntime(application.path, process.platform, application.name, signal)
+      const runtime = cli ? '' : await findCodexAppRuntime(app, signal)
       stage = 'configuration_conflict'
-      const command = user ? codexHookCommand(backend, process.platform, true) : await prepareCodexHooks(directory, backend, process.platform, app.getPath('userData'))
+      const configuredHome = user ? userHookHome() : ''
+      // Codex CLI reports canonical Hook sources, including when CODEX_HOME is an alias.
+      const home = cli ? await fs.realpath(configuredHome).catch(error => {
+        if (error.code === 'ENOENT') return configuredHome
+        throw error
+      }) : configuredHome
+      let command = user ? codexHookCommand(backend, process.platform, true) : await prepareCodexHooks(directory, backend, process.platform, app.getPath('userData'))
+      const inspect = async () => {
+        try {
+          return await callCodexCallback(backend, ['inspect', ...(cli ? ['--cli'] : ['--runtime', runtime]), '--work-dir', directory,
+            ...(user ? ['--source', path.join(home, 'hooks.json')] : [])], signal)
+        } catch (error) {
+          if (!cli || signal.aborted) throw error
+          return null
+        }
+      }
       stage = 'inspection_failed'
-      const inspection = await callCodexCallback(backend, ['inspect', '--runtime', runtime, '--work-dir', directory, ...(user ? ['--source', path.join(userHookHome(), 'hooks.json')] : [])], signal)
-      const setup = classifyCodexHooks(inspection, directory, command, process.platform, user)
+      let inspection = await inspect()
+      let setup = classifyCodexHooks(inspection, directory, command, process.platform, user)
+      if (cli && action === 'enable' && setup === 'not_configured') {
+        stage = 'configuration_conflict'
+        command = await prepareUserCodexHooks(backend, process.platform, app.getPath('userData'))
+        stage = 'inspection_failed'
+        inspection = await inspect()
+        setup = classifyCodexHooks(inspection, directory, command, process.platform, user)
+      }
       if (setup !== 'ready') {
-        if (action === 'review' && ['project_untrusted', 'hooks_untrusted'].includes(setup)) {
+        if (cli ? ['review', 'enable'].includes(action) && ['hooks_untrusted', 'hooks_disabled'].includes(setup)
+          : action === 'review' && ['project_untrusted', 'hooks_untrusted'].includes(setup)) {
           stage = 'review_failed'
-          await openCodexHookReview(runtime, directory, process.platform, signal)
+          await openCodexHookReview(cli ? inspection.runtime : runtime, directory, process.platform, signal, cli ? home : '')
         }
         return { opened: false, setup, userSetup: user }
       }
-      if (action === 'review') return { opened: false }
+      if (['review', 'enable', 'status'].includes(action)) return { opened: false }
       let prompt = payload.prompt
       if (!threadId) {
         stage = 'task_changed'
@@ -75,6 +101,11 @@ function registerCodexIPC(allowedOrigins, { backendPath }, legacyBackendPath = b
         return { opened: false, copied: true }
       }
       stage = 'openFailed'
+      if (cli) {
+        await openVibeCli(directory, 'codex_cli', inspection.runtime, prompt, threadId, process.platform, undefined,
+          { backendPath: skillBackendPath(), workDir: directory, codexHome: home }, payload.modelName, home)
+        return { opened: true }
+      }
       try {
         await shell.openExternal(buildCodexThreadURL(directory, prompt, threadId))
       } catch (error) {
@@ -87,7 +118,9 @@ function registerCodexIPC(allowedOrigins, { backendPath }, legacyBackendPath = b
       return { opened: true }
     } catch (error) {
       const code = ['not_installed', 'runtime_unavailable', 'backend_unavailable', 'configuration_locked', 'configuration_modified', 'configuration_conflict'].includes(error.message) ? error.message : stage
-      throw new Error(t(`error.codex.${code}`))
+      const key = cli && code === 'openFailed' ? 'cli_open_failed'
+        : cli && stage === 'review_failed' ? 'cli_review_failed' : code
+      throw new Error(t(`error.codex.${key}`))
     } finally { busy = false }
   })
   return () => { controller.abort(); ipcMain.removeHandler(channels.OPEN_CODEX_THREAD) }

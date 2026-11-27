@@ -4,6 +4,7 @@ package antigravity
 import (
 	"context"
 	"encoding/json"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -37,32 +38,25 @@ func prepareThinkingInvocation(ctx context.Context, opts executor.RunOptions, re
 		return buildInvocation(opts, resumeSession), nil, nil
 	}
 	model := strings.TrimSpace(opts.ModelProfile)
-	thinking, err := executor.ResolveModelThinking(ctx, executor.CLITypeAntigravity, model, opts.WorkDir, opts.ThinkingLevel)
+	thinking, catalog, err := executor.ResolveModelThinkingCatalog(ctx, executor.CLITypeAntigravity, model, opts.WorkDir, opts.ThinkingLevel)
 	if err != nil {
 		return executor.Invocation{}, nil, err
 	}
-	catalog := executor.GetCLIModelCatalog(ctx, executor.CLITypeAntigravity, opts.WorkDir, model, false)
-	model, err = modelForThinking(model, thinking.DefaultLevel, opts.ThinkingLevel, catalog.Options)
-	if err != nil {
-		return executor.Invocation{}, nil, err
+	if current := thinking.DefaultLevel; current != "" && current != opts.ThinkingLevel && strings.HasSuffix(model, "-"+current) {
+		// agy 不接受带 medium 的模型再配 high。目标必须在原生目录中，
+		// 再按 exact slug 独立核对档位，而不是全表探测或仅靠拼接。
+		target := strings.TrimSuffix(model, current) + opts.ThinkingLevel
+		if !slices.Contains(catalog.Models(), target) {
+			return executor.Invocation{}, nil, executor.ErrThinkingUnavailable
+		}
+		targetThinking, err := executor.ResolveModelThinking(ctx, executor.CLITypeAntigravity, target, opts.WorkDir, opts.ThinkingLevel)
+		if err != nil || targetThinking.DefaultLevel != opts.ThinkingLevel {
+			return executor.Invocation{}, nil, executor.ErrThinkingUnavailable
+		}
+		model = target
 	}
 	opts.ModelProfile = model
 	return buildInvocation(opts, resumeSession), nil, nil
-}
-
-func modelForThinking(model, current, requested string, options []executor.CLIModelOption) (string, error) {
-	if requested == "" || current == "" || current == requested || !strings.HasSuffix(model, "-"+current) {
-		return model, nil
-	}
-	// agy 不接受带 medium 的模型再配 high；只切换到目录已核实的同系列档位版本。
-	target := strings.TrimSuffix(model, current) + requested
-	for _, option := range options {
-		if option.ID == target && option.Thinking.State == "fresh" &&
-			option.Thinking.Status == "supported" && option.Thinking.DefaultLevel == requested {
-			return option.ID, nil
-		}
-	}
-	return "", executor.ErrThinkingUnavailable
 }
 
 // buildInvocation 构造一次无头执行。

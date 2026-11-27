@@ -1,7 +1,14 @@
 <template>
   <div>
     <p>{{ description }}</p>
-    <template v-if="state === 'not_configured' || state === 'hooks_untrusted' || state === 'inspection_failed'">
+    <template v-if="cli && (state === 'not_configured' || state === 'hooks_untrusted')">
+      <ol class="codex-trust-steps">
+        <li>{{ t('settings.codexReporting.cli.selectHooks') }}</li>
+        <li>{{ t('settings.codexReporting.trustCallbacks') }}</li>
+        <li>{{ t('settings.codexReporting.returnToTask') }}</li>
+      </ol>
+    </template>
+    <template v-else-if="!cli && (state === 'not_configured' || state === 'hooks_untrusted' || state === 'inspection_failed')">
       <ol class="codex-trust-steps">
         <li>{{ t('settings.codexReporting.selectHooks') }}</li>
         <li>{{ t('settings.codexReporting.trustCallbacks') }}</li>
@@ -16,7 +23,7 @@
 // 静态确认框独立挂载，不依赖页面注入的 i18n 上下文。
 import { t } from '@/i18n'
 
-defineProps<{ state: CodexSyncState; description: string }>()
+defineProps<{ state: CodexSyncState; description: string; cli?: boolean }>()
 </script>
 
 <style scoped>

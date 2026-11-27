@@ -696,6 +696,9 @@
   "localserver_agent_upload_local_only": {
     "other": "Only local agents support avatar uploads"
   },
+  "localserver_antigravity_launch_prompt": {
+    "other": "Please work on this TeamBuddy task: {{.Title}}"
+  },
   "localserver_api_not_found": {
     "other": "API endpoint not found"
   },

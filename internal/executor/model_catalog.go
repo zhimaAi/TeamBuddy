@@ -74,6 +74,7 @@ type CLIModelOption struct {
 
 type CatalogMeta struct {
 	State      string    `json:"state"`
+	Reason     string    `json:"reason,omitempty"`
 	CLIVersion string    `json:"cli_version,omitempty"`
 	UpdatedAt  time.Time `json:"updated_at,omitempty"`
 }
@@ -137,20 +138,6 @@ func cloneCatalog(c CLIModelCatalog) CLIModelCatalog {
 	return c
 }
 
-func catalogView(c CLIModelCatalog) CLIModelCatalog {
-	c = cloneCatalog(c)
-	if !c.Meta.UpdatedAt.IsZero() && time.Since(c.Meta.UpdatedAt) >= cliDiscoveryRefreshInterval {
-		c.Meta.State = "stale"
-	}
-	for i := range c.Options {
-		t := &c.Options[i].Thinking
-		if t.State == "fresh" && time.Since(t.UpdatedAt) >= cliDiscoveryRefreshInterval {
-			t.State = "stale"
-		}
-	}
-	return c
-}
-
 func catalogOption(catalog CLIModelCatalog, cliType, model string) *CLIModelOption {
 	if cliType == CLITypeCursor {
 		if base, _, err := SplitCLIModelSelector(model); err == nil {
@@ -180,25 +167,31 @@ func ValidateThinkingLevel(ctx context.Context, cliType, model, workDir, level s
 
 // ResolveModelThinking reuses validation when an adapter needs the CLI's native control name.
 func ResolveModelThinking(ctx context.Context, cliType, model, workDir, level string) (ModelThinking, error) {
-	if !thinkingToken.MatchString(level) {
-		return ModelThinking{}, ErrThinkingInvalid
+	thinking, _, err := ResolveModelThinkingCatalog(ctx, cliType, model, workDir, level)
+	return thinking, err
+}
+
+// ResolveModelThinkingCatalog 复用同一次显式校验的目录，例如解析 Antigravity 的同系列档位模型。
+func ResolveModelThinkingCatalog(ctx context.Context, cliType, model, workDir, level string) (ModelThinking, CLIModelCatalog, error) {
+	if model == DefaultCLIModel || !thinkingToken.MatchString(level) {
+		return ModelThinking{}, CLIModelCatalog{}, ErrThinkingInvalid
 	}
-	catalog := GetCLIModelCatalog(ctx, cliType, workDir, model, false)
+	catalog := defaultCLIDiscovery.probeCatalog(ctx, cliType, workDir, model)
 	option := catalogOption(catalog, cliType, model)
 	if option == nil || option.Thinking.State != "fresh" {
-		return ModelThinking{}, ErrThinkingUnavailable
+		return ModelThinking{}, CLIModelCatalog{}, ErrThinkingUnavailable
 	}
 	thinking := option.Thinking
 	if thinking.Status == "unsupported" {
-		return ModelThinking{}, ErrThinkingInvalid
+		return ModelThinking{}, CLIModelCatalog{}, ErrThinkingInvalid
 	}
 	if thinking.Status != "supported" {
-		return ModelThinking{}, ErrThinkingUnavailable
+		return ModelThinking{}, CLIModelCatalog{}, ErrThinkingUnavailable
 	}
 	for _, allowed := range thinking.Levels {
 		if allowed.Value == level {
-			return thinking, nil
+			return thinking, catalog, nil
 		}
 	}
-	return ModelThinking{}, ErrThinkingInvalid
+	return ModelThinking{}, CLIModelCatalog{}, ErrThinkingInvalid
 }

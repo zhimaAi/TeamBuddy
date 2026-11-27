@@ -147,7 +147,6 @@
               :selected="modelValue?.mode === 'vibe_coding' && modelValue.executionTool === tool.id"
               :disabled="vibeToolDisabled(tool.id)"
               @update:model-value="selectVibeTool(tool.id, $event)"
-              @resolved="setVibeModel(tool.id, $event)"
             />
             <CheckOutlined v-if="modelValue?.mode === 'vibe_coding' && modelValue.executionTool === tool.id" class="check-icon" />
           </div>
@@ -182,6 +181,7 @@
             :disabled="!selectedCliType"
             size="small"
           />
+          <CliModelReadButton :cli-type="selectedCliType" />
           <CliThinkingSelect v-if="selectedCliType && selectedCliModel" v-model="selectedThinkingLevel" :cli-type="selectedCliType" :model-name="selectedCliModel" />
           <button
             type="button"
@@ -200,6 +200,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import VibeModelPicker from '@/components/VibeModelPicker.vue'
+import CliModelReadButton from '@/components/CliModelReadButton.vue'
 import CliThinkingSelect from '@/components/CliThinkingSelect.vue'
 import { useCliThinkingSelection } from '@/composables/useCliThinkingSelection'
 import { message } from 'ant-design-vue'
@@ -214,6 +215,7 @@ import vibeCodingLogo from '@/assets/icons/vibe-coding-logo.svg'
 import cliExecutionLogo from '@/assets/icons/task-composer-cli.svg'
 import { usePipelineStore } from '@/stores/pipeline'
 import { useExpertGroupStore } from '@/stores/expert-group'
+import { DEFAULT_CLI_MODEL } from '@/utils/cliModelOptions'
 import { useCliModelOptions } from '@/composables/useCliModelOptions'
 import { isDesktopRuntime } from '@/composables/useDesktop'
 import { ensureCodexSync, syncError } from '@/composables/useCodexSync'
@@ -262,6 +264,7 @@ const { cliDisplayName, ensureLoaded: ensureCliNamesLoaded } = useCliNames()
 
 const pipelineStore = usePipelineStore()
 const expertGroupStore = useExpertGroupStore()
+const selectedCliType = ref('')
 const {
   cliOptions,
   modelChoices,
@@ -269,11 +272,10 @@ const {
   cliLoading,
   modelLoading,
   loadCliOptions,
-  loadModelOptions,
-} = useCliModelOptions()
+} = useCliModelOptions(selectedCliType)
 
 const isOpen = ref(false)
-const { vibeModels, resetVibeModels, setVibeModel, resolveVibeModel } = useVibeModelPreferences()
+const { vibeModels, resetVibeModels, setVibeModel, selectedVibeModel } = useVibeModelPreferences()
 let vibeSelectionRequest = 0
 onBeforeUnmount(() => { vibeSelectionRequest++ })
 watch(isOpen, open => {
@@ -282,7 +284,6 @@ watch(isOpen, open => {
 })
 const codexCapability = ref<VibeToolsCapability>({ available: true })
 
-const selectedCliType = ref('')
 const selectedCliModel = ref('')
 const selectedThinkingLevel = ref('')
 const { resetThinkingDrafts } = useCliThinkingSelection(() => selectedCliType.value, () => selectedCliModel.value, selectedThinkingLevel)
@@ -371,13 +372,7 @@ async function selectVibeTool(tool: VibeCodingToolId, model?: string) {
   else if (props.modelValue?.mode === 'vibe_coding' && props.modelValue.executionTool === tool) {
     vibeModels.value[tool] = props.modelValue.modelName || ''
   }
-  let modelName: string
-  try {
-    modelName = await resolveVibeModel(tool)
-  } catch (error) {
-    message.error(error instanceof Error ? error.message : t('workflows.task.assign.vibeModelLoadFailed'))
-    return
-  }
+  const modelName = selectedVibeModel(tool)
   if (request !== vibeSelectionRequest || !isOpen.value) return
   if (tool === 'codex' && isDesktopRuntime()) {
     // 收起下拉菜单再授权，避免弹窗抢焦点触发菜单关闭而丢失已选工具。
@@ -399,15 +394,8 @@ async function selectVibeTool(tool: VibeCodingToolId, model?: string) {
   isOpen.value = false
 }
 
-async function handleCliTypeChange(cliType: unknown) {
-  const typeStr = String(cliType || '')
-  selectedCliModel.value = ''
-  if (typeStr) {
-    const models = await loadModelOptions(typeStr)
-    if (selectedCliType.value === typeStr && models.length > 0) {
-      selectedCliModel.value = models[0]
-    }
-  }
+function handleCliTypeChange(cliType: unknown) {
+  selectedCliModel.value = cliType ? DEFAULT_CLI_MODEL : ''
 }
 
 function confirmCliSelection() {
@@ -443,7 +431,10 @@ async function handleOpenChange(open: boolean) {
 onMounted(() => {
   void ensureCliNamesLoaded()
   if (props.modelValue?.mode === 'cli' && props.modelValue.executionTool) {
-    void loadModelOptions(props.modelValue.executionTool)
+    selectedCliType.value = props.modelValue.executionTool
+    selectedCliModel.value = props.modelValue.modelName || DEFAULT_CLI_MODEL
+    selectedThinkingLevel.value = props.modelValue.thinkingLevel || ''
+    resetThinkingDrafts()
   }
 })
 </script>

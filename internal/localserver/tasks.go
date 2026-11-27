@@ -768,7 +768,7 @@ func (h *TasksHandler) cliDiscovery(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"items": items})
 }
 
-// cliDiscoveryModels 默认读取可用快照；空列表重试，refresh=true 强制探测。
+// cliDiscoveryModels 仅在 refresh=true 的显式读取中探测静默白名单。
 func (h *TasksHandler) cliDiscoveryModels(c *gin.Context) {
 	cliType := c.Query("cli_type")
 	if cliType == "" {
@@ -800,7 +800,11 @@ func (h *TasksHandler) cliDiscoveryModels(c *gin.Context) {
 			return
 		}
 	}
-	catalog := executor.GetCLIModelCatalogSnapshot(c.Request.Context(), cliType, workDir, c.Query("refresh") == "true")
+	if c.Query("refresh") != "true" {
+		c.JSON(http.StatusOK, executor.CLIModelCatalog{Meta: executor.CatalogMeta{State: "unknown"}, Options: []executor.CLIModelOption{}})
+		return
+	}
+	catalog := executor.ReadCLIModelCatalog(c.Request.Context(), cliType, workDir, c.Query("model_name"))
 	c.JSON(http.StatusOK, catalog)
 }
 

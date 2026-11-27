@@ -11,7 +11,16 @@
     "trustCallbacks": "Under User config, find TeamBuddy’s SessionStart, UserPromptSubmit and Stop hooks and select Trust for each.",
     "returnToTask": "Return to TeamBuddy. It will continue once the hooks are trusted.",
     "reloadHint": "Missing the three hooks? Select Reload hooks on the Hooks page.",
-    "checking": "Reading configuration…"
+    "checking": "Reading configuration…",
+    "cli": {
+      "title": "Codex CLI task sync",
+      "enable": "Enable sync and open terminal",
+      "review": "Open CLI review terminal",
+      "awaitTrust": "Sync is configured. Trust the TeamBuddy hooks in Codex CLI to continue.",
+      "disabled": "Hooks or a callback are disabled in Codex CLI. Check /hooks, or contact your administrator if this is managed.",
+      "inspectionFailed": "Could not verify the TeamBuddy hooks. Check the Codex CLI version and configuration.",
+      "selectHooks": "Enter /hooks in the Codex CLI terminal."
+    }
   },
   "gitProjects": "Git projects",
   "desktop": "Client",
